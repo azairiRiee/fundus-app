@@ -365,7 +365,7 @@ const unsubscribeUsers = onSnapshot(
     }
 
     console.log("USERS SYNC", firestoreUsers);
-    
+
     setUsers(firestoreUsers);
 
   }
@@ -751,43 +751,130 @@ uploadImage();
     document.body.removeChild(link);
   };
 
-  const upsertAppointment = (data: Partial<Appointment>) => {
-    if (editingAppointment) {
-      setAppointments(prev => (prev || []).map(app => 
-        (app && app.id === editingAppointment.id) 
-          ? { ...app, ...data, updatedBy: currentUser?.id || 'unknown' } as Appointment 
-          : app
-      ));
-    } else {
-      const newApp: Appointment = {
-        id: Math.random().toString(36).substr(2, 9),
-        patientName: data.patientName || '',
-        icNumber: data.icNumber || '',
-        phoneNumber: data.phoneNumber || '',
-        date: data.date || '',
-        remarks: data.remarks || '',
-        status: AppointmentStatus.PENDING,
-        diseaseTypes: data.diseaseTypes || [],
-        otherDisease: data.otherDisease || '',
-        createdBy: currentUser?.id || 'unknown',
-        updatedBy: currentUser?.id || 'unknown',
-        createdAt: Date.now(),
-      };
-      setAppointments(prev => [...prev, newApp]);
+  const upsertAppointment = async (
+  data: Partial<Appointment>
+) => {
 
-      addDoc(collection(db, "appointments"), newApp);
+  try {
+
+    if (editingAppointment) {
+
+      if (!editingAppointment.firestoreId) return;
+
+      await updateDoc(
+        doc(
+          db,
+          "appointments",
+          editingAppointment.firestoreId
+        ),
+        {
+          ...data,
+          updatedBy:
+            currentUser?.id || 'unknown',
+          updatedAt: Date.now()
+        }
+      );
+
+    } else {
+
+      const newApp: Appointment = {
+
+        id: Math.random()
+          .toString(36)
+          .substr(2, 9),
+
+        patientName:
+          data.patientName || '',
+
+        icNumber:
+          data.icNumber || '',
+
+        phoneNumber:
+          data.phoneNumber || '',
+
+        date:
+          data.date || '',
+
+        remarks:
+          data.remarks || '',
+
+        status:
+          AppointmentStatus.PENDING,
+
+        diseaseTypes:
+          data.diseaseTypes || [],
+
+        otherDisease:
+          data.otherDisease || '',
+
+        createdBy:
+          currentUser?.id || 'unknown',
+
+        updatedBy:
+          currentUser?.id || 'unknown',
+
+        createdAt: Date.now()
+
+      };
+
+      await addDoc(
+        collection(db, "appointments"),
+        newApp
+      );
+
     }
+
     closeForm();
-  };
+
+  } catch (e) {
+
+    console.error(
+      "Failed to save appointment",
+      e
+    );
+
+  }
+
+};
 
   const confirmDelete = (app: Appointment) => {
     setDeletingApp(app);
   };
 
-  const deleteAppointment = (id: string) => {
-    setAppointments(prev => (prev || []).filter(app => app && app.id !== id));
+  const deleteAppointment = async (
+  id: string
+) => {
+
+  try {
+
+    const appToDelete = appointments.find(
+      app =>
+        app.id === id ||
+        app.firestoreId === id
+    );
+
+    if (!appToDelete?.firestoreId) return;
+
+    await deleteDoc(
+      doc(
+        db,
+        "appointments",
+        appToDelete.firestoreId
+      )
+    );
+
     setDeletingApp(null);
-  };
+
+  } catch (e) {
+
+    console.error(
+      "Failed to delete appointment",
+      e
+    );
+
+  }
+
+};
 
   const updateStatus = async (
   firestoreId: string,
