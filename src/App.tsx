@@ -28,6 +28,13 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+import { db } from './firebase';
+
+import {
+  collection,
+  addDoc
+} from 'firebase/firestore';
+
 // --- Types & Constants ---
 
 enum UserRole {
@@ -554,6 +561,8 @@ export default function App() {
         createdAt: Date.now(),
       };
       setAppointments(prev => [...prev, newApp]);
+      
+      addDoc(collection(db, "appointments"), newApp);
     }
     closeForm();
   };
