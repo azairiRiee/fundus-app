@@ -377,15 +377,6 @@ if (!hasAdmin) {
 
 }
 
-  } else {
-
-    // Data migration for existing users missing displayName
-    loadedUsers = loadedUsers.map(u => ({
-      ...u,
-      displayName: u.displayName || u.id
-    }));
-
-  }
 
   setUsers(loadedUsers);
 
