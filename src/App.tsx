@@ -1461,10 +1461,29 @@ uploadImage();
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="flex gap-2">
-                          <StatusBadge status={app.status} />
-                        </div>
-                      </td>
+  <div className="flex flex-col gap-1">
+
+    <div className="flex gap-2">
+      <StatusBadge status={app.status} />
+    </div>
+
+    {(app.status === AppointmentStatus.DONE ||
+      app.status === AppointmentStatus.DONE_REVIEW) && (
+      <div className="flex flex-col mt-1">
+
+        <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
+          REVIEW BY:
+        </span>
+
+        <span className="text-xs text-slate-500 font-black uppercase tracking-tighter mt-0.5">
+          {getUserDisplayName(app.updatedBy || '')}
+        </span>
+
+      </div>
+    )}
+
+  </div>
+</td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
                            <div className="flex gap-1">
