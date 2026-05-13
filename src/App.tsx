@@ -32,7 +32,8 @@ import { db } from './firebase';
 
 import {
   collection,
-  addDoc
+  addDoc,
+  getDocs
 } from 'firebase/firestore';
 
 // --- Types & Constants ---
@@ -282,87 +283,202 @@ export default function App() {
   const [filterReview, setFilterReview] = useState<'All' | 'Pending' | 'Abnormal' | 'Normal'>('All');
 
   // Load Data
-  useEffect(() => {
-    // Load Appointments
-    const savedApps = localStorage.getItem(STORAGE_KEY);
-    if (savedApps) {
-      try {
-        const parsed = JSON.parse(savedApps);
-        if (Array.isArray(parsed)) {
-          setAppointments(parsed.filter((app: any) => app && typeof app === 'object'));
-        }
-      } catch (e) {
-        console.error("Failed to parse appointments", e);
-      }
-    }
+useEffect(() => {
 
-    // Load Users
-    const savedUsers = localStorage.getItem(USERS_KEY);
-    let loadedUsers: User[] = [];
-    if (savedUsers) {
-      try {
-        const parsed = JSON.parse(savedUsers);
-        if (Array.isArray(parsed)) {
-          loadedUsers = parsed.filter((u: any) => u && typeof u === 'object');
-        }
-      } catch (e) {
-        console.error("Failed to parse users", e);
-      }
-    }
+  // Load Appointments from localStorage first
+  const savedApps = localStorage.getItem(STORAGE_KEY);
 
-    // Ensure default admin exists
-    const hasAdmin = loadedUsers.some(u => u.id === 'admin' || u.id === 'ADMIN');
-    if (!hasAdmin) {
-      const defaultAdmin: User = {
-        id: 'admin',
-        password: '123456',
-        displayName: 'Administrator',
-        role: UserRole.ADMIN,
-        createdAt: Date.now()
-      };
-      loadedUsers = [defaultAdmin, ...loadedUsers];
-    } else {
-      // Data migration for existing users missing displayName
-      loadedUsers = loadedUsers.map(u => ({
-        ...u,
-        displayName: u.displayName || u.id
-      }));
-    }
-    setUsers(loadedUsers);
-    localStorage.setItem(USERS_KEY, JSON.stringify(loadedUsers));
-  }, []);
-
-  // Sync with LocalStorage
-  useEffect(() => {
+  if (savedApps) {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(appointments));
+
+      const parsed = JSON.parse(savedApps);
+
+      if (Array.isArray(parsed)) {
+        setAppointments(
+          parsed.filter(
+            (app: any) => app && typeof app === 'object'
+          )
+        );
+      }
+
     } catch (e) {
-      console.error("Failed to save appointments to localStorage", e);
-      // If it's a quota error, it might be due to large base64 images
-      if (e instanceof Error && e.name === 'QuotaExceededError') {
-        alert("Local storage is full. Some data might not be saved. Try removing some photos or clearing browser data.");
+      console.error(
+        "Failed to parse appointments",
+        e
+      );
+    }
+  }
+
+  // Load Appointments from Firestore
+  const loadFirestoreAppointments = async () => {
+
+    try {
+
+      const querySnapshot = await getDocs(
+        collection(db, "appointments")
+      );
+
+      const firestoreApps = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Appointment[];
+
+      if (firestoreApps.length > 0) {
+        setAppointments(firestoreApps);
       }
-    }
-  }, [appointments]);
 
-  useEffect(() => {
-    if (users.length > 0) {
-      try {
-        localStorage.setItem(USERS_KEY, JSON.stringify(users));
-      } catch (e) {
-        console.error("Failed to save users to localStorage", e);
+    } catch (e) {
+      console.error(
+        "Failed to load Firestore appointments",
+        e
+      );
+    }
+
+  };
+
+  loadFirestoreAppointments();
+
+  // Load Users
+  const savedUsers = localStorage.getItem(USERS_KEY);
+
+  let loadedUsers: User[] = [];
+
+  if (savedUsers) {
+
+    try {
+
+      const parsed = JSON.parse(savedUsers);
+
+      if (Array.isArray(parsed)) {
+        loadedUsers = parsed.filter(
+          (u: any) => u && typeof u === 'object'
+        );
       }
-    }
-  }, [users]);
 
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem('clinic_current_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('clinic_current_user');
+    } catch (e) {
+      console.error(
+        "Failed to parse users",
+        e
+      );
     }
-  }, [currentUser]);
 
+  }
+
+  // Ensure default admin exists
+  const hasAdmin = loadedUsers.some(
+    u => u.id === 'admin' || u.id === 'ADMIN'
+  );
+
+  if (!hasAdmin) {
+
+    const defaultAdmin: User = {
+      id: 'admin',
+      password: '123456',
+      displayName: 'Administrator',
+      role: UserRole.ADMIN,
+      createdAt: Date.now()
+    };
+
+    loadedUsers = [defaultAdmin, ...loadedUsers];
+
+  } else {
+
+    // Data migration for existing users missing displayName
+    loadedUsers = loadedUsers.map(u => ({
+      ...u,
+      displayName: u.displayName || u.id
+    }));
+
+  }
+
+  setUsers(loadedUsers);
+
+  localStorage.setItem(
+    USERS_KEY,
+    JSON.stringify(loadedUsers)
+  );
+
+}, []);
+
+
+// Sync Appointments with localStorage
+useEffect(() => {
+
+  try {
+
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(appointments)
+    );
+
+  } catch (e) {
+
+    console.error(
+      "Failed to save appointments to localStorage",
+      e
+    );
+
+    if (
+      e instanceof Error &&
+      e.name === 'QuotaExceededError'
+    ) {
+
+      alert(
+        "Local storage is full. Some data might not be saved. Try removing some photos or clearing browser data."
+      );
+
+    }
+
+  }
+
+}, [appointments]);
+
+
+// Sync Users with localStorage
+useEffect(() => {
+
+  if (users.length > 0) {
+
+    try {
+
+      localStorage.setItem(
+        USERS_KEY,
+        JSON.stringify(users)
+      );
+
+    } catch (e) {
+
+      console.error(
+        "Failed to save users to localStorage",
+        e
+      );
+
+    }
+
+  }
+
+}, [users]);
+
+
+// Sync Current User
+useEffect(() => {
+
+  if (currentUser) {
+
+    localStorage.setItem(
+      'clinic_current_user',
+      JSON.stringify(currentUser)
+    );
+
+  } else {
+
+    localStorage.removeItem(
+      'clinic_current_user'
+    );
+
+  }
+
+}, [currentUser]);
   // Auth Handlers
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -561,7 +677,7 @@ export default function App() {
         createdAt: Date.now(),
       };
       setAppointments(prev => [...prev, newApp]);
-      
+
       addDoc(collection(db, "appointments"), newApp);
     }
     closeForm();
