@@ -358,21 +358,24 @@ return () => unsubscribe();
   }
 
   // Ensure default admin exists
-  const hasAdmin = loadedUsers.some(
-    u => u.id === 'admin' || u.id === 'ADMIN'
-  );
+  // Ensure default admin exists
+const defaultAdmin: User = {
+  id: 'admin',
+  password: '123456',
+  displayName: 'Administrator',
+  role: UserRole.ADMIN,
+  createdAt: Date.now()
+};
 
-  if (!hasAdmin) {
+const hasAdmin = loadedUsers.some(
+  u => u.id === 'admin'
+);
 
-    const defaultAdmin: User = {
-      id: 'admin',
-      password: '123456',
-      displayName: 'Administrator',
-      role: UserRole.ADMIN,
-      createdAt: Date.now()
-    };
+if (!hasAdmin) {
 
-    loadedUsers = [defaultAdmin, ...loadedUsers];
+  loadedUsers.unshift(defaultAdmin);
+
+}
 
   } else {
 
