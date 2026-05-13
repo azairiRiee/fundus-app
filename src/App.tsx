@@ -33,9 +33,9 @@ import { db } from './firebase';
 import {
   collection,
   addDoc,
-  getDocs,
   onSnapshot,
   updateDoc,
+  deleteDoc,
   doc
 } from 'firebase/firestore';
 
@@ -337,72 +337,44 @@ const unsubscribe = onSnapshot(
   }
 );
 
-return () => unsubscribe();
 
-  // Load Users
-  const savedUsers = localStorage.getItem(USERS_KEY);
+// Realtime Users Sync
+const unsubscribeUsers = onSnapshot(
+  collection(db, "users"),
+  (snapshot) => {
 
-  let loadedUsers: User[] = [];
+    let firestoreUsers = snapshot.docs.map(doc => ({
+      firestoreId: doc.id,
+      ...doc.data()
+    })) as User[];
 
-  if (savedUsers) {
+    const hasAdmin = firestoreUsers.some(
+      u => u.id === 'admin'
+    );
 
-    try {
+    if (!hasAdmin) {
 
-      const parsed = JSON.parse(savedUsers);
+      firestoreUsers.unshift({
+        id: 'admin',
+        password: '123456',
+        displayName: 'Administrator',
+        role: UserRole.ADMIN,
+        createdAt: Date.now()
+      });
 
-      if (Array.isArray(parsed)) {
-        loadedUsers = parsed.filter(
-          (u: any) => u && typeof u === 'object'
-        );
-      }
-
-    } catch (e) {
-      console.error(
-        "Failed to parse users",
-        e
-      );
     }
 
+    console.log("USERS SYNC", firestoreUsers);
+    
+    setUsers(firestoreUsers);
+
   }
-
-  // Ensure default admin exists
-  // Ensure default admin exists
-const defaultAdmin: User = {
-  id: 'admin',
-  password: '123456',
-  displayName: 'Administrator',
-  role: UserRole.ADMIN,
-  createdAt: Date.now()
-};
-
-const hasAdmin = loadedUsers.some(
-  u => u.id === 'admin'
 );
 
-if (!hasAdmin) {
-
-  loadedUsers.unshift(defaultAdmin);
-
-}
-
-if (loadedUsers.length === 0) {
-
-  loadedUsers.push({
-    id: 'admin',
-    password: '123456',
-    displayName: 'Administrator',
-    role: UserRole.ADMIN,
-    createdAt: Date.now()
-  });
-
-}
-
-  setUsers(loadedUsers);
-
-  localStorage.setItem(
-    USERS_KEY,
-    JSON.stringify(loadedUsers)
-  );
+return () => {
+  unsubscribe();
+  unsubscribeUsers();
+};
 
 }, []);
 
@@ -524,7 +496,10 @@ useEffect(() => {
       createdAt: Date.now()
     };
     
-    setUsers(prev => [...prev, newUser]);
+    addDoc(
+  collection(db, "users"),
+  newUser
+);
     setNewStaffId('');
     setNewStaffName('');
     setNewStaffPass('');
@@ -534,9 +509,14 @@ useEffect(() => {
     e.preventDefault();
     if (!editingUser) return;
     
-    setUsers(prev => prev.map(u => 
-      u.id === editingUser.id ? editingUser : u
-    ));
+    if (!editingUser?.firestoreId) return;
+
+updateDoc(
+  doc(db, "users", editingUser.firestoreId),
+  {
+    ...editingUser
+  }
+);
     
     // If current user is editing themselves, update current user state too
     if (currentUser && currentUser.id === editingUser.id) {
@@ -548,49 +528,122 @@ useEffect(() => {
 
   const removeStaffMember = (id: string) => {
     if (id === 'admin') return;
-    setUsers(prev => prev.filter(u => u.id !== id));
+    const userToRemove = users.find(
+  u => u.id === id
+);
+
+if (!userToRemove?.firestoreId) return;
+
+deleteDoc(
+  doc(
+    db,
+    "users",
+    userToRemove.firestoreId
+  )
+);
     setUserToDelete(null);
   };
 
   // Appointment Handlers
+  
+  const uploadToCloudinary = async (file: File) => {
+
+  const formData = new FormData();
+
+  formData.append("file", file);
+  formData.append("upload_preset", "fundus_upload");
+
+  const response = await fetch(
+    "https://api.cloudinary.com/v1_1/dkz7ubrr8/image/upload",
+    {
+      method: "POST",
+      body: formData
+    }
+  );
+
+  const data = await response.json();
+
+console.log(data);
+
+return data.secure_url;
+
+};
   const handleImageUpload = (id: string, eye: 'right' | 'left', e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
-        setAppointments(prev => (prev || []).map(app => {
-          if (app && app.id === id) {
-            const updated = { 
-              ...app, 
-              [eye === 'right' ? 'rightEyePhoto' : 'leftEyePhoto']: base64String,
-              [eye === 'right' ? 'rightEyeUploadedBy' : 'leftEyeUploadedBy']: currentUser?.id || 'UNKNOWN'
-            };
-            
-            // Sync with open modal if applicable
-            if (selectedPhotoApp && selectedPhotoApp.app?.id === id) {
-              setSelectedPhotoApp({ ...selectedPhotoApp, app: updated });
-            }
+      const uploadImage = async () => {
 
-            // Auto determine status
-            const hasPhotos = updated.rightEyePhoto && updated.leftEyePhoto;
-            const hasReviews = updated.rightEyeReview && updated.leftEyeReview;
-            
-            let nextStatus = updated.status;
-            if (hasPhotos && hasReviews) {
-              nextStatus = AppointmentStatus.DONE;
-            } else if (hasPhotos) {
-              nextStatus = AppointmentStatus.DONE_FUNDUS;
-            } else if (updated.status === AppointmentStatus.PENDING) {
-              nextStatus = AppointmentStatus.DONE_FUNDUS;
-            }
+  try {
 
-            return { ...updated, status: nextStatus };
-          }
-          return app;
-        }));
-      };
-      reader.readAsDataURL(file);
+    const imageUrl = await uploadToCloudinary(file);
+
+    const appToUpdate = appointments.find(
+  app =>
+    app.id === id ||
+    app.firestoreId === id
+);
+
+    console.log(appToUpdate);
+
+if (!appToUpdate?.firestoreId) {
+  console.log("NO FIRESTORE ID");
+  return;
+}
+
+    const hasRight =
+  eye === 'right'
+    ? true
+    : appToUpdate?.rightEyePhoto;
+
+const hasLeft =
+  eye === 'left'
+    ? true
+    : appToUpdate?.leftEyePhoto;
+
+let nextStatus = appToUpdate?.status;
+
+if (hasRight && hasLeft) {
+  nextStatus = AppointmentStatus.DONE_FUNDUS;
+}
+    const updatedData = {
+
+      status: nextStatus,
+
+      [eye === 'right'
+        ? 'rightEyePhoto'
+        : 'leftEyePhoto'
+      ]: imageUrl,
+
+      [eye === 'right'
+        ? 'rightEyeUploadedBy'
+        : 'leftEyeUploadedBy'
+      ]: currentUser?.id || 'UNKNOWN',
+
+      updatedBy: currentUser?.id || 'unknown',
+      updatedAt: Date.now()
+    };
+
+    await updateDoc(
+      doc(
+        db,
+        "appointments",
+        appToUpdate.firestoreId
+      ),
+      updatedData
+    );
+
+  } catch (e) {
+
+    console.error(
+      "Image upload failed",
+      e
+    );
+
+  }
+
+};
+
+uploadImage();
     }
   };
 
@@ -600,37 +653,75 @@ useEffect(() => {
     ));
   };
 
-  const saveReview = (id: string, 
-    rightReview: string, 
-    leftReview: string, 
-    rightDetails?: Appointment['rightEyeReviewDetails'], 
-    leftDetails?: Appointment['leftEyeReviewDetails']
-  ) => {
-    setAppointments(prev => (prev || []).map(app => {
-      if (app && app.id === id) {
-        const updated = { 
-          ...app, 
-          rightEyeReview: rightReview, 
-          leftEyeReview: leftReview, 
-          rightEyeReviewDetails: rightDetails,
-          leftEyeReviewDetails: leftDetails,
-          updatedBy: currentUser?.id || 'unknown',
-          updatedAt: Date.now()
-        };
+  const saveReview = async (
+  id: string,
+  rightReview: string,
+  leftReview: string,
+  rightDetails?: Appointment['rightEyeReviewDetails'],
+  leftDetails?: Appointment['leftEyeReviewDetails']
+) => {
 
-        const hasPhotos = updated.rightEyePhoto && updated.leftEyePhoto;
-        // Check if both have status selected at least
-        const hasReviews = updated.rightEyeReviewDetails?.status && updated.leftEyeReviewDetails?.status;
+  try {
 
-        return {
-          ...updated,
-          status: (hasPhotos && hasReviews) ? AppointmentStatus.DONE : AppointmentStatus.DONE_REVIEW
-        };
+    const appToUpdate = appointments.find(
+      app =>
+        app.id === id ||
+        app.firestoreId === id
+    );
+
+    if (!appToUpdate?.firestoreId) return;
+
+    const hasPhotos =
+      appToUpdate.rightEyePhoto &&
+      appToUpdate.leftEyePhoto;
+
+    const hasReviews =
+      rightDetails?.status &&
+      leftDetails?.status;
+
+    let nextStatus =
+      AppointmentStatus.DONE_REVIEW;
+
+    if (hasPhotos && hasReviews) {
+      nextStatus = AppointmentStatus.DONE;
+    }
+
+    await updateDoc(
+      doc(
+        db,
+        "appointments",
+        appToUpdate.firestoreId
+      ),
+      {
+
+        rightEyeReview: rightReview,
+        leftEyeReview: leftReview,
+
+        rightEyeReviewDetails: rightDetails,
+        leftEyeReviewDetails: leftDetails,
+
+        status: nextStatus,
+
+        updatedBy:
+          currentUser?.id || 'unknown',
+
+        updatedAt: Date.now()
+
       }
-      return app;
-    }));
+    );
+
     setSelectedPhotoApp(null);
-  };
+
+  } catch (e) {
+
+    console.error(
+      "Failed to save review",
+      e
+    );
+
+  }
+
+};
 
   const exportToCSV = () => {
     if (!appointments || appointments.length === 0) return;
