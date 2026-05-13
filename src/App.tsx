@@ -33,7 +33,10 @@ import { db } from './firebase';
 import {
   collection,
   addDoc,
-  getDocs
+  getDocs,
+  onSnapshot,
+  updateDoc,
+  doc
 } from 'firebase/firestore';
 
 // --- Types & Constants ---
@@ -309,34 +312,24 @@ useEffect(() => {
     }
   }
 
-  // Load Appointments from Firestore
-  const loadFirestoreAppointments = async () => {
+  // Realtime Firestore Sync
+const unsubscribe = onSnapshot(
+  collection(db, "appointments"),
+  (snapshot) => {
 
-    try {
+    const firestoreApps = snapshot.docs.map(docSnapshot => ({
+  firestoreId: docSnapshot.id,
+  ...docSnapshot.data()
+})) as Appointment[];
 
-      const querySnapshot = await getDocs(
-        collection(db, "appointments")
-      );
-
-      const firestoreApps = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Appointment[];
-
-      if (firestoreApps.length > 0) {
-        setAppointments(firestoreApps);
-      }
-
-    } catch (e) {
-      console.error(
-        "Failed to load Firestore appointments",
-        e
-      );
+    if (firestoreApps.length > 0) {
+      setAppointments(firestoreApps);
     }
 
-  };
+  }
+);
 
-  loadFirestoreAppointments();
+return () => unsubscribe();
 
   // Load Users
   const savedUsers = localStorage.getItem(USERS_KEY);
@@ -692,11 +685,32 @@ useEffect(() => {
     setDeletingApp(null);
   };
 
-  const updateStatus = (id: string, status: AppointmentStatus) => {
-    setAppointments(prev => (prev || []).map(app => 
-      (app && app.id === id) ? { ...app, status, updatedBy: currentUser?.id || 'unknown' } : app
-    ));
-  };
+  const updateStatus = async (
+  firestoreId: string,
+  status: AppointmentStatus
+) => {
+
+  try {
+
+    await updateDoc(
+      doc(db, "appointments", firestoreId),
+      {
+        status,
+        updatedBy: currentUser?.id || 'unknown',
+        updatedAt: Date.now()
+      }
+    );
+
+  } catch (e) {
+
+    console.error(
+      "Failed to update status",
+      e
+    );
+
+  }
+
+};
 
   const closeForm = () => {
     setIsFormOpen(false);
@@ -1040,13 +1054,13 @@ useEffect(() => {
                   {app.status === AppointmentStatus.PENDING && (
                     <div className="flex gap-2">
                       <button 
-                        onClick={() => updateStatus(app.id, AppointmentStatus.DONE)}
+                        onClick={() => updateStatus(app.firestoreId, AppointmentStatus.DONE)}
                         className="flex-1 bg-white hover:bg-emerald-600 hover:text-white text-emerald-600 border border-emerald-200 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1"
                       >
                         <CheckCircle2 size={14} /> Done
                       </button>
                       <button 
-                        onClick={() => updateStatus(app.id, AppointmentStatus.NO_SHOW)}
+                        onClick={() => updateStatus(app.firestoreId, AppointmentStatus.NO_SHOW)}
                         className="flex-1 bg-white hover:bg-rose-600 hover:text-white text-rose-600 border border-rose-200 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1"
                       >
                         <XCircle size={14} /> No Show
