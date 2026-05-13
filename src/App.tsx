@@ -133,7 +133,15 @@ export default function App() {
     }
   });
   
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<User[]>([
+  {
+    id: 'admin',
+    password: '123456',
+    displayName: 'Administrator',
+    role: UserRole.ADMIN,
+    createdAt: Date.now()
+  }
+]);
   const [tempUserId, setTempUserId] = useState('');
   const [tempPassword, setTempPassword] = useState('');
   const [loginError, setLoginError] = useState('');
