@@ -377,6 +377,17 @@ if (!hasAdmin) {
 
 }
 
+if (loadedUsers.length === 0) {
+
+  loadedUsers.push({
+    id: 'admin',
+    password: '123456',
+    displayName: 'Administrator',
+    role: UserRole.ADMIN,
+    createdAt: Date.now()
+  });
+
+}
 
   setUsers(loadedUsers);
 
