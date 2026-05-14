@@ -166,6 +166,8 @@ export default function App() {
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
   const [deletingApp, setDeletingApp] = useState<Appointment | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
+  const [uploadingImageId, setUploadingImageId] = useState<string | null>(null);
+  const [isSavingReview, setIsSavingReview] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [rightEyeDetails, setRightEyeDetails] = useState<Appointment['rightEyeReviewDetails']>({
@@ -603,7 +605,9 @@ return data.secure_url;
 
   try {
 
-    const imageUrl = await uploadToCloudinary(file);
+  setUploadingImageId(`${id}-${eye}`);
+
+  const imageUrl = await uploadToCloudinary(file);
 
     const appToUpdate = appointments.find(
   app =>
@@ -667,7 +671,11 @@ if (hasRight && hasLeft) {
       e
     );
 
-  }
+  } finally {
+
+  setUploadingImageId(null);
+
+}
 
 };
 
@@ -690,6 +698,8 @@ uploadImage();
 ) => {
 
   try {
+
+    setIsSavingReview(true);
 
     const appToUpdate = appointments.find(
       app =>
@@ -742,12 +752,16 @@ uploadImage();
 
   } catch (e) {
 
-    console.error(
-      "Failed to save review",
-      e
-    );
+  console.error(
+    "Failed to save review",
+    e
+  );
 
-  }
+} finally {
+
+  setIsSavingReview(false);
+
+}
 
 };
 
@@ -1240,7 +1254,12 @@ const paginatedAppointments =
                          }`}
                        >
                          { app.rightEyePhoto ? <CheckCircle2 size={10} /> : <Plus size={10} /> }
-                         Right (RE)
+
+{
+  uploadingImageId === `${app.id}-right`
+    ? 'Uploading...'
+    : 'Right (RE)'
+}
                        </button>
                        <button 
                          onClick={() => {
@@ -1257,7 +1276,12 @@ const paginatedAppointments =
                          }`}
                        >
                          { app.leftEyePhoto ? <CheckCircle2 size={10} /> : <Plus size={10} /> }
-                         Left (LE)
+
+{
+  uploadingImageId === `${app.id}-left`
+    ? 'Uploading...'
+    : 'Left (LE)'
+}
                        </button>
                     </div>
                     
@@ -2400,11 +2424,17 @@ const paginatedAppointments =
 
                     <div className="pt-6 mt-auto shrink-0">
                       <button 
-                        type="submit"
-                        className="w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2 text-[11px] uppercase tracking-[0.2em]"
-                      >
+  type="submit"
+  disabled={isSavingReview}
+  className="w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2 text-[11px] uppercase tracking-[0.2em]"
+>
                         <CheckCircle2 size={18} />
-                        Save Clinical Review
+
+{
+  isSavingReview
+    ? 'Saving...'
+    : 'Save Clinical Review'
+}
                       </button>
                     </div>
                   </form>
