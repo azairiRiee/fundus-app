@@ -28,6 +28,8 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
+import clinicLogo from './assets/logo.png';
+
 import { db } from './firebase';
 
 import {
@@ -1004,12 +1006,10 @@ const paginatedAppointments =
           <div className="flex flex-col items-center mb-10">
             <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-white shadow-xl mb-6 ring-1 ring-slate-100">
               <img 
-                src="https://raw.githubusercontent.com/opdkklintang/assets/main/kk_lintang_logo.png" 
+                src={clinicLogo} 
                 alt="Klinik Kesihatan Lintang Logo"
                 className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src = 'https://api.dicebear.com/7.x/initials/svg?seed=KKL&backgroundColor=0066FF';
-                }}
+                
               />
             </div>
             <h1 className="text-2xl font-black text-slate-900 tracking-tight text-center">Klinik Kesihatan Lintang</h1>
@@ -1080,13 +1080,10 @@ const paginatedAppointments =
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-slate-100 shadow-sm bg-white shrink-0">
               <img 
-                src="https://raw.githubusercontent.com/opdkklintang/assets/main/kk_lintang_logo.png" 
+                src={clinicLogo} 
                 alt="Klinik Kesihatan Lintang Logo"
                 className="w-full h-full object-cover"
-                onError={(e) => {
-                  // Fallback if the image link doesn't work
-                  (e.target as HTMLImageElement).src = 'https://api.dicebear.com/7.x/initials/svg?seed=KKL&backgroundColor=0066FF';
-                }}
+              
               />
             </div>
             <div className="flex flex-col">
