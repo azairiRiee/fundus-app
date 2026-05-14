@@ -256,6 +256,26 @@ export default function App() {
   useEffect(() => {
      setZoomScale(1);
   }, [selectedPhotoApp?.eye, !!selectedPhotoApp]);
+
+  useEffect(() => {
+
+  if (selectedPhotoApp) {
+
+    document.body.style.overflow = 'hidden';
+
+  } else {
+
+    document.body.style.overflow = 'auto';
+
+  }
+
+  return () => {
+
+    document.body.style.overflow = 'auto';
+
+  };
+
+}, [selectedPhotoApp]);
   
   // Calculate Monthly Stats
   const monthlyStats = useMemo(() => {
