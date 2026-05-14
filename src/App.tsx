@@ -39,6 +39,8 @@ import {
   doc
 } from 'firebase/firestore';
 
+const APP_VERSION = "v2.0.0";
+
 // --- Types & Constants ---
 
 enum UserRole {
@@ -1627,6 +1629,12 @@ uploadImage();
             </table>
           </div>
         </section>
+
+        <div className="text-center py-3">
+  <span className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">
+    Fundus Klinik Kesihatan Lintang • {APP_VERSION}
+  </span>
+</div>
       </main>
 
       {/* Staff Management Console */}
