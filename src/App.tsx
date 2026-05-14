@@ -1683,7 +1683,7 @@ const paginatedAppointments =
         <div className="text-center py-3 flex flex-col">
   
   <span className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">
-    Fundus KKLintang • {APP_VERSION}
+    Fundus Klinik Kesihatan Lintang • {APP_VERSION}
   </span>
 
   <span className="text-[9px] text-slate-300 font-semibold tracking-wide mt-1">
