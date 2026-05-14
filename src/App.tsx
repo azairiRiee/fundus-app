@@ -951,7 +951,17 @@ uploadImage();
   };
 
   // Derived Values
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = new Date().toLocaleDateString('en-CA');
+  const isToday = (dateString: string) => {
+
+  const today = new Date();
+
+  const formattedToday =
+    today.toLocaleDateString('en-CA');
+
+  return dateString === formattedToday;
+
+};
   
   const sortedAndFilteredAppointments = useMemo(() => {
     return appointments
@@ -979,7 +989,9 @@ uploadImage();
         
         return matchesSearch && matchesDate && matchesStatus && matchesReview;
       })
-      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      .sort((a, b) =>
+  (b.createdAt || 0) - (a.createdAt || 0)
+);
   }, [appointments, searchQuery, filterDate, filterStatus, filterReview]);
 
   const totalPages = Math.ceil(
@@ -994,10 +1006,10 @@ const paginatedAppointments =
   );
 
   const allTodayAppointments = useMemo(() => {
-    return appointments
-      .filter(app => app && app.date === todayStr)
-      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-  }, [appointments, todayStr]);
+  return appointments
+    .filter(app => app && isToday(app.date))
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}, [appointments]);
 
   const todayAppointments = useMemo(() => {
     return allTodayAppointments
@@ -1514,7 +1526,11 @@ const paginatedAppointments =
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex flex-col">
-                          <span className="text-sm font-medium text-slate-700">{app.date === todayStr ? 'Today' : app.date}</span>
+                          <span className="text-sm font-medium text-slate-700">
+  {isToday(app.date)
+    ? 'Today'
+    : new Date(app.date).toLocaleDateString('en-GB')}
+</span>
                           <span className="text-[10px] font-black text-blue-600 tracking-wider mt-0.5">{dailyQueueNumber}</span>
                         </div>
                       </td>
