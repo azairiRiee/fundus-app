@@ -309,11 +309,15 @@ export default function App() {
     return !!(app.rightEyePhoto && app.leftEyePhoto && app.rightEyeReview && app.leftEyeReview);
   };
 
-  // Search & Filter State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterDate, setFilterDate] = useState('');
-  const [filterStatus, setFilterStatus] = useState<AppointmentStatus | 'All'>('All');
-  const [filterReview, setFilterReview] = useState<'All' | 'Pending' | 'Abnormal' | 'Normal'>('All');
+ // Search & Filter State
+const [searchQuery, setSearchQuery] = useState('');
+const [filterDate, setFilterDate] = useState('');
+const [filterStatus, setFilterStatus] = useState<AppointmentStatus | 'All'>('All');
+const [filterReview, setFilterReview] = useState<'All' | 'Pending' | 'Abnormal' | 'Normal'>('All');
+
+const [currentPage, setCurrentPage] = useState(1);
+
+const ITEMS_PER_PAGE = 5;
 
   // Load Data
 useEffect(() => {
@@ -962,6 +966,17 @@ uploadImage();
       .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   }, [appointments, searchQuery, filterDate, filterStatus, filterReview]);
 
+  const totalPages = Math.ceil(
+  sortedAndFilteredAppointments.length /
+  ITEMS_PER_PAGE
+);
+
+const paginatedAppointments =
+  sortedAndFilteredAppointments.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
   const allTodayAppointments = useMemo(() => {
     return appointments
       .filter(app => app && app.date === todayStr)
@@ -1382,7 +1397,7 @@ uploadImage();
               </thead>
               <tbody className="divide-y divide-slate-50">
                 <AnimatePresence>
-                  {sortedAndFilteredAppointments.map((app) => {
+                  {paginatedAppointments.map((app) => {
                     // Calculate queue number for that specific day
                     const sameDayApps = appointments
                       .filter(a => a && a.date === app.date)
@@ -1628,6 +1643,41 @@ uploadImage();
               </tbody>
             </table>
           </div>
+          <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100">
+
+  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+    Page {currentPage} of {totalPages || 1}
+  </span>
+
+  <div className="flex gap-2">
+
+    <button
+      onClick={() =>
+        setCurrentPage(prev =>
+          Math.max(prev - 1, 1)
+        )
+      }
+      disabled={currentPage === 1}
+      className="px-3 py-1 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
+    >
+      Previous
+    </button>
+
+    <button
+      onClick={() =>
+        setCurrentPage(prev =>
+          Math.min(prev + 1, totalPages)
+        )
+      }
+      disabled={currentPage === totalPages}
+      className="px-3 py-1 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
+    >
+      Next
+    </button>
+
+  </div>
+
+</div>
         </section>
 
         <div className="text-center py-3 flex flex-col">
