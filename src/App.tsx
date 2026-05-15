@@ -2631,7 +2631,7 @@ const paginatedAppointments =
 )}
             </p>
 
-            <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap">
+            <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap uppercase">
               {selectedHistory.rightEyeReviewDetails?.comment || '-'}
             </p>
           </div>
@@ -2645,7 +2645,7 @@ const paginatedAppointments =
               {selectedHistory.leftEyeReviewDetails?.status || 'No Review'}
             </p>
 
-            <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap">
+            <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap uppercase">
               {selectedHistory.leftEyeReviewDetails?.comment || '-'}
             </p>
           </div>
