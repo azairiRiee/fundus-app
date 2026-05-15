@@ -168,6 +168,7 @@ export default function App() {
   const [zoomScale, setZoomScale] = useState(1);
   const [uploadingImageId, setUploadingImageId] = useState<string | null>(null);
   const [isSavingReview, setIsSavingReview] = useState(false);
+  const [selectedHistory, setSelectedHistory] = useState<Appointment | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [rightEyeDetails, setRightEyeDetails] = useState<Appointment['rightEyeReviewDetails']>({
@@ -312,6 +313,16 @@ export default function App() {
     if (!app) return false;
     return !!(app.rightEyePhoto && app.leftEyePhoto && app.rightEyeReview && app.leftEyeReview);
   };
+
+  const patientHistory = selectedPhotoApp
+  ? appointments.filter(app =>
+      app.icNumber === selectedPhotoApp.app.icNumber &&
+      app.id !== selectedPhotoApp.app.id
+    )
+    .sort((a, b) =>
+      (b.createdAt || 0) - (a.createdAt || 0)
+    )
+  : [];
 
  // Search & Filter State
 const [searchQuery, setSearchQuery] = useState('');
@@ -2438,6 +2449,53 @@ const paginatedAppointments =
                       })}
                     </div>
 
+                    {patientHistory.length > 0 && (
+  <div className="mt-6 border-t border-slate-100 pt-4">
+
+    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">
+      Patient History
+    </h3>
+
+    <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+
+      {patientHistory.map(history => (
+
+        <div
+          key={history.id}
+          className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex items-center justify-between"
+        >
+
+          <div className="flex flex-col">
+
+            <span className="text-xs font-bold text-slate-700">
+              {new Date(history.date).toLocaleDateString('en-GB')}
+            </span>
+
+            <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wider">
+              {history.status}
+            </span>
+
+          </div>
+
+          <button
+  type="button"
+  onClick={() => {
+    setSelectedHistory(history);
+  }}
+  className="text-[9px] font-bold text-blue-600 uppercase"
+>
+  View
+</button>
+
+        </div>
+
+      ))}
+
+    </div>
+
+  </div>
+)}
+
                     <div className="pt-6 mt-auto shrink-0">
                       <button 
   type="submit"
@@ -2460,6 +2518,145 @@ const paginatedAppointments =
           </div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+  {selectedHistory && (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => setSelectedHistory(null)}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      />
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.9 }}
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6"
+      >
+
+        <div className="flex items-center justify-between mb-6">
+
+          <div>
+            <h2 className="text-xl font-black text-slate-800">
+              Previous Visit
+            </h2>
+
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">
+              {new Date(selectedHistory.date).toLocaleDateString('en-GB')}
+            </p>
+          </div>
+
+          <button
+            onClick={() => setSelectedHistory(null)}
+            className="px-4 py-2 rounded-xl bg-slate-100 text-xs font-bold"
+          >
+            Close
+          </button>
+
+        </div>
+        <div className="bg-slate-50 rounded-2xl p-4 mb-4 text-center">
+
+  <p className="text-[9px] uppercase font-black text-slate-400 tracking-wider">
+    Fundus Image Uploaded By
+  </p>
+
+  <p className="text-xs font-bold text-slate-700 mt-1">
+    {getUserDisplayName(
+      selectedHistory.rightEyeUploadedBy ||
+      selectedHistory.leftEyeUploadedBy ||
+      '-'
+    )}
+  </p>
+
+</div>
+
+<div className="grid grid-cols-2 gap-4 mb-4">
+
+  {selectedHistory.rightEyePhoto && (
+    <img
+      src={selectedHistory.rightEyePhoto}
+      className="rounded-2xl border border-slate-200"
+    />
+  )}
+
+  {selectedHistory.leftEyePhoto && (
+    <img
+      src={selectedHistory.leftEyePhoto}
+      className="rounded-2xl border border-slate-200"
+    />
+  )}
+
+</div>
+
+<div className="mt-2 mb-6 text-center border-b border-slate-200 pb-4">
+
+  <p className="text-[9px] uppercase font-black text-slate-400 tracking-wider">
+    Reviewed By
+  </p>
+
+  <p className="text-xs font-bold text-slate-700 mt-1">
+    {getUserDisplayName(selectedHistory.updatedBy || '-')}
+  </p>
+
+</div>
+
+        <div className="grid grid-cols-2 gap-4">
+
+          <div className="bg-slate-50 rounded-2xl p-4">
+            <h3 className="text-xs font-black uppercase text-slate-400 mb-2">
+              Right Eye Review
+            </h3>
+
+            <p className="text-sm font-bold text-slate-700">
+              {selectedHistory.rightEyeReviewDetails?.status || 'No Review'}
+              {selectedHistory.rightEyeReviewDetails?.abnormalTypes?.length > 0 && (
+  <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">
+
+    {selectedHistory.rightEyeReviewDetails.abnormalTypes.join(', ')}
+
+    {selectedHistory.rightEyeReviewDetails.npdrSeverity
+      ? ` - ${selectedHistory.rightEyeReviewDetails.npdrSeverity}`
+      : ''
+    }
+
+    {selectedHistory.rightEyeReviewDetails.othersText
+      ? ` - ${selectedHistory.rightEyeReviewDetails.othersText}`
+      : ''
+    }
+
+  </p>
+)}
+            </p>
+
+            <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap">
+              {selectedHistory.rightEyeReviewDetails?.comment || '-'}
+            </p>
+          </div>
+
+          <div className="bg-slate-50 rounded-2xl p-4">
+            <h3 className="text-xs font-black uppercase text-slate-400 mb-2">
+              Left Eye Review
+            </h3>
+
+            <p className="text-sm font-bold text-slate-700">
+              {selectedHistory.leftEyeReviewDetails?.status || 'No Review'}
+            </p>
+
+            <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap">
+              {selectedHistory.leftEyeReviewDetails?.comment || '-'}
+            </p>
+          </div>
+
+        </div>
+
+      </motion.div>
+
+    </div>
+  )}
+</AnimatePresence>
     </div>
   );
 }
