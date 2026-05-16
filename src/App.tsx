@@ -168,6 +168,7 @@ export default function App() {
   const [zoomScale, setZoomScale] = useState(1);
   const [uploadingImageId, setUploadingImageId] = useState<string | null>(null);
   const [isSavingReview, setIsSavingReview] = useState(false);
+  const [isReviewViewMode, setIsReviewViewMode] = useState(false);
   const [selectedHistory, setSelectedHistory] = useState<Appointment | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -759,6 +760,8 @@ uploadImage();
       }
     );
 
+    setIsReviewViewMode(true);
+
     setSelectedPhotoApp(null);
 
   } catch (e) {
@@ -1310,7 +1313,20 @@ const paginatedAppointments =
                     
                      {(app.rightEyePhoto || app.leftEyePhoto) && (
                        <button 
-                         onClick={() => setSelectedPhotoApp({ app, eye: app.rightEyePhoto ? 'right' : 'left' })}
+  onClick={() => {
+
+    const isReviewed =
+      app.rightEyeReview &&
+      app.leftEyeReview;
+
+    setIsReviewViewMode(!!isReviewed);
+
+    setSelectedPhotoApp({
+      app,
+      eye: app.rightEyePhoto ? 'right' : 'left'
+    });
+
+  }}
                          className={`w-full py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
                            (app.rightEyeReview && app.leftEyeReview)
                              ? 'bg-indigo-50 text-indigo-600 border border-indigo-100'
@@ -2317,6 +2333,155 @@ const paginatedAppointments =
                             </div>
                             
                             <div className="space-y-6 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm min-h-[650px]">
+                              {isReviewViewMode && (
+
+  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+
+    <div>
+      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+        Finding Status
+      </p>
+
+      <p className={`text-lg font-black uppercase mt-1 ${
+        details?.status === 'Abnormal'
+          ? 'text-rose-600'
+          : 'text-emerald-600'
+      }`}>
+        {details?.status || '-'}
+      </p>
+    </div>
+
+    {details?.abnormalTypes?.length > 0 && (
+      <div>
+
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+          Findings
+        </p>
+
+        <p className="text-sm font-bold text-slate-700 uppercase mt-1">
+          {details.abnormalTypes.join(', ')}
+
+          {details.npdrSeverity
+            ? ` - ${details.npdrSeverity}`
+            : ''
+          }
+
+          {details.othersText
+            ? ` - ${details.othersText}`
+            : ''
+          }
+        </p>
+
+      </div>
+    )}
+
+    {details?.comment && (
+      <div>
+
+        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+          Comments
+        </p>
+
+        <p className="text-sm text-slate-600 uppercase mt-1 whitespace-pre-wrap">
+          {details.comment}
+        </p>
+
+      </div>
+    )}
+
+    <button
+  type="button"
+  onClick={() => {
+
+    console.log("EDIT CLICKED");
+
+    setIsReviewViewMode(false);
+
+  }}
+      className="w-full py-3 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
+    >
+      Edit Review
+    </button>
+
+  </div>
+
+)}
+                                <div className="space-y-4">
+  <div>
+<div className="pb-3 border-b border-slate-200">
+
+  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+    Reviewed By
+  </p>
+
+  <p className="text-sm font-bold text-slate-700 uppercase mt-1">
+    {getUserDisplayName(selectedPhotoApp?.app?.updatedBy || '-')}
+  </p>
+
+</div>
+    <p className={`text-lg font-black uppercase mt-1 ${
+      details?.status === 'Abnormal'
+        ? 'text-rose-600'
+        : 'text-emerald-600'
+    }`}>
+      {details?.status || '-'}
+    </p>
+  </div>
+
+  {details?.abnormalTypes?.length > 0 && (
+    <div>
+
+      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+        Findings
+      </p>
+
+      <p className="text-sm font-bold text-slate-700 uppercase mt-1">
+        {details.abnormalTypes.join(', ')}
+
+        {details.npdrSeverity
+          ? ` - ${details.npdrSeverity}`
+          : ''
+        }
+
+        {details.othersText
+          ? ` - ${details.othersText}`
+          : ''
+        }
+      </p>
+
+    </div>
+  )}
+
+  {details?.comment && (
+    <div>
+
+      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+        Comments
+      </p>
+
+      <p className="text-sm text-slate-600 uppercase mt-1 whitespace-pre-wrap">
+        {details.comment}
+      </p>
+
+    </div>
+  )}
+
+  <button
+  type="button"
+  onClick={() => {
+
+    console.log("EDIT CLICKED");
+
+    setIsReviewViewMode(false);
+
+  }}
+    className="w-full py-3 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
+  >
+    Edit Review
+  </button>
+
+</div>
+
                               {/* Status Selection */}
                               <div className="space-y-3">
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Findings Status</label>
