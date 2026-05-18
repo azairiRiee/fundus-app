@@ -41,7 +41,7 @@ import {
   doc
 } from 'firebase/firestore';
 
-const APP_VERSION = "v2.0.0";
+const APP_VERSION = "v2.1.0";
 
 // --- Types & Constants ---
 
