@@ -1,0 +1,24 @@
+[33mddc130b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m Added clinical review summary mode
+[33m7f7817c[m improve patient history clinical display
+[33mac09c9a[m add patient history review viewer
+[33m12cb14c[m fix today queue and patient sorting
+[33m713e700[m improve loading experience and UX
+[33me029467[m update clinic branding logo
+[33m1aca7d2[m change footer description
+[33m2e3c10f[m add pagination and UI improvements
+[33m8f3f36e[m release v2.0.0 realtime clinic system
+[33maa6d172[m release v2.0.0 realtime clinic system
+[33m64f75a1[m fix review modal background scroll
+[33m97ec39d[m complete realtime clinic system
+[33m6d9c7b6[m full realtime firestore sync
+[33me77f2a9[m realtime users sync
+[33m323b3cd[m hardcode default admin
+[33m058c11a[m fix default admin
+[33mc85999d[m fix admin syntax
+[33ma2b6f2e[m fix admin user
+[33mb09e6a9[m realtime status sync
+[33mb874a11[m add firebase dependency
+[33m2a5f0bd[m[33m ([m[1;31morigin/firestore-sync[m[33m, [m[1;32mfirestore-sync[m[33m)[m firestore read sync
+[33m35e4125[m firebase addDoc working
+[33m85bd9bd[m change title
+[33m1cd6c75[m first upload

@@ -170,6 +170,8 @@ export default function App() {
   const [isSavingReview, setIsSavingReview] = useState(false);
   const [isReviewViewMode, setIsReviewViewMode] = useState(false);
   const [selectedHistory, setSelectedHistory] = useState<Appointment | null>(null);
+  const [summaryEye, setSummaryEye] = useState<'right' | 'left'>('right');
+  const [selectedReviewSummary, setSelectedReviewSummary] = useState<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [rightEyeDetails, setRightEyeDetails] = useState<Appointment['rightEyeReviewDetails']>({
@@ -1629,7 +1631,28 @@ const paginatedAppointments =
                         <div className="flex flex-col gap-3 min-w-[200px]">
                           {(app.rightEyePhoto || app.leftEyePhoto) && (
                             <button 
-                              onClick={() => setSelectedPhotoApp({ app, eye: app.rightEyePhoto ? 'right' : 'left' })}
+                              onClick={() => {
+
+  const isReviewed =
+    app.rightEyeReview ||
+    app.leftEyeReview;
+
+  if (isReviewed) {
+
+    document.body.style.overflow = 'hidden';
+
+setSelectedReviewSummary(app);
+
+  } else {
+
+    setSelectedPhotoApp({
+      app,
+      eye: app.rightEyePhoto ? 'right' : 'left'
+    });
+
+  }
+
+}}
                               className={`w-full py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 border ${
                                 (app.rightEyeReview && app.leftEyeReview)
                                   ? 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'
@@ -2821,6 +2844,336 @@ const paginatedAppointments =
 
     </div>
   )}
+  <AnimatePresence>
+
+  {selectedReviewSummary && (
+
+    <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => {
+
+  document.body.style.overflow = 'auto';
+
+  setSelectedReviewSummary(null);
+
+}}
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+      />
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[90vh] overflow-hidden flex"
+      >
+
+        <div className="flex w-full h-full">
+
+  {/* LEFT IMAGE SECTION */}
+  <div className="flex-1 bg-black flex flex-col items-center justify-center relative">
+
+    <img
+  src={
+    summaryEye === 'right'
+      ? selectedReviewSummary.rightEyePhoto
+      : selectedReviewSummary.leftEyePhoto
+  }
+      className="max-h-full object-contain"
+/>
+
+<div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur-md px-4 py-2 rounded-2xl">
+
+  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-center">
+    Fundus Image Uploaded By
+  </p>
+
+  <p className="text-xs font-bold text-white uppercase mt-1 text-center">
+    {
+      getUserDisplayName(
+        summaryEye === 'right'
+          ? selectedReviewSummary.rightEyeUploadedBy
+          : selectedReviewSummary.leftEyeUploadedBy
+      )
+    }
+  </p>
+
+</div>
+
+</div>
+
+  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-4 bg-slate-900/90 p-2 rounded-2xl">
+
+  <button
+    onClick={() => setSummaryEye('right')}
+    className={`px-5 py-2 rounded-xl text-xs font-black uppercase transition-all ${
+      summaryEye === 'right'
+        ? 'bg-blue-600 text-white'
+        : 'bg-slate-700 text-slate-300'
+    }`}
+  >
+    Right Eye (RE)
+  </button>
+
+  <button
+    onClick={() => setSummaryEye('left')}
+    className={`px-5 py-2 rounded-xl text-xs font-black uppercase transition-all ${
+      summaryEye === 'left'
+        ? 'bg-blue-600 text-white'
+        : 'bg-slate-700 text-slate-300'
+    }`}
+  >
+    Left Eye (LE)
+  </button>
+
+</div>
+
+  {/* RIGHT SIDEBAR */}
+  <div className="w-[380px] bg-slate-50 border-l border-slate-200 p-6 overflow-y-auto">
+
+    <div className="flex items-center justify-between mb-6">
+
+      <div>
+
+        <h2 className="text-2xl font-black text-slate-800">
+          {selectedReviewSummary.patientName}
+        </h2>
+
+        <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mt-1">
+          IC: {
+  selectedReviewSummary.ic ||
+  selectedReviewSummary.icNumber ||
+  selectedReviewSummary.patientIc ||
+  '-'
+}
+        </p>
+        
+<div className="bg-white rounded-2xl border border-slate-200 p-4 mt-6">
+
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">
+    Patient History
+  </p>
+
+  <div className="flex flex-wrap gap-2">
+
+    {selectedReviewSummary.diseaseTypes?.map((disease: string) => (
+
+  <span
+    key={disease}
+    className="px-2 py-1 rounded-lg bg-blue-100 text-blue-700 text-[10px] font-black uppercase"
+  >
+    {disease}
+  </span>
+
+))}
+
+  </div>
+
+</div>
+      </div>
+
+      <button
+        onClick={() => {
+
+  document.body.style.overflow = 'auto';
+
+  setSelectedReviewSummary(null);
+
+}}
+        className="w-10 h-10 rounded-full bg-slate-200 font-black"
+      >
+        ✕
+      </button>
+
+    </div>
+<div className="space-y-6">
+
+  {/* REVIEWED BY */}
+  <div className="bg-white rounded-2xl border border-slate-200 p-4">
+
+    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+      Reviewed By
+    </p>
+
+    <p className="text-sm font-bold text-slate-700 uppercase mt-2">
+      {getUserDisplayName(selectedReviewSummary.updatedBy || '-')}
+    </p>
+
+  </div>
+
+  {/* RIGHT EYE */}
+  <div className="bg-white rounded-2xl border border-slate-200 p-4">
+
+    <p className="text-[11px] font-black uppercase tracking-widest text-blue-500 mb-3">
+      Right Eye Review
+    </p>
+
+    <div className="mt-4">
+
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+    Status
+  </p>
+
+  <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
+    selectedReviewSummary.rightEyeReviewDetails?.status === 'Abnormal'
+      ? 'bg-rose-100 text-rose-600'
+      : 'bg-emerald-100 text-emerald-600'
+  }`}>
+
+    {selectedReviewSummary.rightEyeReviewDetails?.status || '-'}
+
+  </span>
+
+</div>
+{selectedReviewSummary.rightEyeReviewDetails?.abnormalTypes?.length > 0 && (
+    <div className="mt-5">
+
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+    Findings
+  </p>
+
+  <div className="text-sm text-slate-700 uppercase space-y-1">
+
+    {selectedReviewSummary.rightEyeReviewDetails?.abnormalTypes?.length > 0 ? (
+
+      selectedReviewSummary.rightEyeReviewDetails.abnormalTypes.map((item: string) => (
+        <p key={item}>
+          • {item}
+
+          {item === 'Others' &&
+            selectedReviewSummary.rightEyeReviewDetails?.othersText && (
+              <span>
+                {' '} - {selectedReviewSummary.rightEyeReviewDetails.othersText}
+              </span>
+            )
+          }
+        </p>
+      ))
+
+    ) : null}
+
+
+  </div>
+
+</div>
+)}
+
+{selectedReviewSummary.rightEyeReviewDetails?.comment && (
+    <div className="mt-5">
+
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+    Comments
+  </p>
+
+  <p className="text-sm text-slate-600 whitespace-pre-wrap uppercase">
+    {selectedReviewSummary.rightEyeReviewDetails?.comment || '-'}
+  </p>
+
+</div>
+)}
+  </div>
+  
+
+  {/* LEFT EYE */}
+  <div className="bg-white rounded-2xl border border-slate-200 p-4">
+
+    <p className="text-[11px] font-black uppercase tracking-widest text-emerald-500 mb-3">
+      Left Eye Review
+    </p>
+
+    <div className="mt-4">
+
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+    Status
+  </p>
+
+  <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
+    selectedReviewSummary.leftEyeReviewDetails?.status === 'Abnormal'
+      ? 'bg-rose-100 text-rose-600'
+      : 'bg-emerald-100 text-emerald-600'
+  }`}>
+
+    {selectedReviewSummary.leftEyeReviewDetails?.status || '-'}
+
+  </span>
+
+</div>
+
+{selectedReviewSummary.leftEyeReviewDetails?.abnormalTypes?.length > 0 && (
+    <div className="mt-5">
+
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+    Findings
+  </p>
+
+  <div className="text-sm text-slate-700 uppercase space-y-1">
+
+    {selectedReviewSummary.leftEyeReviewDetails?.abnormalTypes?.length > 0 ? (
+
+      selectedReviewSummary.leftEyeReviewDetails.abnormalTypes.map((item: string) => (
+        <p key={item}>
+          • {item}
+
+          {item === 'Others' &&
+            selectedReviewSummary.leftEyeReviewDetails?.othersText && (
+              <span>
+                {' '} - {selectedReviewSummary.leftEyeReviewDetails.othersText}
+              </span>
+            )
+          }
+        </p>
+      ))
+
+    ) : null}
+
+  </div>
+
+</div>
+)}
+{selectedReviewSummary.leftEyeReviewDetails?.comment && (
+    <div className="mt-5">
+
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+    Comments
+  </p>
+
+  <p className="text-sm text-slate-600 whitespace-pre-wrap uppercase">
+    {selectedReviewSummary.leftEyeReviewDetails?.comment || '-'}
+  </p>
+
+</div>
+)}
+  </div>
+<button
+  onClick={() => {
+
+    setSelectedReviewSummary(null);
+
+    setSelectedPhotoApp({
+      app: selectedReviewSummary,
+      eye: 'right'
+    });
+
+  }}
+  className="w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
+>
+  Edit Review
+</button>
+</div>
+  </div>
+
+</div>
+
+      </motion.div>
+
+    </div>
+
+  )}
+
+</AnimatePresence>
 </AnimatePresence>
     </div>
   );
