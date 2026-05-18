@@ -3080,7 +3080,7 @@ setSelectedReviewSummary(app);
   {/* LEFT EYE */}
   <div className="bg-white rounded-2xl border border-slate-200 p-4">
 
-    <p className="text-[11px] font-black uppercase tracking-widest text-emerald-500 mb-3">
+    <p className="text-[11px] font-black uppercase tracking-widest text-blue-500 mb-3">
       Left Eye Review
     </p>
 
