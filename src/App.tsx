@@ -146,6 +146,8 @@ export default function App() {
     createdAt: Date.now()
   }
 ]);
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [authMessage, setAuthMessage] = useState('');
   const [tempUserId, setTempUserId] = useState('');
   const [tempPassword, setTempPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -570,51 +572,69 @@ useEffect(() => {
 }, []);
   // Auth Handlers
   const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError('');
-    
+
+  e.preventDefault();
+
+  setLoginError('');
+
+  setIsAuthenticating(true);
+
+  setAuthMessage('Verifying Credentials...');
+
+  setTimeout(() => {
+
     const id = tempUserId.trim().toLowerCase();
+
     const pass = tempPassword;
-    
-    const user = users.find(u => u.id.toLowerCase() === id && u.password === pass);
-    
+
+    const user = users.find(
+      u =>
+        u.id.toLowerCase() === id &&
+        u.password === pass
+    );
+
     if (user) {
+
       setCurrentUser(user);
+
     } else {
+
       setLoginError('Invalid User ID or Password');
+
     }
-  };
+
+    setIsAuthenticating(false);
+
+  }, 1500);
+
+};
 
   const handleLogout = () => {
-    setCurrentUser(null);
-  };
 
-  const addStaffMember = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newStaffId.trim() || !newStaffPass.trim() || !newStaffName.trim()) return;
-    
-    const id = newStaffId.trim().toUpperCase();
-    if (users.some(u => u.id === id)) {
-      alert('User ID already exists');
-      return;
-    }
-    
-    const newUser: User = {
-      id,
-      password: newStaffPass,
-      displayName: newStaffName.trim(),
-      role: UserRole.STAFF,
-      createdAt: Date.now()
-    };
-    
-    addDoc(
-  collection(db, "users"),
-  newUser
-);
-    setNewStaffId('');
-    setNewStaffName('');
-    setNewStaffPass('');
-  };
+  setIsAuthenticating(true);
+
+  setAuthMessage('Ending Clinical Session...');
+
+  setTimeout(() => {
+
+    setAuthMessage('Protecting Patient Data...');
+
+    setTimeout(() => {
+
+      sessionStorage.removeItem('clinic_current_user');
+
+      setCurrentUser(null);
+
+      setTempUserId('');
+      setTempPassword('');
+
+      setIsAuthenticating(false);
+
+    }, 1200);
+
+  }, 1200);
+
+};
 
   const updateStaffMember = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1107,6 +1127,36 @@ const paginatedAppointments =
 
   if (!currentUser) {
     return (
+  <>
+  {isAuthenticating && (
+
+  <div className="fixed inset-0 z-[99999] bg-black/30 backdrop-blur-sm flex items-center justify-center">
+
+    <div className="bg-white/95 backdrop-blur-xl rounded-2xl px-8 py-7 shadow-2xl flex flex-col items-center w-[300px] border border-white/40">
+
+      <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-5"></div>
+
+      <div className="flex flex-col items-center">
+
+        <p className="text-sm font-black uppercase tracking-[0.25em] text-slate-800 text-center">
+
+          Verifying Credentials...
+
+        </p>
+
+        <p className="mt-3 text-xs font-semibold uppercase tracking-widest text-slate-400 text-center">
+
+          Secure Clinical Access
+
+        </p>
+
+      </div>
+
+    </div>
+
+  </div>
+
+)}
       <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -1181,10 +1231,46 @@ const paginatedAppointments =
           </form>
         </motion.div>
       </div>
+    </>
     );
   }
 
   return (
+  <>
+
+    {isAuthenticating && (
+
+  <div className="fixed inset-0 z-[99999] bg-black/30 backdrop-blur-sm flex items-center justify-center">
+
+    <div className="bg-white/95 backdrop-blur-xl rounded-2xl px-8 py-7 shadow-2xl flex flex-col items-center w-[300px] border border-white/40">
+
+      {/* Spinner */}
+      <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-5"></div>
+
+      {/* Main Text */}
+      <p className="text-sm font-black uppercase tracking-[0.25em] text-slate-800 text-center">
+
+        {authMessage.includes('Ending')
+          ? 'Ending Clinical Session...'
+          : 'Verifying Credentials...'}
+
+      </p>
+
+      {/* Sub Text */}
+      <p className="mt-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400 text-center">
+
+        {authMessage.includes('Ending')
+          ? 'Protecting Patient Data'
+          : 'Secure Clinical Access'}
+
+      </p>
+
+    </div>
+
+  </div>
+
+)}
+
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
@@ -3210,5 +3296,6 @@ setSelectedReviewSummary(app);
 </AnimatePresence>
 </AnimatePresence>
     </div>
+      </>
   );
 }
