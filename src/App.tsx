@@ -127,7 +127,7 @@ const StatusBadge = ({ status }: { status: AppointmentStatus }) => {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('clinic_current_user');
+    const saved = sessionStorage.getItem('clinic_current_user');
     if (!saved) return null;
     try {
       return JSON.parse(saved);
@@ -255,12 +255,39 @@ export default function App() {
   };
 
   const handleWheel = (e: React.WheelEvent) => {
-    if (e.deltaY < 0) {
-      setZoomScale(prev => Math.min(prev + 0.2, 5));
-    } else {
-      setZoomScale(prev => Math.max(prev - 0.2, 1));
-    }
-  };
+
+  if (e.deltaY < 0) {
+
+    setZoomScale(prev => Math.min(prev + 0.2, 5));
+
+  } else {
+
+    setZoomScale(prev => {
+
+      const newScale = Math.max(prev - 0.2, 1);
+
+      // AUTO CENTER BALIK
+      if (newScale === 1) {
+
+        const image = document.querySelector(
+          '.summary-fundus-image'
+        ) as HTMLElement;
+
+        if (image) {
+
+          image.style.transform = 'translate(0px, 0px) scale(1)';
+
+        }
+
+      }
+
+      return newScale;
+
+    });
+
+  }
+
+};
 
   // Reset zoom when switching eyes or closing
   useEffect(() => {
@@ -487,20 +514,60 @@ useEffect(() => {
 
   if (currentUser) {
 
-    localStorage.setItem(
+    sessionStorage.setItem(
       'clinic_current_user',
       JSON.stringify(currentUser)
     );
 
   } else {
 
-    localStorage.removeItem(
+    sessionStorage.removeItem(
       'clinic_current_user'
     );
 
   }
 
 }, [currentUser]);
+
+
+// AUTO LOGOUT AFTER 1 HOUR IDLE
+useEffect(() => {
+
+  let timeout: NodeJS.Timeout;
+
+  const resetTimer = () => {
+
+    clearTimeout(timeout);
+
+    timeout = setTimeout(() => {
+
+      sessionStorage.removeItem('clinic_current_user');
+
+      window.location.reload();
+
+    }, 60 * 60 * 1000);
+
+  };
+
+  window.addEventListener('mousemove', resetTimer);
+  window.addEventListener('keydown', resetTimer);
+  window.addEventListener('click', resetTimer);
+  window.addEventListener('scroll', resetTimer);
+
+  resetTimer();
+
+  return () => {
+
+    clearTimeout(timeout);
+
+    window.removeEventListener('mousemove', resetTimer);
+    window.removeEventListener('keydown', resetTimer);
+    window.removeEventListener('click', resetTimer);
+    window.removeEventListener('scroll', resetTimer);
+
+  };
+
+}, []);
   // Auth Handlers
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -757,7 +824,8 @@ uploadImage();
         updatedBy:
           currentUser?.id || 'unknown',
 
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
+        isEdited: true
 
       }
     );
@@ -1077,9 +1145,10 @@ const paginatedAppointments =
                 <input 
                   autoFocus
                   type="text" 
+                  autoComplete="off"
                   required
                   className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium"
-                  placeholder="ID (e.g. PPP-01 or admin)"
+                  placeholder="ID or Username"
                   value={tempUserId}
                   onChange={e => setTempUserId(e.target.value)}
                 />
@@ -1092,6 +1161,7 @@ const paginatedAppointments =
                 <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
                 <input 
                   type="password" 
+                  autoComplete="new-password"
                   required
                   className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium text-slate-800"
                   placeholder="••••••"
@@ -1736,34 +1806,49 @@ setSelectedReviewSummary(app);
     Page {currentPage} of {totalPages || 1}
   </span>
 
-  <div className="flex gap-2">
+  <div className="flex items-center gap-2 flex-wrap">
+
+  <button
+    onClick={() =>
+      setCurrentPage(prev =>
+        Math.max(prev - 1, 1)
+      )
+    }
+    disabled={currentPage === 1}
+    className="px-3 py-1 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
+  >
+    Previous
+  </button>
+
+  {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
 
     <button
-      onClick={() =>
-        setCurrentPage(prev =>
-          Math.max(prev - 1, 1)
-        )
-      }
-      disabled={currentPage === 1}
-      className="px-3 py-1 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
+      key={page}
+      onClick={() => setCurrentPage(page)}
+      className={`w-8 h-8 rounded-lg text-xs font-black transition-all ${
+        currentPage === page
+          ? 'bg-slate-900 text-white'
+          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+      }`}
     >
-      Previous
+      {page}
     </button>
 
-    <button
-      onClick={() =>
-        setCurrentPage(prev =>
-          Math.min(prev + 1, totalPages)
-        )
-      }
-      disabled={currentPage === totalPages}
-      className="px-3 py-1 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
-    >
-      Next
-    </button>
+  ))}
 
-  </div>
+  <button
+    onClick={() =>
+      setCurrentPage(prev =>
+        Math.min(prev + 1, totalPages)
+      )
+    }
+    disabled={currentPage === totalPages}
+    className="px-3 py-1 rounded-lg border border-slate-200 text-xs font-bold disabled:opacity-40"
+  >
+    Next
+  </button>
 
+</div>
 </div>
         </section>
 
@@ -2212,16 +2297,18 @@ setSelectedReviewSummary(app);
               <div className="flex-1 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
                 <div className="flex-1 flex items-center justify-center p-4 overflow-hidden relative">
                    <motion.img 
-                    key={`${selectedPhotoApp?.app?.id}-${selectedPhotoApp?.eye}`}
-                    drag={zoomScale > 1}
+  key={`${selectedPhotoApp?.app?.id}-${selectedPhotoApp?.eye}`}
+  drag={zoomScale > 1}
                     dragMomentum={false}
-                    animate={{ 
-                      scale: zoomScale,
-                      cursor: zoomScale > 1 ? 'grab' : 'zoom-in'
-                    }}
+                    animate={{
+  scale: zoomScale,
+  x: zoomScale <= 1 ? 0 : undefined,
+  y: zoomScale <= 1 ? 0 : undefined,
+  cursor: zoomScale > 1 ? 'grab' : 'zoom-in'
+}}
                     transition={{ type: 'spring', stiffness: 400, damping: 40 }}
                     src={selectedPhotoApp?.eye === 'right' ? selectedPhotoApp?.app?.rightEyePhoto : selectedPhotoApp?.app?.leftEyePhoto} 
-                    className="max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none" 
+                    className="form-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none" 
                     alt="Fundus View" 
                   />
                 </div>
@@ -2232,7 +2319,30 @@ setSelectedReviewSummary(app);
                     Zoom: {zoomScale.toFixed(1)}x • Scroll to zoom • Drag to pan
                   </div>
                 )}
+{/* Fundus Image Upload By FORM */}
+<div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md px-8 py-3 rounded-2xl border border-white/10 flex items-center gap-6 whitespace-nowrap">
 
+  <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">
+    Fundus Image Uploaded By:
+  </p>
+
+  <p className="text-[11px] font-bold text-white uppercase">
+    {
+      getUserDisplayName(
+        selectedPhotoApp?.eye === 'right'
+          ? selectedPhotoApp?.app?.rightEyeUploadedBy
+          : selectedPhotoApp?.app?.leftEyeUploadedBy
+      )
+    }
+  </p>
+
+  <div className="w-px h-4 bg-white/20"></div>
+
+  <p className="text-[10px] text-slate-200 font-bold">
+    {new Date(selectedPhotoApp?.app?.createdAt).toLocaleString('en-GB')}
+  </p>
+
+</div>
                 {/* Thumbnails to switch between RE/LE */}
                 <div className="bg-slate-900/50 p-4 border-t border-white/10 flex justify-center gap-4">
                   {['right', 'left'].map(side => (
@@ -2258,16 +2368,7 @@ setSelectedReviewSummary(app);
                   <div>
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight">{selectedPhotoApp?.app?.patientName}</h2>
                     <p className="text-sm font-mono text-slate-500 uppercase mt-1">IC: {selectedPhotoApp?.app?.icNumber}</p>
-                    <div className="flex flex-wrap gap-2 mt-3">
-                      {zoomScale > 1 && (
-                        <button 
-                          onClick={() => setZoomScale(1)}
-                          className="text-[10px] font-black text-blue-600 uppercase tracking-tighter bg-blue-50 px-2 py-1 rounded hover:bg-blue-100 transition-colors"
-                        >
-                          Reset Zoom
-                        </button>
-                      )}
-                    </div>
+                    
                   </div>
                   <button onClick={() => setSelectedPhotoApp(null)} className="text-slate-400 hover:text-slate-600">
                     <XCircle size={28} />
@@ -2356,155 +2457,7 @@ setSelectedReviewSummary(app);
                             </div>
                             
                             <div className="space-y-6 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm min-h-[650px]">
-                              {isReviewViewMode && (
-
-  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-
-    <div>
-      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-        Finding Status
-      </p>
-
-      <p className={`text-lg font-black uppercase mt-1 ${
-        details?.status === 'Abnormal'
-          ? 'text-rose-600'
-          : 'text-emerald-600'
-      }`}>
-        {details?.status || '-'}
-      </p>
-    </div>
-
-    {details?.abnormalTypes?.length > 0 && (
-      <div>
-
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-          Findings
-        </p>
-
-        <p className="text-sm font-bold text-slate-700 uppercase mt-1">
-          {details.abnormalTypes.join(', ')}
-
-          {details.npdrSeverity
-            ? ` - ${details.npdrSeverity}`
-            : ''
-          }
-
-          {details.othersText
-            ? ` - ${details.othersText}`
-            : ''
-          }
-        </p>
-
-      </div>
-    )}
-
-    {details?.comment && (
-      <div>
-
-        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-          Comments
-        </p>
-
-        <p className="text-sm text-slate-600 uppercase mt-1 whitespace-pre-wrap">
-          {details.comment}
-        </p>
-
-      </div>
-    )}
-
-    <button
-  type="button"
-  onClick={() => {
-
-    console.log("EDIT CLICKED");
-
-    setIsReviewViewMode(false);
-
-  }}
-      className="w-full py-3 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
-    >
-      Edit Review
-    </button>
-
-  </div>
-
-)}
-                                <div className="space-y-4">
-  <div>
-<div className="pb-3 border-b border-slate-200">
-
-  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-    Reviewed By
-  </p>
-
-  <p className="text-sm font-bold text-slate-700 uppercase mt-1">
-    {getUserDisplayName(selectedPhotoApp?.app?.updatedBy || '-')}
-  </p>
-
-</div>
-    <p className={`text-lg font-black uppercase mt-1 ${
-      details?.status === 'Abnormal'
-        ? 'text-rose-600'
-        : 'text-emerald-600'
-    }`}>
-      {details?.status || '-'}
-    </p>
-  </div>
-
-  {details?.abnormalTypes?.length > 0 && (
-    <div>
-
-      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-        Findings
-      </p>
-
-      <p className="text-sm font-bold text-slate-700 uppercase mt-1">
-        {details.abnormalTypes.join(', ')}
-
-        {details.npdrSeverity
-          ? ` - ${details.npdrSeverity}`
-          : ''
-        }
-
-        {details.othersText
-          ? ` - ${details.othersText}`
-          : ''
-        }
-      </p>
-
-    </div>
-  )}
-
-  {details?.comment && (
-    <div>
-
-      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-        Comments
-      </p>
-
-      <p className="text-sm text-slate-600 uppercase mt-1 whitespace-pre-wrap">
-        {details.comment}
-      </p>
-
-    </div>
-  )}
-
-  <button
-  type="button"
-  onClick={() => {
-
-    console.log("EDIT CLICKED");
-
-    setIsReviewViewMode(false);
-
-  }}
-    className="w-full py-3 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
-  >
-    Edit Review
-  </button>
-
-</div>
-
+                              
                               {/* Status Selection */}
                               <div className="space-y-3">
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Findings Status</label>
@@ -2874,24 +2827,48 @@ setSelectedReviewSummary(app);
         <div className="flex w-full h-full">
 
   {/* LEFT IMAGE SECTION */}
-  <div className="flex-1 bg-black flex flex-col items-center justify-center relative">
+<div
+  className="flex-1 bg-black flex flex-col overflow-hidden relative"
+  onWheel={handleWheel}
+  ref={containerRef}
+>
 
-    <img
-  src={
-    summaryEye === 'right'
-      ? selectedReviewSummary.rightEyePhoto
-      : selectedReviewSummary.leftEyePhoto
-  }
-      className="max-h-full object-contain"
-/>
+  <div className="flex-1 flex items-center justify-center p-4 overflow-hidden relative">
 
-<div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur-md px-4 py-2 rounded-2xl">
+    <motion.img
+      key={summaryEye}
+      drag={zoomScale > 1}
+      dragMomentum={false}
+      animate={{
+        scale: zoomScale,
+        cursor: zoomScale > 1 ? 'grab' : 'zoom-in'
+      }}
+      transition={{ type: 'spring', stiffness: 400, damping: 40 }}
+      src={
+        summaryEye === 'right'
+          ? selectedReviewSummary.rightEyePhoto
+          : selectedReviewSummary.leftEyePhoto
+      }
+      className="summary-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none"
+      alt="Fundus View"
+    />
 
-  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 text-center">
-    Fundus Image Uploaded By
+  </div>
+  {/* Zoom Indicator */}
+{zoomScale > 1 && (
+  <div className="absolute top-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full text-[10px] font-bold text-white border border-white/20 z-20">
+    Zoom: {zoomScale.toFixed(1)}x • Scroll to zoom • Drag to pan
+  </div>
+)}
+
+{/* Fundus Image Upload By SUMMARY */}
+<div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md px-8 py-3 rounded-2xl border border-white/10 flex items-center gap-6 whitespace-nowrap">
+
+  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
+    Fundus Image Uploaded By:
   </p>
 
-  <p className="text-xs font-bold text-white uppercase mt-1 text-center">
+  <p className="text-[11px] font-bold text-white uppercase">
     {
       getUserDisplayName(
         summaryEye === 'right'
@@ -2899,6 +2876,12 @@ setSelectedReviewSummary(app);
           : selectedReviewSummary.leftEyeUploadedBy
       )
     }
+  </p>
+
+  <div className="w-px h-4 bg-white/20"></div>
+
+  <p className="text-[10px] text-slate-200 font-bold">
+    {new Date(selectedReviewSummary.createdAt).toLocaleString('en-GB')}
   </p>
 
 </div>
@@ -2932,7 +2915,7 @@ setSelectedReviewSummary(app);
 </div>
 
   {/* RIGHT SIDEBAR */}
-  <div className="w-[380px] bg-slate-50 border-l border-slate-200 p-6 overflow-y-auto">
+  <div className="w-[380px] bg-slate-50 border-l border-slate-200 p-6 overflow-hidden flex flex-col h-full">
 
     <div className="flex items-center justify-between mb-6">
 
@@ -2951,26 +2934,22 @@ setSelectedReviewSummary(app);
 }
         </p>
         
-<div className="bg-white rounded-2xl border border-slate-200 p-4 mt-6">
+<p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 mt-2">
+  Patient History
+</p>
 
-  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">
-    Patient History
-  </p>
+<div className="flex flex-wrap gap-2">
 
-  <div className="flex flex-wrap gap-2">
+  {selectedReviewSummary.diseaseTypes?.map((disease: string) => (
 
-    {selectedReviewSummary.diseaseTypes?.map((disease: string) => (
+    <span
+      key={disease}
+      className="px-2 py-1 rounded-lg bg-blue-100 text-blue-700 text-[10px] font-black uppercase"
+    >
+      {disease}
+    </span>
 
-  <span
-    key={disease}
-    className="px-2 py-1 rounded-lg bg-blue-100 text-blue-700 text-[10px] font-black uppercase"
-  >
-    {disease}
-  </span>
-
-))}
-
-  </div>
+  ))}
 
 </div>
       </div>
@@ -2983,170 +2962,222 @@ setSelectedReviewSummary(app);
   setSelectedReviewSummary(null);
 
 }}
-        className="w-10 h-10 rounded-full bg-slate-200 font-black"
+        className="absolute top-3 right-3 z-20 w-10 h-10 rounded-full bg-slate-200 hover:bg-slate-300 transition-all font-black"
       >
         ✕
       </button>
 
     </div>
-<div className="space-y-6">
+<div className="flex flex-col flex-1 min-h-0 gap-6">
 
   {/* REVIEWED BY */}
-  <div className="bg-white rounded-2xl border border-slate-200 p-4">
+<div className="bg-white rounded-2xl border border-slate-200 p-4">
 
-    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-      Reviewed By
-    </p>
-
-    <p className="text-sm font-bold text-slate-700 uppercase mt-2">
-      {getUserDisplayName(selectedReviewSummary.updatedBy || '-')}
-    </p>
-
-  </div>
-
-  {/* RIGHT EYE */}
-  <div className="bg-white rounded-2xl border border-slate-200 p-4">
-
-    <p className="text-[11px] font-black uppercase tracking-widest text-blue-500 mb-3">
-      Right Eye Review
-    </p>
-
-    <div className="mt-4">
-
-  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-    Status
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+    {
+      selectedReviewSummary.isEdited
+        ? 'Edited By'
+        : 'Reviewed By'
+    }
   </p>
 
-  <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
-    selectedReviewSummary.rightEyeReviewDetails?.status === 'Abnormal'
-      ? 'bg-rose-100 text-rose-600'
-      : 'bg-emerald-100 text-emerald-600'
-  }`}>
-
-    {selectedReviewSummary.rightEyeReviewDetails?.status || '-'}
-
-  </span>
+  <p className="text-sm font-bold text-slate-700 uppercase mt-2">
+    {getUserDisplayName(selectedReviewSummary.updatedBy || '-')}
+  </p>
 
 </div>
-{selectedReviewSummary.rightEyeReviewDetails?.abnormalTypes?.length > 0 && (
-    <div className="mt-5">
 
-  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+{/* FINDINGS */}
+<div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col flex-1 min-h-0 overflow-hidden">
+  <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-4">
     Findings
   </p>
 
-  <div className="text-sm text-slate-700 uppercase space-y-1">
+  <div className="flex-1 overflow-y-auto space-y-4 pr-2 min-h-0 max-h-full">
 
-    {selectedReviewSummary.rightEyeReviewDetails?.abnormalTypes?.length > 0 ? (
+    {/* RIGHT EYE */}
+    <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4">
 
-      selectedReviewSummary.rightEyeReviewDetails.abnormalTypes.map((item: string) => (
-        <p key={item}>
-          • {item}
+      <div className="pb-3 border-b border-black/10 mb-4">
 
-          {item === 'Others' &&
-            selectedReviewSummary.rightEyeReviewDetails?.othersText && (
-              <span>
-                {' '} - {selectedReviewSummary.rightEyeReviewDetails.othersText}
-              </span>
-            )
-          }
+  <p className="text-[11px] font-black uppercase tracking-widest text-blue-500">
+    Right Eye Review
+  </p>
+
+</div>
+
+      <div className="mt-4">
+
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+          Status
         </p>
-      ))
 
-    ) : null}
+        <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
+          selectedReviewSummary.rightEyeReviewDetails?.status === 'Abnormal'
+            ? 'bg-rose-100 text-rose-600'
+            : 'bg-emerald-100 text-emerald-600'
+        }`}>
 
+          {selectedReviewSummary.rightEyeReviewDetails?.status || '-'}
 
-  </div>
+        </span>
 
-</div>
-)}
+      </div>
 
-{selectedReviewSummary.rightEyeReviewDetails?.comment && (
-    <div className="mt-5">
+      {selectedReviewSummary.rightEyeReviewDetails?.abnormalTypes?.length > 0 && (
+        <div className="mt-5">
 
-  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-    Comments
-  </p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+            Findings
+          </p>
 
-  <p className="text-sm text-slate-600 whitespace-pre-wrap uppercase">
-    {selectedReviewSummary.rightEyeReviewDetails?.comment || '-'}
-  </p>
+          <div className="text-sm text-slate-700 uppercase space-y-1">
 
-</div>
-)}
-  </div>
-  
+            {selectedReviewSummary.rightEyeReviewDetails.abnormalTypes.map((item: string) => (
 
-  {/* LEFT EYE */}
-  <div className="bg-white rounded-2xl border border-slate-200 p-4">
+  <div key={item} className="space-y-1">
 
-    <p className="text-[11px] font-black uppercase tracking-widest text-blue-500 mb-3">
-      Left Eye Review
+    <p className="uppercase font-semibold">
+      • {item}
     </p>
 
-    <div className="mt-4">
+    {item === 'Others' &&
+      selectedReviewSummary.rightEyeReviewDetails?.othersText && (
 
-  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-    Status
-  </p>
-
-  <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
-    selectedReviewSummary.leftEyeReviewDetails?.status === 'Abnormal'
-      ? 'bg-rose-100 text-rose-600'
-      : 'bg-emerald-100 text-emerald-600'
-  }`}>
-
-    {selectedReviewSummary.leftEyeReviewDetails?.status || '-'}
-
-  </span>
-
-</div>
-
-{selectedReviewSummary.leftEyeReviewDetails?.abnormalTypes?.length > 0 && (
-    <div className="mt-5">
-
-  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-    Findings
-  </p>
-
-  <div className="text-sm text-slate-700 uppercase space-y-1">
-
-    {selectedReviewSummary.leftEyeReviewDetails?.abnormalTypes?.length > 0 ? (
-
-      selectedReviewSummary.leftEyeReviewDetails.abnormalTypes.map((item: string) => (
-        <p key={item}>
-          • {item}
-
-          {item === 'Others' &&
-            selectedReviewSummary.leftEyeReviewDetails?.othersText && (
-              <span>
-                {' '} - {selectedReviewSummary.leftEyeReviewDetails.othersText}
-              </span>
-            )
-          }
+        <p className="ml-4 uppercase text-slate-500">
+          - {selectedReviewSummary.rightEyeReviewDetails.othersText}
         </p>
-      ))
 
-    ) : null}
+      )
+    }
+
+    {item === 'NPDR' &&
+      selectedReviewSummary.rightEyeReviewDetails?.npdrSeverity && (
+
+        <p className="ml-4 uppercase text-slate-500">
+          - {selectedReviewSummary.rightEyeReviewDetails.npdrSeverity}
+        </p>
+
+      )
+    }
 
   </div>
 
-</div>
-)}
-{selectedReviewSummary.leftEyeReviewDetails?.comment && (
-    <div className="mt-5">
+))}
 
-  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-    Comments
+          </div>
+
+        </div>
+      )}
+
+      {selectedReviewSummary.rightEyeReviewDetails?.comment && (
+        <div className="mt-5">
+
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+            Comments
+          </p>
+
+          <p className="text-sm text-slate-600 whitespace-pre-wrap uppercase">
+            {selectedReviewSummary.rightEyeReviewDetails.comment}
+          </p>
+
+        </div>
+      )}
+
+    </div>
+
+    {/* LEFT EYE */}
+    <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4">
+
+      <div className="pb-3 border-b border-black/10 mb-4">
+
+  <p className="text-[11px] font-black uppercase tracking-widest text-blue-500">
+    Left Eye Review
   </p>
 
-  <p className="text-sm text-slate-600 whitespace-pre-wrap uppercase">
-    {selectedReviewSummary.leftEyeReviewDetails?.comment || '-'}
-  </p>
-
 </div>
-)}
+
+      <div className="mt-4">
+
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+          Status
+        </p>
+
+        <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
+          selectedReviewSummary.leftEyeReviewDetails?.status === 'Abnormal'
+            ? 'bg-rose-100 text-rose-600'
+            : 'bg-emerald-100 text-emerald-600'
+        }`}>
+
+          {selectedReviewSummary.leftEyeReviewDetails?.status || '-'}
+
+        </span>
+
+      </div>
+
+      {selectedReviewSummary.leftEyeReviewDetails?.abnormalTypes?.length > 0 && (
+        <div className="mt-5">
+
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+            Findings
+          </p>
+
+          <div className="text-sm text-slate-700 uppercase space-y-1">
+
+            {selectedReviewSummary.leftEyeReviewDetails.abnormalTypes.map((item: string) => (
+
+  <div key={item} className="space-y-1">
+
+    <p className="uppercase font-semibold">
+      • {item}
+    </p>
+
+    {item === 'Others' &&
+      selectedReviewSummary.leftEyeReviewDetails?.othersText && (
+
+        <p className="ml-4 uppercase text-slate-500">
+          - {selectedReviewSummary.leftEyeReviewDetails.othersText}
+        </p>
+
+      )
+    }
+
+    {item === 'NPDR' &&
+      selectedReviewSummary.leftEyeReviewDetails?.npdrSeverity && (
+
+        <p className="ml-4 uppercase text-slate-500">
+          - {selectedReviewSummary.leftEyeReviewDetails.npdrSeverity}
+        </p>
+
+      )
+    }
+
   </div>
+
+))}
+
+          </div>
+
+        </div>
+      )}
+
+      {selectedReviewSummary.leftEyeReviewDetails?.comment && (
+        <div className="mt-5">
+
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+            Comments
+          </p>
+
+          <p className="text-sm text-slate-600 whitespace-pre-wrap uppercase">
+            {selectedReviewSummary.leftEyeReviewDetails.comment}
+          </p>
+
+        </div>
+        
+      )}
+
+    </div>
+      </div>
 <button
   onClick={() => {
 
@@ -3158,10 +3189,13 @@ setSelectedReviewSummary(app);
     });
 
   }}
-  className="w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
+  className="mt-auto shrink-0 w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
 >
   Edit Review
 </button>
+
+  </div>
+
 </div>
   </div>
 
