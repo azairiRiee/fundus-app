@@ -1374,7 +1374,15 @@ const paginatedAppointments =
             >
               Sign In to System
             </button>
-            <p className="text-[9px] text-center text-slate-400 font-bold uppercase tracking-tighter">Authorized Personnel Only</p>
+            <div className="flex flex-col items-center leading-none mt-1 gap-1">
+  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">
+    Authorized Personnel Only
+  </p>
+
+  <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wide">
+    {APP_VERSION}
+  </p>
+</div>
           </form>
         </motion.div>
       </div>
