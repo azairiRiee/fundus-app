@@ -3516,19 +3516,29 @@ setSelectedReviewSummary(app);
       >
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-slate-50">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-blue-50">
 
-          <div>
+          <div className="flex items-center gap-3">
 
-            <h2 className="text-lg font-black text-slate-800 tracking-tight">
-              Clinical Account Settings
-            </h2>
+  <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center shadow-lg">
 
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">
-              Manage Your Credentials
-            </p>
+    <UserCog size={18} className="text-white" />
 
-          </div>
+  </div>
+
+  <div>
+
+    <h2 className="text-lg font-black text-slate-800 tracking-tight">
+      Clinical Account Settings
+    </h2>
+
+    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">
+      Manage Your Credentials
+    </p>
+
+  </div>
+
+</div>
 
           <button
             onClick={() => {
@@ -3565,76 +3575,106 @@ setSelectedReviewSummary(app);
               type="text"
               value={newDisplayName}
               onChange={(e) => setNewDisplayName(e.target.value)}
-              className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+              className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-slate-50/70 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
               placeholder="Enter display name"
             />
 
           </div>
 
           {/* Current Password */}
-          <div className="relative">
+<div className="space-y-2">
 
-  <input
-    type={showCurrentPassword ? 'text' : 'password'}
-    value={currentPasswordInput}
-    onChange={(e) => setCurrentPasswordInput(e.target.value)}
-    className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
-    placeholder="••••••"
-  />
+  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
 
-  <div
-    onMouseEnter={() => setShowCurrentPassword(true)}
-    onMouseLeave={() => setShowCurrentPassword(false)}
-    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
-  >
+    Current Password
 
-    <Eye size={18} />
+  </label>
+
+  <div className="relative">
+
+    <input
+      type={showCurrentPassword ? 'text' : 'password'}
+      value={currentPasswordInput}
+      onChange={(e) => setCurrentPasswordInput(e.target.value)}
+      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50/70 bg-slate-50/70 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+      placeholder="••••••"
+    />
+
+    <div
+      onMouseEnter={() => setShowCurrentPassword(true)}
+      onMouseLeave={() => setShowCurrentPassword(false)}
+      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
+    >
+
+      <Eye size={18} />
+
+    </div>
 
   </div>
 
 </div>
 
           {/* New Password */}
-          <div className="relative">
+<div className="space-y-2">
 
-  <input
-    type={showNewPassword ? 'text' : 'password'}
-    value={newPasswordInput}
-    onChange={(e) => setNewPasswordInput(e.target.value)}
-    className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
-    placeholder="••••••"
-  />
+  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
 
-  <div
-    onMouseEnter={() => setShowNewPassword(true)}
-    onMouseLeave={() => setShowNewPassword(false)}
-    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
-  >
+    New Password
 
-    <Eye size={18} />
+  </label>
+
+  <div className="relative">
+
+    <input
+      type={showNewPassword ? 'text' : 'password'}
+      value={newPasswordInput}
+      onChange={(e) => setNewPasswordInput(e.target.value)}
+      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50/70 bg-slate-50/70 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+      placeholder="••••••"
+    />
+
+    <div
+      onMouseEnter={() => setShowNewPassword(true)}
+      onMouseLeave={() => setShowNewPassword(false)}
+      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
+    >
+
+      <Eye size={18} />
+
+    </div>
 
   </div>
 
 </div>
 
           {/* Confirm Password */}
-          <div className="relative">
+<div className="space-y-2">
 
-  <input
-    type={showConfirmPassword ? 'text' : 'password'}
-    value={confirmPasswordInput}
-    onChange={(e) => setConfirmPasswordInput(e.target.value)}
-    className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
-    placeholder="••••••"
-  />
+  <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
 
-  <div
-    onMouseEnter={() => setShowConfirmPassword(true)}
-    onMouseLeave={() => setShowConfirmPassword(false)}
-    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
-  >
+    Confirm Password
 
-    <Eye size={18} />
+  </label>
+
+  <div className="relative">
+
+    <input
+      type={showConfirmPassword ? 'text' : 'password'}
+      value={confirmPasswordInput}
+      onChange={(e) => setConfirmPasswordInput(e.target.value)}
+      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50/70 bg-slate-50/70 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+      placeholder="••••••"
+    />
+
+    <div
+      onMouseEnter={() => setShowConfirmPassword(true)}
+      onMouseLeave={() => setShowConfirmPassword(false)}
+      className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
+    >
+
+      <Eye size={18} />
+
+    </div>
 
   </div>
 
@@ -3643,7 +3683,7 @@ setSelectedReviewSummary(app);
           {/* Save Button */}
           <button
           onClick={handleAccountUpdate}
-            className="w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all uppercase tracking-widest text-xs"
+            className="w-full py-4 bg-gradient-to-r from-slate-900 to-blue-900 hover:bg-gradient-to-r hover:from-slate-800 hover:to-blue-800 text-white font-black rounded-2xl transition-all uppercase tracking-widest text-xs"
           >
 
             Save Changes
