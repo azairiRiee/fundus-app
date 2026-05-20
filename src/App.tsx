@@ -32,6 +32,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 
 import clinicLogo from './assets/logo.png';
+import fundusBg from './assets/fundus-bg.png';
 
 import { db } from './firebase';
 
@@ -44,7 +45,7 @@ import {
   doc
 } from 'firebase/firestore';
 
-const APP_VERSION = "v2.2.0";
+const APP_VERSION = "v2.2.1";
 
 // --- Types & Constants ---
 
@@ -1294,11 +1295,20 @@ const paginatedAppointments =
   </div>
 
 )}
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+      <div
+  className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
+  style={{
+    backgroundImage: `url(${fundusBg})`,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+    backgroundRepeat: 'no-repeat'
+  }}
+>
+  <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-[1px]" />
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md border border-slate-100"
+          className="relative z-10 bg-white/92 backdrop-blur-md rounded-3xl shadow-2xl p-8 w-full max-w-md border border-white/40"
         >
           <div className="flex flex-col items-center mb-10">
             <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-white shadow-xl mb-6 ring-1 ring-slate-100">
@@ -1334,7 +1344,7 @@ const paginatedAppointments =
                   type="text" 
                   autoComplete="off"
                   required
-                  className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium"
+                  className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium"
                   placeholder="ID or Username"
                   value={tempUserId}
                   onChange={e => setTempUserId(e.target.value)}
@@ -1350,7 +1360,7 @@ const paginatedAppointments =
                   type="password" 
                   autoComplete="new-password"
                   required
-                  className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium text-slate-800"
+                  className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium text-slate-800"
                   placeholder="••••••"
                   value={tempPassword}
                   onChange={e => setTempPassword(e.target.value)}
