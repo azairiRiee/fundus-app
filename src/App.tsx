@@ -24,6 +24,9 @@ import {
   Lock,
   UserPlus,
   ShieldCheck,
+  UserCog,
+  Eye,
+  EyeOff,
   Key
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -156,6 +159,19 @@ export default function App() {
   const [newStaffId, setNewStaffId] = useState('');
   const [newStaffName, setNewStaffName] = useState('');
   const [newStaffPass, setNewStaffPass] = useState('');
+
+  const [showAccountSettings, setShowAccountSettings] = useState(false);
+  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [newDisplayName, setNewDisplayName] = useState(
+  currentUser?.displayName || ''
+);
+
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showAccountSuccess, setShowAccountSuccess] = useState(false);
   
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
@@ -636,7 +652,52 @@ useEffect(() => {
 
 };
 
-  const updateStaffMember = (e: React.FormEvent) => {
+const addStaffMember = (e: React.FormEvent) => {
+
+  e.preventDefault();
+
+  if (
+    !newStaffId.trim() ||
+    !newStaffPass.trim() ||
+    !newStaffName.trim()
+  ) return;
+
+  const id = newStaffId.trim().toUpperCase();
+
+  if (users.some(u => u.id === id)) {
+
+    alert('User ID already exists');
+
+    return;
+
+  }
+
+  const newUser: User = {
+
+    id,
+
+    password: newStaffPass,
+
+    displayName: newStaffName.trim(),
+
+    role: UserRole.STAFF,
+
+    createdAt: Date.now()
+
+  };
+
+  addDoc(
+    collection(db, "users"),
+    newUser
+  );
+
+  setNewStaffId('');
+  setNewStaffName('');
+  setNewStaffPass('');
+
+};
+  
+const updateStaffMember = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
     
@@ -656,6 +717,82 @@ updateDoc(
     
     setEditingUser(null);
   };
+
+  const handleAccountUpdate = async () => {
+
+  if (!currentUser?.firestoreId) return;
+
+  // Verify current password
+  if (currentPasswordInput !== currentUser.password) {
+
+    alert('Current password is incorrect');
+
+    return;
+
+  }
+
+  // Check password confirmation
+  if (newPasswordInput !== confirmPasswordInput) {
+
+    alert('New passwords do not match');
+
+    return;
+
+  }
+
+  // Password minimum length
+  if (newPasswordInput.length < 4) {
+
+    alert('Password must be at least 4 characters');
+
+    return;
+
+  }
+
+  try {
+
+    await updateDoc(
+      doc(db, "users", currentUser.firestoreId),
+      {
+
+        displayName: newDisplayName,
+
+        password: newPasswordInput
+
+      }
+    );
+
+    // Update current user locally
+    setCurrentUser({
+      ...currentUser,
+      displayName: newDisplayName,
+      password: newPasswordInput
+    });
+
+    // Clear fields
+    setCurrentPasswordInput('');
+    setNewPasswordInput('');
+    setConfirmPasswordInput('');
+
+    setShowAccountSettings(false);
+
+    setShowAccountSuccess(true);
+
+setTimeout(() => {
+
+  setShowAccountSuccess(false);
+
+}, 2000);
+
+  } catch (error) {
+
+    console.error(error);
+
+    alert('Failed to update account');
+
+  }
+
+};
 
   const removeStaffMember = (id: string) => {
     if (id === 'admin') return;
@@ -1270,6 +1407,31 @@ const paginatedAppointments =
   </div>
 
 )}
+{showAccountSuccess && (
+
+  <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[99999]">
+
+    <div className="bg-emerald-500 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-3 animate-[fadeIn_.3s_ease]">
+
+      <CheckCircle2 size={22} />
+
+      <div>
+
+        <p className="text-xs font-black uppercase tracking-widest">
+          Account Updated
+        </p>
+
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-100 mt-1">
+          Credentials Updated Successfully
+        </p>
+
+      </div>
+
+    </div>
+
+  </div>
+
+)}
 
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900">
       {/* Header */}
@@ -1292,6 +1454,7 @@ const paginatedAppointments =
           
           <div className="flex items-center gap-4">
             {currentUser.role === UserRole.ADMIN && (
+
               <button 
                 onClick={() => setShowAdminConsole(true)}
                 className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
@@ -1300,6 +1463,20 @@ const paginatedAppointments =
                 Staff Management
               </button>
             )}
+            {currentUser.role === UserRole.STAFF && (
+
+  <button 
+    onClick={() => setShowAccountSettings(true)}
+    className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
+  >
+
+    <UserCog size={16} className="text-blue-600" />
+
+    Manage Account
+
+  </button>
+
+)}
             <div className="hidden sm:flex flex-col items-end mr-2">
               <span className="text-sm font-semibold text-slate-700">{currentUser.displayName}</span>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">{currentUser.role} Account ({currentUser.id})</span>
@@ -1316,6 +1493,7 @@ const paginatedAppointments =
       </header>
 
       <main className="flex-1 max-w-7xl mx-auto px-4 py-8 w-full space-y-8">
+        
         {/* Monthly Stats Dashboard */}
         <section className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -1966,7 +2144,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[80vh]"
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <div className="flex items-center gap-3">
@@ -1986,7 +2164,7 @@ setSelectedReviewSummary(app);
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-8">
+              <div className="p-6 space-y-8">
                 {/* Add/Edit Staff Form */}
                 <section>
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
@@ -2049,9 +2227,9 @@ setSelectedReviewSummary(app);
                 </section>
 
                 {/* Existing Staff List */}
-                <section>
+<section className="flex flex-col h-[420px]">
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Current System Users ({users.length})</h3>
-                  <div className="space-y-2">
+                  <div className="space-y-2 overflow-y-auto pr-2 h-full">
                     {users.map(u => (
                       <div key={u.id} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:border-slate-200 transition-all group">
                         <div className="flex items-center gap-4">
@@ -3296,6 +3474,161 @@ setSelectedReviewSummary(app);
 </AnimatePresence>
 </AnimatePresence>
     </div>
+    <AnimatePresence>
+
+  {showAccountSettings && (
+
+    <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => setShowAccountSettings(false)}
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+      />
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 10 }}
+        className="relative z-10 w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden"
+      >
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-slate-50">
+
+          <div>
+
+            <h2 className="text-lg font-black text-slate-800 tracking-tight">
+              Clinical Account Settings
+            </h2>
+
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">
+              Manage Your Credentials
+            </p>
+
+          </div>
+
+          <button
+            onClick={() => setShowAccountSettings(false)}
+            className="p-2 rounded-xl hover:bg-slate-200 text-slate-400 transition-all"
+          >
+            <XCircle size={22} />
+          </button>
+
+        </div>
+
+        {/* Body */}
+        <div className="p-6 space-y-6">
+
+          {/* Display Name */}
+          <div className="space-y-2">
+
+            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+
+              Display Name
+
+            </label>
+
+            <input
+              type="text"
+              value={newDisplayName}
+              onChange={(e) => setNewDisplayName(e.target.value)}
+              className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+              placeholder="Enter display name"
+            />
+
+          </div>
+
+          {/* Current Password */}
+          <div className="relative">
+
+  <input
+    type={showCurrentPassword ? 'text' : 'password'}
+    value={currentPasswordInput}
+    onChange={(e) => setCurrentPasswordInput(e.target.value)}
+    className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+    placeholder="••••••"
+  />
+
+  <div
+    onMouseEnter={() => setShowCurrentPassword(true)}
+    onMouseLeave={() => setShowCurrentPassword(false)}
+    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
+  >
+
+    <Eye size={18} />
+
+  </div>
+
+</div>
+
+          {/* New Password */}
+          <div className="relative">
+
+  <input
+    type={showNewPassword ? 'text' : 'password'}
+    value={newPasswordInput}
+    onChange={(e) => setNewPasswordInput(e.target.value)}
+    className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+    placeholder="••••••"
+  />
+
+  <div
+    onMouseEnter={() => setShowNewPassword(true)}
+    onMouseLeave={() => setShowNewPassword(false)}
+    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
+  >
+
+    <Eye size={18} />
+
+  </div>
+
+</div>
+
+          {/* Confirm Password */}
+          <div className="relative">
+
+  <input
+    type={showConfirmPassword ? 'text' : 'password'}
+    value={confirmPasswordInput}
+    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+    className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+    placeholder="••••••"
+  />
+
+  <div
+    onMouseEnter={() => setShowConfirmPassword(true)}
+    onMouseLeave={() => setShowConfirmPassword(false)}
+    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all duration-200"
+  >
+
+    <Eye size={18} />
+
+  </div>
+
+</div>
+
+          {/* Save Button */}
+          <button
+          onClick={handleAccountUpdate}
+            className="w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all uppercase tracking-widest text-xs"
+          >
+
+            Save Changes
+
+          </button>
+
+        </div>
+
+      </motion.div>
+
+    </div>
+
+  )}
+
+</AnimatePresence>
       </>
   );
 }
