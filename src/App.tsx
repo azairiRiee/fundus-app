@@ -2157,7 +2157,17 @@ setSelectedReviewSummary(app);
                   </div>
                 </div>
                 <button 
-                  onClick={() => setShowAdminConsole(false)}
+                  onClick={() => {
+
+  setShowAdminConsole(false);
+
+  setEditingUser(null);
+
+  setNewStaffId('');
+  setNewStaffName('');
+  setNewStaffPass('');
+
+}}
                   className="p-2 hover:bg-slate-200 rounded-xl transition-colors text-slate-400"
                 >
                   <XCircle size={24} />
@@ -3484,7 +3494,17 @@ setSelectedReviewSummary(app);
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        onClick={() => setShowAccountSettings(false)}
+        onClick={() => {
+
+  setShowAccountSettings(false);
+
+  setCurrentPasswordInput('');
+  setNewPasswordInput('');
+  setConfirmPasswordInput('');
+
+  setNewDisplayName(currentUser?.displayName || '');
+
+}}
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
       />
 
@@ -3511,7 +3531,17 @@ setSelectedReviewSummary(app);
           </div>
 
           <button
-            onClick={() => setShowAccountSettings(false)}
+            onClick={() => {
+
+  setShowAccountSettings(false);
+
+  setCurrentPasswordInput('');
+  setNewPasswordInput('');
+  setConfirmPasswordInput('');
+
+  setNewDisplayName(currentUser?.displayName || '');
+
+}}
             className="p-2 rounded-xl hover:bg-slate-200 text-slate-400 transition-all"
           >
             <XCircle size={22} />
