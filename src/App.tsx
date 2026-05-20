@@ -1436,7 +1436,7 @@ const paginatedAppointments =
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 py-3 md:h-16 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-slate-100 shadow-sm bg-white shrink-0">
               <img 
@@ -1447,12 +1447,12 @@ const paginatedAppointments =
               />
             </div>
             <div className="flex flex-col">
-              <span className="font-black text-lg leading-none tracking-tighter text-slate-900">Klinik Kesihatan Lintang</span>
+              <span className="font-black text-base md:text-lg leading-none tracking-tighter text-slate-900">Klinik Kesihatan Lintang</span>
               <span className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mt-0.5">Fundus Clinic</span>
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="w-full md:w-auto flex items-center justify-between md:justify-end gap-3 flex-wrap">
             {currentUser.role === UserRole.ADMIN && (
 
               <button 
@@ -1477,7 +1477,7 @@ const paginatedAppointments =
   </button>
 
 )}
-            <div className="hidden sm:flex flex-col items-end mr-2">
+            <div className="flex flex-col items-end mr-1 md:mr-2">
               <span className="text-sm font-semibold text-slate-700">{currentUser.displayName}</span>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">{currentUser.role} Account ({currentUser.id})</span>
             </div>
@@ -1593,10 +1593,10 @@ const paginatedAppointments =
                         <StatusBadge status={app.status} />
                       </div>
                     </div>
-                    <h3 className="font-bold text-slate-800 text-lg leading-tight truncate">
+                    <h3 className="font-bold text-slate-800 text-[15px] leading-tight truncate">
                       {app.patientName}
                     </h3>
-                  <p className="text-[11px] font-mono font-medium text-slate-500 mb-4">{app.icNumber}</p>
+                  <p className="text-[10px] font-mono font-medium text-slate-500 mb-4">{app.icNumber}</p>
 
                   <div className="space-y-2 mb-4">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-1 px-1">Upload Images</p>
@@ -1706,7 +1706,7 @@ const paginatedAppointments =
         {/* Global Directory */}
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
           {/* Controls */}
-          <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row gap-4">
+          <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col xl:flex-row gap-4 xl:items-center">
             <div className="relative flex-1">
               <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input 
@@ -1718,7 +1718,7 @@ const paginatedAppointments =
               />
             </div>
             
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-3">
               <button 
                 onClick={exportToCSV}
                 className="bg-slate-900 border border-slate-800 hover:bg-black text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg active:scale-95"
@@ -1779,8 +1779,8 @@ const paginatedAppointments =
           {/* Table */}
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[800px]">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
+              <thead className="bg-slate-50/80 backdrop-blur-sm">
+                <tr className="border-b border-slate-200 bg-slate-200">
                   <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">RE / LE Photos</th>
                   <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Patient Details</th>
                   <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Input By</th>
