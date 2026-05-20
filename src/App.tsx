@@ -1436,7 +1436,7 @@ const paginatedAppointments =
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-3 md:h-16 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto px-4 py-3 md:h-16 flex flex-col md:flex-row md:items-center justify-center md:justify-between gap-3 md:gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-slate-100 shadow-sm bg-white shrink-0">
               <img 
@@ -1452,14 +1452,15 @@ const paginatedAppointments =
             </div>
           </div>
           
-          <div className="w-full md:w-auto flex items-center justify-between md:justify-end gap-3 flex-wrap">
+          <div className="w-full md:w-auto flex items-center justify-between md:justify-end gap-2 md:gap-3 flex-nowrap">
             {currentUser.role === UserRole.ADMIN && (
 
               <button 
                 onClick={() => setShowAdminConsole(true)}
-                className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
+                className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
               >
-                <ShieldCheck size={16} className="text-blue-600" />
+                <ShieldCheck size={15} className="text-blue-600" />
+                
                 Staff Management
               </button>
             )}
@@ -1467,7 +1468,7 @@ const paginatedAppointments =
 
   <button 
     onClick={() => setShowAccountSettings(true)}
-    className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
+    className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
   >
 
     <UserCog size={16} className="text-blue-600" />
@@ -1707,7 +1708,7 @@ const paginatedAppointments =
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
           {/* Controls */}
           <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col xl:flex-row gap-4 xl:items-center">
-            <div className="relative flex-1">
+            <div className="relative w-full sm:flex-1">
               <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input 
                 type="text" 
@@ -1718,10 +1719,10 @@ const paginatedAppointments =
               />
             </div>
             
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
               <button 
                 onClick={exportToCSV}
-                className="bg-slate-900 border border-slate-800 hover:bg-black text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg active:scale-95"
+                className="w-full sm:w-auto justify-center bg-slate-900 border border-slate-800 hover:bg-black text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-xl active:scale-95"
               >
                  <Download size={14} />
                  Generate Monthly Summary (CSV)
@@ -1778,17 +1779,17 @@ const paginatedAppointments =
 
           {/* Table */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[800px]">
+            <table className="w-full text-left border-collapse min-w-[950px] md:min-w-[800px]">
               <thead className="bg-slate-50/80 backdrop-blur-sm">
                 <tr className="border-b border-slate-200 bg-slate-200">
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">RE / LE Photos</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Patient Details</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Input By</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Schedule</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Fundus Actions</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Review Findings</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-right">Options</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">RE / LE Photos</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Patient Details</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Input By</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Schedule</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Fundus Actions</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Review Findings</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-right">Options</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -1814,7 +1815,7 @@ const paginatedAppointments =
                         }`}
                       >
 
-                      <td className="px-6 py-4">
+                      <td className="px-3 md:px-6 py-3 md:py-4">
                         <div className="flex flex-col items-center gap-1">
                           <div className="flex gap-2">
                             {['right', 'left'].map(eye => {
@@ -1866,19 +1867,22 @@ const paginatedAppointments =
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex flex-col">
-                          <span className="font-semibold text-slate-800">{app.patientName}</span>
-                          <div className="flex flex-wrap gap-1 mt-1">
+                          <span className="font-bold text-[13px] text-slate-800">{app.patientName}</span>
+                          <div className="flex flex-wrap gap-1 mt-0.5">
                             {app.diseaseTypes?.map(d => (
-                              <span key={d} className="text-[8px] bg-blue-50 text-blue-600 px-1 py-0 rounded font-bold border border-blue-100 uppercase">{d}</span>
+                              <span key={d} className="text-[8px] bg-blue-50 text-blue-600 px-1 py-[1px] rounded font-bold border border-blue-100 uppercase">{d}</span>
                             ))}
                             {app.otherDisease && (
-                              <span className="text-[8px] bg-slate-50 text-slate-600 px-1 py-0 rounded font-bold border border-slate-100 uppercase">{app.otherDisease}</span>
+                              <span className="text-[8px] bg-slate-50 text-slate-600 px-1 py-[1px] rounded font-bold border border-slate-100 uppercase">{app.otherDisease}</span>
                             )}
                           </div>
-                          <span className="text-[10px] font-mono text-slate-400 mt-1">IC: {app.icNumber}</span>
-                          <span className="text-xs text-slate-500 mt-1 flex items-center gap-1">
-                            <Phone size={10} /> {app.phoneNumber}
-                          </span>
+                          <span className="text-[9px] md:text-[10px] font-mono text-slate-400 mt-1">
+  IC: {app.icNumber}
+</span>
+
+<span className="text-[10px] md:text-xs text-slate-500 mt-1 flex items-center gap-1">
+  <Phone size={10} /> {app.phoneNumber}
+</span>
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -2565,11 +2569,11 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 30 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden relative z-10 flex flex-col md:flex-row"
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[95vh] lg:max-h-[90vh] overflow-y-auto scroll-smooth lg:overflow-hidden relative z-10 flex flex-col lg:flex-row"
             >
               {/* Photo Area */}
-              <div className="flex-1 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
-                <div className="flex-1 flex items-center justify-center p-4 overflow-hidden relative">
+              <div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
+                <div className="flex-1 flex items-center justify-center p-2 md:p-4 overflow-y-auto lg:overflow-hidden relative">
                    <motion.img 
   key={`${selectedPhotoApp?.app?.id}-${selectedPhotoApp?.eye}`}
   drag={zoomScale > 1}
@@ -2594,13 +2598,13 @@ setSelectedReviewSummary(app);
                   </div>
                 )}
 {/* Fundus Image Upload By FORM */}
-<div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md px-8 py-3 rounded-2xl border border-white/10 flex items-center gap-6 whitespace-nowrap">
+<div className="hidden md:flex absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md px-3 md:px-8 py-2 rounded-2xl border border-white/10 flex items-center gap-3 md:gap-6">
 
   <p className="text-[9px] font-black uppercase tracking-widest text-slate-300">
     Fundus Image Uploaded By:
   </p>
 
-  <p className="text-[11px] font-bold text-white uppercase">
+  <p className="text-[9px] md:text-[11px] font-bold text-white uppercase">
     {
       getUserDisplayName(
         selectedPhotoApp?.eye === 'right'
@@ -3075,7 +3079,7 @@ setSelectedReviewSummary(app);
 
   {selectedReviewSummary && (
 
-    <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[130] flex items-start lg:items-center justify-center p-2 md:p-4 overflow-y-auto">
 
       <motion.div
         initial={{ opacity: 0 }}
@@ -3095,14 +3099,14 @@ setSelectedReviewSummary(app);
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[90vh] overflow-hidden flex"
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[95vh] lg:max-h-[90vh] overflow-y-auto flex flex-col lg:flex-row"
       >
 
-        <div className="flex w-full h-full">
+        <div className="flex flex-col lg:flex-row w-full">
 
-  {/* LEFT IMAGE SECTION */}
+  {/* Summary LEFT IMAGE SECTION */}
 <div
-  className="flex-1 bg-black flex flex-col overflow-hidden relative"
+  className="w-full min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative"
   onWheel={handleWheel}
   ref={containerRef}
 >
@@ -3136,7 +3140,7 @@ setSelectedReviewSummary(app);
 )}
 
 {/* Fundus Image Upload By SUMMARY */}
-<div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md px-8 py-3 rounded-2xl border border-white/10 flex items-center gap-6 whitespace-nowrap">
+<div className="hidden md:flex absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md px-8 py-3 rounded-2xl border border-white/10 flex items-center gap-6 whitespace-nowrap">
 
   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
     Fundus Image Uploaded By:
@@ -3162,11 +3166,11 @@ setSelectedReviewSummary(app);
 
 </div>
 
-  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-4 bg-slate-900/90 p-2 rounded-2xl">
+  <div className="absolute top-4 md:top-auto md:bottom-4 left-1/2 -translate-x-1/2 flex items-center justify-center gap-2 bg-slate-900/80 backdrop-blur-md p-1.5 rounded-2xl z-20">
 
   <button
     onClick={() => setSummaryEye('right')}
-    className={`px-5 py-2 rounded-xl text-xs font-black uppercase transition-all ${
+    className={`px-2.5 md:px-5 py-1 text-[9px] md:text-xs rounded-xl text-xs font-black uppercase transition-all ${
       summaryEye === 'right'
         ? 'bg-blue-600 text-white'
         : 'bg-slate-700 text-slate-300'
@@ -3177,7 +3181,7 @@ setSelectedReviewSummary(app);
 
   <button
     onClick={() => setSummaryEye('left')}
-    className={`px-5 py-2 rounded-xl text-xs font-black uppercase transition-all ${
+    className={`px-2.5 md:px-5 py-1 text-[9px] md:text-xs rounded-xl text-xs font-black uppercase transition-all ${
       summaryEye === 'left'
         ? 'bg-blue-600 text-white'
         : 'bg-slate-700 text-slate-300'
@@ -3189,13 +3193,13 @@ setSelectedReviewSummary(app);
 </div>
 
   {/* RIGHT SIDEBAR */}
-  <div className="w-[380px] bg-slate-50 border-l border-slate-200 p-6 overflow-hidden flex flex-col h-full">
+  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 overflow-hidden flex flex-col h-full">
 
     <div className="flex items-center justify-between mb-6">
 
       <div>
 
-        <h2 className="text-2xl font-black text-slate-800">
+        <h2 className="text-xl md:text-2xl font-black text-slate-800">
           {selectedReviewSummary.patientName}
         </h2>
 
@@ -3242,7 +3246,7 @@ setSelectedReviewSummary(app);
       </button>
 
     </div>
-<div className="flex flex-col flex-1 min-h-0 gap-6">
+<div className="flex flex-col gap-6">
 
   {/* REVIEWED BY */}
 <div className="bg-white rounded-2xl border border-slate-200 p-4">
@@ -3262,12 +3266,12 @@ setSelectedReviewSummary(app);
 </div>
 
 {/* FINDINGS */}
-<div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col flex-1 min-h-0 overflow-hidden">
+<div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col">
   <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-4">
     Findings
   </p>
 
-  <div className="flex-1 overflow-y-auto space-y-4 pr-2 min-h-0 max-h-full">
+  <div className="w-full overflow-visible space-y-4 pr-2 pb-24">
 
     {/* RIGHT EYE */}
     <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4">
