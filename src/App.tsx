@@ -143,7 +143,7 @@ export default function App() {
   const [users, setUsers] = useState<User[]>([
   {
     id: 'admin',
-    password: '123456',
+    password: 'cokkodok',
     displayName: 'Administrator',
     role: UserRole.ADMIN,
     createdAt: Date.now()
@@ -445,7 +445,7 @@ const unsubscribeUsers = onSnapshot(
 
       firestoreUsers.unshift({
         id: 'admin',
-        password: '123456',
+        password: 'cokkodok',
         displayName: 'Administrator',
         role: UserRole.ADMIN,
         createdAt: Date.now()
@@ -1780,7 +1780,7 @@ const paginatedAppointments =
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
-                <tr className="border-b border-slate-100">
+                <tr className="border-b border-slate-200 bg-slate-50">
                   <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">RE / LE Photos</th>
                   <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Patient Details</th>
                   <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Input By</th>
@@ -1791,7 +1791,7 @@ const paginatedAppointments =
                   <th className="px-6 py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-right">Options</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-50">
+              <tbody className="divide-y divide-slate-200">
                 <AnimatePresence>
                   {paginatedAppointments.map((app) => {
                     // Calculate queue number for that specific day
@@ -2144,7 +2144,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[80vh]"
+              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <div className="flex items-center gap-3">
@@ -2237,7 +2237,7 @@ setSelectedReviewSummary(app);
                 </section>
 
                 {/* Existing Staff List */}
-<section className="flex flex-col h-[420px]">
+<section className="flex flex-col max-h-[420px]">
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Current System Users ({users.length})</h3>
                   <div className="space-y-2 overflow-y-auto pr-2 h-full">
                     {users.map(u => (
@@ -3236,9 +3236,9 @@ setSelectedReviewSummary(app);
   setSelectedReviewSummary(null);
 
 }}
-        className="absolute top-3 right-3 z-20 w-10 h-10 rounded-full bg-slate-200 hover:bg-slate-300 transition-all font-black"
+        className="absolute top-3 right-3 z-20 w-8 h-8 rounded-full bg-slate-200 hover:bg-slate-300 transition-all font-black"
       >
-        ✕
+        x
       </button>
 
     </div>
@@ -3560,7 +3560,7 @@ setSelectedReviewSummary(app);
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-6">
+        <div className="p-6 space-y-3">
 
           {/* Display Name */}
           <div className="space-y-2">
