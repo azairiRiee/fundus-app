@@ -27,7 +27,8 @@ import {
   UserCog,
   Eye,
   EyeOff,
-  Key
+  Key,
+  Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -160,6 +161,7 @@ export default function App() {
   const [newStaffId, setNewStaffId] = useState('');
   const [newStaffName, setNewStaffName] = useState('');
   const [newStaffPass, setNewStaffPass] = useState('');
+  const [activityLogs, setActivityLogs] = useState<any[]>([]);
 
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
@@ -173,6 +175,7 @@ export default function App() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [showAccountSuccess, setShowAccountSuccess] = useState(false);
+  const [showActivityLogs, setShowActivityLogs] = useState(false);
   
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
@@ -895,13 +898,29 @@ if (hasRight && hasLeft) {
     };
 
     await updateDoc(
-      doc(
-        db,
-        "appointments",
-        appToUpdate.firestoreId
-      ),
-      updatedData
-    );
+  doc(
+    db,
+    "appointments",
+    appToUpdate.firestoreId
+  ),
+  updatedData
+);
+
+setActivityLogs(prev => [
+  {
+    action: updatedData.isEdited
+      ? 'Edited Review'
+      : 'Reviewed Patient',
+
+    patient: appToUpdate.patientName || '-',
+
+    by: getUserDisplayName(currentUser?.id || ''),
+
+    timestamp: Date.now()
+  },
+
+  ...prev
+]);
 
   } catch (e) {
 
@@ -1472,32 +1491,48 @@ const paginatedAppointments =
             </div>
           </div>
           
-          <div className="w-full md:w-auto flex items-center justify-between md:justify-end gap-2 md:gap-3 flex-nowrap">
-            {currentUser.role === UserRole.ADMIN && (
+         <div className="w-full md:w-auto flex items-center justify-between md:justify-end gap-2 md:gap-3 flex-nowrap">
 
-              <button 
-                onClick={() => setShowAdminConsole(true)}
-                className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
-              >
-                <ShieldCheck size={15} className="text-blue-600" />
-                
-                Staff Management
-              </button>
-            )}
-            {currentUser.role === UserRole.STAFF && (
+  {currentUser.role === UserRole.ADMIN && (
 
-  <button 
-    onClick={() => setShowAccountSettings(true)}
-    className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
-  >
+    <>
 
-    <UserCog size={16} className="text-blue-600" />
+      <button 
+        onClick={() => setShowAdminConsole(true)}
+        className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
+      >
+        <ShieldCheck size={15} className="text-blue-600" />
+        
+        Staff Management
+      </button>
 
-    Manage Account
+      <button 
+        onClick={() => setShowActivityLogs(true)}
+        className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
+      >
+        <Activity size={15} className="text-blue-600" />
+        
+        Activity Logs
+      </button>
 
-  </button>
+    </>
 
-)}
+  )}
+
+  {currentUser.role === UserRole.STAFF && (
+
+    <button 
+      onClick={() => setShowAccountSettings(true)}
+      className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
+    >
+
+      <UserCog size={16} className="text-blue-600" />
+
+      Manage Account
+
+    </button>
+
+  )}
             <div className="flex flex-col items-end mr-1 md:mr-2">
               <span className="text-sm font-semibold text-slate-700">{currentUser.displayName}</span>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">{currentUser.role} Account ({currentUser.id})</span>
@@ -3717,6 +3752,107 @@ setSelectedReviewSummary(app);
             Save Changes
 
           </button>
+
+        </div>
+
+      </motion.div>
+
+    </div>
+
+  )}
+
+</AnimatePresence>
+{/* ACTIVITY LOG MODAL */}
+<AnimatePresence>
+
+  {showActivityLogs && (
+
+    <div className="fixed inset-0 z-[140] flex items-center justify-center p-4">
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => setShowActivityLogs(false)}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      />
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
+      >
+
+        <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+
+          <div>
+
+            <h2 className="text-xl font-black text-slate-800">
+              Clinical Activity Logs
+            </h2>
+
+            <p className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mt-1">
+              Administrative Audit Trail
+            </p>
+
+          </div>
+
+          <button
+            onClick={() => setShowActivityLogs(false)}
+            className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 transition-all"
+          >
+            ✕
+          </button>
+
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+
+          {activityLogs.length === 0 ? (
+
+            <div className="text-center text-slate-400 text-sm py-10 font-bold">
+              No activity logs available.
+            </div>
+
+          ) : (
+
+            activityLogs.map((log, index) => (
+
+              <div
+                key={index}
+                className="bg-slate-50 border border-slate-200 rounded-2xl p-4"
+              >
+
+                <div className="flex items-center justify-between gap-4">
+
+                  <div>
+
+                    <p className="text-sm font-black text-slate-800 uppercase">
+                      {log.action}
+                    </p>
+
+                    <p className="text-xs text-slate-500 font-semibold mt-1 uppercase">
+                      {log.patient}
+                    </p>
+
+                    <p className="text-[10px] text-slate-400 font-bold uppercase mt-2">
+                      BY {log.by}
+                    </p>
+
+                  </div>
+
+                  <div className="text-[10px] text-slate-400 font-bold whitespace-nowrap">
+                    {new Date(log.timestamp).toLocaleString('en-GB')}
+                  </div>
+
+                </div>
+
+              </div>
+
+            ))
+
+          )}
 
         </div>
 
