@@ -983,7 +983,9 @@ uploadImage();
           currentUser?.id || 'unknown',
 
         updatedAt: Date.now(),
-        isEdited: true
+        isEdited:
+  !!selectedPhotoApp?.app?.rightEyeReview ||
+  !!selectedPhotoApp?.app?.leftEyeReview
 
       }
     );
@@ -1931,8 +1933,8 @@ const paginatedAppointments =
       <div className="flex flex-col mt-1">
 
         <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
-          REVIEW BY:
-        </span>
+  {app.isEdited ? 'REVIEW EDITED BY:' : 'REVIEW BY:'}
+</span>
 
         <span className="text-xs text-slate-500 font-black uppercase tracking-tighter mt-0.5">
           {getUserDisplayName(app.updatedBy || '')}
@@ -3270,15 +3272,19 @@ setSelectedReviewSummary(app);
 <div className="bg-white rounded-2xl border border-slate-200 p-4">
 
   <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-    {
-      selectedReviewSummary.isEdited
-        ? 'Edited By'
-        : 'Reviewed By'
-    }
-  </p>
+  {
+    selectedReviewSummary.isEdited
+  ? 'Review Edited By'
+  : 'Reviewed By'
+  }
+</p>
 
   <p className="text-sm font-bold text-slate-700 uppercase mt-2">
-    {getUserDisplayName(selectedReviewSummary.updatedBy || '-')}
+    {getUserDisplayName(
+  selectedReviewSummary.updatedBy ||
+  selectedReviewSummary.reviewedBy ||
+  '-'
+)}
   </p>
 
 </div>
