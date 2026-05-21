@@ -1304,7 +1304,7 @@ const paginatedAppointments =
     backgroundRepeat: 'no-repeat'
   }}
 >
-  <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-[1px]" />
+  <div className="absolute inset-0 bg-slate-900/25 backdrop-blur-[0px]" />
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -3211,7 +3211,7 @@ setSelectedReviewSummary(app);
 </div>
 
   {/* RIGHT SIDEBAR */}
-  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 overflow-hidden flex flex-col h-full">
+  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 overflow-y-auto flex flex-col max-h-[90vh]">
 
     <div className="flex items-center justify-between mb-6">
 
