@@ -931,7 +931,8 @@ setActivityLogs(prev => [
 
   } finally {
 
-  setUploadingImageId(null);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    setUploadingImageId(null);
 
 }
 
@@ -1658,6 +1659,7 @@ const paginatedAppointments =
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-1 px-1">Upload Images</p>
                      <div className="grid grid-cols-2 gap-2">
                        <button 
+                         disabled={uploadingImageId === `${app.id}-right`}
                          onClick={() => {
                            const input = document.createElement('input');
                            input.type = 'file';
@@ -1665,7 +1667,7 @@ const paginatedAppointments =
                            input.onchange = (e) => handleImageUpload(app.id, 'right', e as any);
                            input.click();
                          }}
-                         className={`py-2 rounded-xl text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
+                         className={`py-2 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
                            app.rightEyePhoto
                              ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
                              : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'
@@ -1680,6 +1682,7 @@ const paginatedAppointments =
 }
                        </button>
                        <button 
+                        disabled={uploadingImageId === `${app.id}-left`}
                          onClick={() => {
                            const input = document.createElement('input');
                            input.type = 'file';
@@ -1687,7 +1690,8 @@ const paginatedAppointments =
                            input.onchange = (e) => handleImageUpload(app.id, 'left', e as any);
                            input.click();
                          }}
-                         className={`py-2 rounded-xl text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
+                         disabled={!!uploadingImageId}
+                         className={`py-2 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
                            app.leftEyePhoto
                              ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
                              : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'
@@ -1719,7 +1723,7 @@ const paginatedAppointments =
     });
 
   }}
-                         className={`w-full py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
+                         className={`w-full py-2 rounded-xl whitespace-nowrap text-[10px] disabled:opacity-50 disabled:cursor-not-allowed text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
                            (app.rightEyeReview && app.leftEyeReview)
                              ? 'bg-indigo-50 text-indigo-600 border border-indigo-100'
                              : 'bg-slate-900 text-white shadow-lg shadow-slate-200 hover:bg-black'
@@ -3248,7 +3252,7 @@ setSelectedReviewSummary(app);
 </div>
 
   {/* RIGHT SIDEBAR */}
-  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 overflow-y-auto flex flex-col max-h-[90vh]">
+  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 flex flex-col h-full overflow-hidden">
 
     <div className="flex items-center justify-between mb-6">
 
@@ -3301,7 +3305,7 @@ setSelectedReviewSummary(app);
       </button>
 
     </div>
-<div className="flex flex-col gap-6">
+<div className="flex flex-col flex-1 min-h-0 gap-6">
 
   {/* REVIEWED BY */}
 <div className="bg-white rounded-2xl border border-slate-200 p-4">
@@ -3325,12 +3329,12 @@ setSelectedReviewSummary(app);
 </div>
 
 {/* FINDINGS */}
-<div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col">
+<div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col flex-1 min-h-0 overflow-hidden">
   <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-4">
     Findings
   </p>
 
-  <div className="w-full overflow-visible space-y-4 pr-2 pb-24">
+  <div className="flex-1 overflow-y-auto space-y-4 pr-2 min-h-0">
 
     {/* RIGHT EYE */}
     <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4">
