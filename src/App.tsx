@@ -2302,7 +2302,7 @@ setSelectedReviewSummary(app);
                 {/* Existing Staff List */}
 <section className="flex flex-col max-h-[420px]">
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Current System Users ({users.length})</h3>
-                  <div className="space-y-2 overflow-y-auto pr-2 h-full">
+                  <div className="space-y-2 overflow-y-auto overscroll-contain pr-2 h-full">
                     {users.map(u => (
                       <div key={u.id} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:border-slate-200 transition-all group">
                         <div className="flex items-center gap-4">
