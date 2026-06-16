@@ -43,7 +43,10 @@ import {
   onSnapshot,
   updateDoc,
   deleteDoc,
-  doc
+  doc,
+  query,
+  orderBy,
+  limit
 } from 'firebase/firestore';
 
 const APP_VERSION = "v2.2.1";
@@ -106,8 +109,16 @@ interface Appointment {
   createdAt: number;
 }
 
+interface ActivityLog {
+  action: string;
+  patient: string;
+  by: string;
+  timestamp: number;
+}
+
 const STORAGE_KEY = 'fundus_appointments';
 const USERS_KEY = 'fundus_users';
+const ACTIVITY_LOGS_KEY = 'fundus_activity_logs';
 const DISEASE_OPTIONS = ['DM', 'HTN', 'LIPID', 'CKD'];
 
 // --- Helper Components ---
@@ -161,7 +172,7 @@ export default function App() {
   const [newStaffId, setNewStaffId] = useState('');
   const [newStaffName, setNewStaffName] = useState('');
   const [newStaffPass, setNewStaffPass] = useState('');
-  const [activityLogs, setActivityLogs] = useState<any[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
 
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
@@ -276,6 +287,27 @@ export default function App() {
     return users.find(u => u.id === id)?.displayName || id;
   };
 
+  const addActivityLog = (action: string, patient: string = 'System', byOverride?: string) => {
+    const logEntry: ActivityLog = {
+      action,
+      patient,
+      by: byOverride || getUserDisplayName(currentUser?.id || 'SYSTEM'),
+      timestamp: Date.now()
+    };
+
+    setActivityLogs(prev => [logEntry, ...prev].slice(0, 300));
+
+    addDoc(
+      collection(db, "activityLogs"),
+      logEntry
+    ).catch(error => {
+      console.error(
+        "Failed to save activity log to Firestore",
+        error
+      );
+    });
+  };
+
   const handleWheel = (e: React.WheelEvent) => {
 
   if (e.deltaY < 0) {
@@ -361,6 +393,22 @@ export default function App() {
     };
   }, [appointments]);
 
+  const yearlyStats = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+
+    const thisYearApps = appointments.filter(app => {
+      if (!app || !app.date) return false;
+      const appDate = new Date(app.date);
+      return appDate.getFullYear() === currentYear && app.status !== AppointmentStatus.NO_SHOW;
+    });
+
+    return {
+      total: thisYearApps.length,
+      reviewPending: thisYearApps.filter(a => (a.rightEyePhoto || a.leftEyePhoto) && !(a.rightEyeReview && a.leftEyeReview)).length,
+      year: currentYear
+    };
+  }, [appointments]);
+
   const isAppointmentComplete = (app: Appointment) => {
     if (!app) return false;
     return !!(app.rightEyePhoto && app.leftEyePhoto && app.rightEyeReview && app.leftEyeReview);
@@ -408,6 +456,27 @@ useEffect(() => {
     } catch (e) {
       console.error(
         "Failed to parse appointments",
+        e
+      );
+    }
+  }
+
+  const savedActivityLogs = localStorage.getItem(ACTIVITY_LOGS_KEY);
+
+  if (savedActivityLogs) {
+    try {
+      const parsedLogs = JSON.parse(savedActivityLogs);
+
+      if (Array.isArray(parsedLogs)) {
+        setActivityLogs(
+          parsedLogs.filter(
+            (log: any) => log && typeof log === 'object'
+          )
+        );
+      }
+    } catch (e) {
+      console.error(
+        "Failed to parse activity logs",
         e
       );
     }
@@ -464,9 +533,28 @@ const unsubscribeUsers = onSnapshot(
   }
 );
 
+// Realtime Activity Logs Sync
+const unsubscribeActivityLogs = onSnapshot(
+  query(
+    collection(db, "activityLogs"),
+    orderBy("timestamp", "desc"),
+    limit(300)
+  ),
+  (snapshot) => {
+
+    const firestoreActivityLogs = snapshot.docs.map(docSnapshot => ({
+      ...docSnapshot.data()
+    })) as ActivityLog[];
+
+    setActivityLogs(firestoreActivityLogs);
+
+  }
+);
+
 return () => {
   unsubscribe();
   unsubscribeUsers();
+  unsubscribeActivityLogs();
 };
 
 }, []);
@@ -503,6 +591,28 @@ useEffect(() => {
   }
 
 }, [appointments]);
+
+
+// Sync Activity Logs with localStorage
+useEffect(() => {
+
+  try {
+
+    localStorage.setItem(
+      ACTIVITY_LOGS_KEY,
+      JSON.stringify(activityLogs)
+    );
+
+  } catch (e) {
+
+    console.error(
+      "Failed to save activity logs to localStorage",
+      e
+    );
+
+  }
+
+}, [activityLogs]);
 
 
 // Sync Users with localStorage
@@ -616,10 +726,12 @@ useEffect(() => {
     if (user) {
 
       setCurrentUser(user);
+      addActivityLog('Logged In', `${user.displayName} (${user.id})`, user.displayName);
 
     } else {
 
       setLoginError('Invalid User ID or Password');
+      addActivityLog('Failed Login Attempt', id || 'Unknown User', 'System');
 
     }
 
@@ -638,6 +750,7 @@ useEffect(() => {
   setTimeout(() => {
 
     setAuthMessage('Protecting Patient Data...');
+    addActivityLog('Logged Out', currentUser ? `${currentUser.displayName} (${currentUser.id})` : 'System');
 
     setTimeout(() => {
 
@@ -695,6 +808,8 @@ const addStaffMember = (e: React.FormEvent) => {
     newUser
   );
 
+  addActivityLog('Created Staff Account', `${newUser.displayName} (${newUser.id})`);
+
   setNewStaffId('');
   setNewStaffName('');
   setNewStaffPass('');
@@ -713,6 +828,8 @@ updateDoc(
     ...editingUser
   }
 );
+
+    addActivityLog('Updated Staff Account', `${editingUser.displayName} (${editingUser.id})`);
     
     // If current user is editing themselves, update current user state too
     if (currentUser && currentUser.id === editingUser.id) {
@@ -773,6 +890,8 @@ updateDoc(
       password: newPasswordInput
     });
 
+    addActivityLog('Updated Own Account', `${newDisplayName} (${currentUser.id})`, newDisplayName);
+
     // Clear fields
     setCurrentPasswordInput('');
     setNewPasswordInput('');
@@ -813,6 +932,7 @@ deleteDoc(
     userToRemove.firestoreId
   )
 );
+    addActivityLog('Deleted Staff Account', `${userToRemove.displayName} (${userToRemove.id})`);
     setUserToDelete(null);
   };
 
@@ -906,21 +1026,10 @@ if (hasRight && hasLeft) {
   updatedData
 );
 
-setActivityLogs(prev => [
-  {
-    action: updatedData.isEdited
-      ? 'Edited Review'
-      : 'Reviewed Patient',
-
-    patient: appToUpdate.patientName || '-',
-
-    by: getUserDisplayName(currentUser?.id || ''),
-
-    timestamp: Date.now()
-  },
-
-  ...prev
-]);
+addActivityLog(
+  `Uploaded ${eye === 'right' ? 'Right Eye' : 'Left Eye'} Fundus Image`,
+  appToUpdate.patientName || '-'
+);
 
   } catch (e) {
 
@@ -943,9 +1052,14 @@ uploadImage();
   };
 
   const removeImage = (id: string, eye: 'right' | 'left') => {
+    const appToUpdate = appointments.find(app => app && app.id === id);
     setAppointments(prev => (prev || []).map(app => 
       (app && app.id === id) ? { ...app, [eye === 'right' ? 'rightEyePhoto' : 'leftEyePhoto']: undefined } : app
     ));
+    addActivityLog(
+      `Removed ${eye === 'right' ? 'Right Eye' : 'Left Eye'} Fundus Image`,
+      appToUpdate?.patientName || '-'
+    );
   };
 
   const saveReview = async (
@@ -967,6 +1081,10 @@ uploadImage();
     );
 
     if (!appToUpdate?.firestoreId) return;
+
+    const isEditedReview =
+      !!selectedPhotoApp?.app?.rightEyeReview ||
+      !!selectedPhotoApp?.app?.leftEyeReview;
 
     const hasPhotos =
       appToUpdate.rightEyePhoto &&
@@ -1004,10 +1122,14 @@ uploadImage();
 
         updatedAt: Date.now(),
         isEdited:
-  !!selectedPhotoApp?.app?.rightEyeReview ||
-  !!selectedPhotoApp?.app?.leftEyeReview
+  isEditedReview
 
       }
+    );
+
+    addActivityLog(
+      isEditedReview ? 'Edited Clinical Review' : 'Saved Clinical Review',
+      appToUpdate.patientName || '-'
     );
 
     setIsReviewViewMode(true);
@@ -1055,6 +1177,7 @@ uploadImage();
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    addActivityLog('Exported Monthly Summary CSV', `${appointments.length} records`);
   };
 
   const upsertAppointment = async (
@@ -1080,6 +1203,8 @@ uploadImage();
           updatedAt: Date.now()
         }
       );
+
+      addActivityLog('Updated Appointment', data.patientName || editingAppointment.patientName || '-');
 
     } else {
 
@@ -1128,6 +1253,8 @@ uploadImage();
         newApp
       );
 
+      addActivityLog('Created Appointment', newApp.patientName || '-');
+
     }
 
     closeForm();
@@ -1169,6 +1296,8 @@ uploadImage();
       )
     );
 
+    addActivityLog('Deleted Appointment', appToDelete.patientName || '-');
+
     setDeletingApp(null);
 
   } catch (e) {
@@ -1189,6 +1318,10 @@ uploadImage();
 
   try {
 
+    const appToUpdate = appointments.find(
+      app => app && app.firestoreId === firestoreId
+    );
+
     await updateDoc(
       doc(db, "appointments", firestoreId),
       {
@@ -1197,6 +1330,8 @@ uploadImage();
         updatedAt: Date.now()
       }
     );
+
+    addActivityLog(`Updated Status to ${status}`, appToUpdate?.patientName || '-');
 
   } catch (e) {
 
@@ -1553,10 +1688,36 @@ const paginatedAppointments =
         
         {/* Monthly Stats Dashboard */}
         <section className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="mb-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-black text-slate-800 tracking-tight">Practice Summary</h1>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-100">
+                  <Activity size={20} />
+                </div>
+                <div>
+                  <p className="text-xs font-black text-blue-500 uppercase tracking-widest">Total Case</p>
+                  <p className="text-[10px] font-bold text-slate-500">{yearlyStats.year}</p>
+                </div>
+                <p className="text-3xl font-black text-slate-900 leading-none ml-2">{yearlyStats.total}</p>
+              </div>
+              <div className="flex items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-100">
+                  <Search size={20} />
+                </div>
+                <div>
+                  <p className="text-xs font-black text-indigo-500 uppercase tracking-widest">Pending Review</p>
+                  <p className="text-[10px] font-bold text-slate-500">{yearlyStats.year}</p>
+                </div>
+                <p className="text-3xl font-black text-slate-900 leading-none ml-2">{yearlyStats.reviewPending}</p>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 md:p-5">
             <div>
               <h2 className="text-sm font-bold text-blue-600 uppercase tracking-widest mb-1">Monthly Analytics</h2>
-              <h1 className="text-2xl font-black text-slate-800 tracking-tight">Practice Summary</h1>
               <p className="text-slate-500 text-xs mt-1 uppercase font-bold tracking-tighter">Current Period: {new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })}</p>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-8 flex-1 md:flex-none">
@@ -1690,7 +1851,6 @@ const paginatedAppointments =
                            input.onchange = (e) => handleImageUpload(app.id, 'left', e as any);
                            input.click();
                          }}
-                         disabled={!!uploadingImageId}
                          className={`py-2 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
                            app.leftEyePhoto
                              ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
