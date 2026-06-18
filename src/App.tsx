@@ -49,7 +49,7 @@ import {
   limit
 } from 'firebase/firestore';
 
-const APP_VERSION = "v2.2.1";
+const APP_VERSION = "V3.1.0";
 
 // --- Types & Constants ---
 
@@ -62,7 +62,13 @@ interface User {
   id: string;
   password?: string;
   role: UserRole;
+
   displayName: string;
+
+  department: 'OPD KKL' | 'PBOA';
+
+  canViewAllDepartments: boolean;
+
   createdAt: number;
 }
 
@@ -77,6 +83,7 @@ enum AppointmentStatus {
 interface Appointment {
   id: string;
   patientName: string;
+  department: 'OPD KKL' | 'PBOA';
   icNumber: string;
   phoneNumber: string;
   date: string;
@@ -155,12 +162,18 @@ export default function App() {
   
   const [users, setUsers] = useState<User[]>([
   {
-    id: 'admin',
-    password: 'cokkodok',
-    displayName: 'Administrator',
-    role: UserRole.ADMIN,
-    createdAt: Date.now()
-  }
+  id: 'admin',
+  password: 'cokkodok',
+  displayName: 'Administrator',
+
+  role: UserRole.ADMIN,
+
+  department: 'OPD KKL',
+
+  canViewAllDepartments: true,
+
+  createdAt: Date.now()
+}
 ]);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authMessage, setAuthMessage] = useState('');
@@ -173,6 +186,11 @@ export default function App() {
   const [newStaffName, setNewStaffName] = useState('');
   const [newStaffPass, setNewStaffPass] = useState('');
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  
+  const [newStaffDepartment, setNewStaffDepartment] =
+  useState<'OPD KKL' | 'PBOA'>('OPD KKL');
+  const [newStaffMA, setNewStaffMA] =
+  useState(false);
 
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
@@ -196,6 +214,7 @@ export default function App() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formIC, setFormIC] = useState('');
   const [formPhone, setFormPhone] = useState('');
+  const [formDepartment, setFormDepartment] = useState<'OPD KKL' | 'PBOA'>('OPD KKL');
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
   const [deletingApp, setDeletingApp] = useState<Appointment | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
@@ -228,9 +247,12 @@ export default function App() {
     if (isFormOpen && editingAppointment) {
       setFormIC(editingAppointment.icNumber);
       setFormPhone(editingAppointment.phoneNumber);
+      setFormDepartment(editingAppointment.department || 'OPD KKL'
+);
     } else if (isFormOpen) {
       setFormIC('');
       setFormPhone('');
+      setFormDepartment('OPD KKL');
     }
   }, [isFormOpen, editingAppointment]);
 
@@ -393,6 +415,93 @@ export default function App() {
     };
   }, [appointments]);
 
+  const monthlyDepartmentStats = useMemo(() => {
+
+  const now = new Date();
+
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+
+  const thisMonthApps = appointments.filter(app => {
+
+    if (!app || !app.date) return false;
+
+    const appDate = new Date(app.date);
+
+    return (
+      appDate.getMonth() === currentMonth &&
+      appDate.getFullYear() === currentYear &&
+      app.status !== AppointmentStatus.NO_SHOW
+    );
+
+  });
+
+  return {
+
+    totalOPD:
+      thisMonthApps.filter(
+        app => app.department === 'OPD KKL'
+      ).length,
+
+    totalPBOA:
+      thisMonthApps.filter(
+        app => app.department === 'PBOA'
+      ).length,
+
+    fundusOPD:
+      thisMonthApps.filter(
+        app =>
+          app.department === 'OPD KKL' &&
+          (!app.rightEyePhoto || !app.leftEyePhoto)
+      ).length,
+
+    fundusPBOA:
+      thisMonthApps.filter(
+        app =>
+          app.department === 'PBOA' &&
+          (!app.rightEyePhoto || !app.leftEyePhoto)
+      ).length,
+
+    reviewOPD:
+      thisMonthApps.filter(
+        app =>
+          app.department === 'OPD KKL' &&
+          (app.rightEyePhoto || app.leftEyePhoto) &&
+          (!app.rightEyeReview || !app.leftEyeReview)
+      ).length,
+
+    reviewPBOA:
+      thisMonthApps.filter(
+        app =>
+          app.department === 'PBOA' &&
+          (app.rightEyePhoto || app.leftEyePhoto) &&
+          (!app.rightEyeReview || !app.leftEyeReview)
+      ).length,
+
+    incompleteOPD:
+      thisMonthApps.filter(
+        app =>
+          app.department === 'OPD KKL' &&
+          !(app.rightEyePhoto &&
+            app.leftEyePhoto &&
+            app.rightEyeReview &&
+            app.leftEyeReview)
+      ).length,
+
+    incompletePBOA:
+      thisMonthApps.filter(
+        app =>
+          app.department === 'PBOA' &&
+          !(app.rightEyePhoto &&
+            app.leftEyePhoto &&
+            app.rightEyeReview &&
+            app.leftEyeReview)
+      ).length
+
+  };
+
+}, [appointments]);
+
   const yearlyStats = useMemo(() => {
     const currentYear = new Date().getFullYear();
 
@@ -403,6 +512,31 @@ export default function App() {
     });
 
     return {
+      opd:
+  thisYearApps.filter(
+    a => a.department === 'OPD KKL'
+  ).length,
+
+pboa:
+  thisYearApps.filter(
+    a => a.department === 'PBOA'
+  ).length,
+
+reviewPendingOPD:
+  thisYearApps.filter(
+    a =>
+      a.department === 'OPD KKL' &&
+      (a.rightEyePhoto || a.leftEyePhoto) &&
+      !(a.rightEyeReview && a.leftEyeReview)
+  ).length,
+
+reviewPendingPBOA:
+  thisYearApps.filter(
+    a =>
+      a.department === 'PBOA' &&
+      (a.rightEyePhoto || a.leftEyePhoto) &&
+      !(a.rightEyeReview && a.leftEyeReview)
+  ).length,
       total: thisYearApps.length,
       reviewPending: thisYearApps.filter(a => (a.rightEyePhoto || a.leftEyePhoto) && !(a.rightEyeReview && a.leftEyeReview)).length,
       year: currentYear
@@ -429,7 +563,8 @@ const [searchQuery, setSearchQuery] = useState('');
 const [filterDate, setFilterDate] = useState('');
 const [filterStatus, setFilterStatus] = useState<AppointmentStatus | 'All'>('All');
 const [filterReview, setFilterReview] = useState<'All' | 'Pending' | 'Abnormal' | 'Normal'>('All');
-
+const [filterDepartment, setFilterDepartment] =
+  useState<'All' | 'OPD KKL' | 'PBOA'>('All');
 const [currentPage, setCurrentPage] = useState(1);
 
 const ITEMS_PER_PAGE = 5;
@@ -791,17 +926,21 @@ const addStaffMember = (e: React.FormEvent) => {
 
   const newUser: User = {
 
-    id,
+  id,
 
-    password: newStaffPass,
+  password: newStaffPass,
 
-    displayName: newStaffName.trim(),
+  displayName: newStaffName.trim(),
 
-    role: UserRole.STAFF,
+  role: UserRole.STAFF,
 
-    createdAt: Date.now()
+  department: 'OPD KKL',
 
-  };
+  canViewAllDepartments: false,
+
+  createdAt: Date.now()
+
+};
 
   addDoc(
     collection(db, "users"),
@@ -1198,6 +1337,7 @@ uploadImage();
         ),
         {
           ...data,
+          department: formDepartment,
           updatedBy:
             currentUser?.id || 'unknown',
           updatedAt: Date.now()
@@ -1222,6 +1362,8 @@ uploadImage();
 
         phoneNumber:
           data.phoneNumber || '',
+
+        department: formDepartment,
 
         date:
           data.date || '',
@@ -1364,7 +1506,26 @@ uploadImage();
   
   const sortedAndFilteredAppointments = useMemo(() => {
     return appointments
-      .filter(app => {
+  .filter(app => {
+
+    // ADMIN nampak semua
+    if (currentUser?.role === UserRole.ADMIN) {
+      return true;
+    }
+
+    // MA nampak semua
+    if (currentUser?.canViewAllDepartments) {
+      return true;
+    }
+
+    // Staff biasa ikut department
+    return (
+      app.department ===
+      currentUser?.department
+    );
+
+  })
+  .filter(app => {
         if (!app) return false;
         const patientName = app.patientName || '';
         const icNumber = app.icNumber || '';
@@ -1386,12 +1547,21 @@ uploadImage();
           (filterReview === 'Abnormal' && isAbnormal) ||
           (filterReview === 'Normal' && isNormal);
         
-        return matchesSearch && matchesDate && matchesStatus && matchesReview;
+          const matchesDepartment =
+  filterDepartment === 'All' ||
+  app.department === filterDepartment;
+        return (
+  matchesSearch &&
+  matchesDate &&
+  matchesStatus &&
+  matchesReview &&
+  matchesDepartment
+);
       })
       .sort((a, b) =>
   (b.createdAt || 0) - (a.createdAt || 0)
 );
-  }, [appointments, searchQuery, filterDate, filterStatus, filterReview]);
+  }, [appointments, searchQuery, filterDate, filterStatus, filterReview, filterDepartment]);
 
   const totalPages = Math.ceil(
   sortedAndFilteredAppointments.length /
@@ -1405,10 +1575,34 @@ const paginatedAppointments =
   );
 
   const allTodayAppointments = useMemo(() => {
+
   return appointments
-    .filter(app => app && isToday(app.date))
-    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-}, [appointments]);
+
+    .filter(app => {
+
+      if (currentUser?.role === UserRole.ADMIN)
+        return true;
+
+      if (currentUser?.canViewAllDepartments)
+        return true;
+
+      return (
+        app.department ===
+        currentUser?.department
+      );
+
+    })
+
+    .filter(app =>
+      app && isToday(app.date)
+    )
+
+    .sort((a, b) =>
+      (a.createdAt || 0) -
+      (b.createdAt || 0)
+    );
+
+}, [appointments, currentUser]);
 
   const todayAppointments = useMemo(() => {
     return allTodayAppointments
@@ -1418,6 +1612,23 @@ const paginatedAppointments =
       });
   }, [allTodayAppointments]);
 
+  const todayDepartmentStats = useMemo(() => {
+
+  const todayApps = appointments.filter(
+    app => app && isToday(app.date)
+  );
+
+  return {
+    opd: todayApps.filter(
+      app => app.department === 'OPD KKL'
+    ).length,
+
+    pboa: todayApps.filter(
+      app => app.department === 'PBOA'
+    ).length
+  };
+
+}, [appointments]);
   // --- Views ---
 
   if (!currentUser) {
@@ -1671,6 +1882,9 @@ const paginatedAppointments =
   )}
             <div className="flex flex-col items-end mr-1 md:mr-2">
               <span className="text-sm font-semibold text-slate-700">{currentUser.displayName}</span>
+              <span className="text-[11px] font-black text-emerald-600 uppercase tracking-widest">
+  {currentUser.department}
+</span>
               <span className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">{currentUser.role} Account ({currentUser.id})</span>
             </div>
             <button 
@@ -1690,18 +1904,38 @@ const paginatedAppointments =
         <section className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
           <div className="mb-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-black text-slate-800 tracking-tight">Practice Summary</h1>
-            </div>
+  <h1 className="text-2xl font-black text-slate-800 tracking-tight">
+    Practice Summary
+  </h1>
+
+  <p className="text-3xl font-black text-slate-300 leading-none mt-1">
+    {yearlyStats.year}
+  </p>
+</div>
             <div className="grid grid-cols-2 gap-3">
               <div className="flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
                 <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-100">
                   <Activity size={20} />
                 </div>
                 <div>
-                  <p className="text-xs font-black text-blue-500 uppercase tracking-widest">Total Case</p>
-                  <p className="text-[10px] font-bold text-slate-500">{yearlyStats.year}</p>
-                </div>
-                <p className="text-3xl font-black text-slate-900 leading-none ml-2">{yearlyStats.total}</p>
+  <p className="text-xs font-black text-blue-500 uppercase tracking-widest">
+    Total Case
+  </p>
+
+  <div className="flex gap-2 mt-1">
+    <span className="text-[9px] font-black text-sky-600">
+      OPD {yearlyStats.opd}
+    </span>
+
+    <span className="text-[9px] font-black text-emerald-600">
+      PBOA {yearlyStats.pboa}
+    </span>
+  </div>
+</div>
+
+<p className="text-3xl font-black text-slate-900 leading-none ml-2">
+  {yearlyStats.total}
+</p>
               </div>
               <div className="flex items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
                 <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-100">
@@ -1759,6 +1993,18 @@ const paginatedAppointments =
                   {todayAppointments.length} Active
                 </span>
               </div>
+              <div className="flex items-center gap-2 ml-2">
+
+  <span className="bg-sky-100 text-sky-700 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter border border-sky-200">
+    OPD KKL: {todayDepartmentStats.opd}
+  </span>
+
+  <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter border border-emerald-200">
+    PBOA: {todayDepartmentStats.pboa}
+  </span>
+
+</div>
+
             </div>
             <button 
               onClick={() => setIsFormOpen(true)}
@@ -1803,13 +2049,31 @@ const paginatedAppointments =
                             );
                           })}
                          </div>
-                      </div>
-                      <div className="flex flex-col items-end gap-1">
-                        <span className="text-lg font-black text-blue-600 uppercase tracking-tight leading-none">
-                          {(globalQueueIndex + 1).toString().padStart(2, '0')}
-                        </span>
-                        <StatusBadge status={app.status} />
-                      </div>
+                     </div>
+
+<div className="flex flex-col items-end gap-1">
+
+  <div className="flex items-center gap-2">
+
+    <span
+      className={`text-[8px] px-2 py-[1px] rounded-full font-black border uppercase ${
+        app.department === 'OPD KKL'
+          ? 'bg-sky-50 text-sky-700 border-sky-200'
+          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      }`}
+    >
+      {app.department === 'OPD KKL' ? 'OPD' : 'PBOA'}
+    </span>
+
+    <span className="text-lg font-black text-blue-600 uppercase tracking-tight leading-none">
+      {(globalQueueIndex + 1).toString().padStart(2, '0')}
+    </span>
+
+  </div>
+
+  <StatusBadge status={app.status} />
+
+</div>
                     </div>
                     <h3 className="font-bold text-slate-800 text-[15px] leading-tight truncate">
                       {app.patientName}
@@ -1972,22 +2236,43 @@ const paginatedAppointments =
               </div>
 
               <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
-                <ShieldCheck size={16} className="text-blue-500" />
-                <select 
-                  className="bg-transparent border-none outline-none text-xs font-medium appearance-none cursor-pointer"
-                  value={filterReview}
-                  onChange={e => setFilterReview(e.target.value as any)}
-                >
-                  <option value="All">All Reviews (Any)</option>
-                  <option value="Pending">Pending Review</option>
-                  <option value="Abnormal">Abnormal Findings</option>
-                  <option value="Normal">Normal Findings</option>
-                </select>
-              </div>
+  <ShieldCheck size={16} className="text-blue-500" />
+  <select
+    className="bg-transparent border-none outline-none text-xs font-medium appearance-none cursor-pointer"
+    value={filterReview}
+    onChange={e => setFilterReview(e.target.value as any)}
+  >
+    <option value="All">All Reviews (Any)</option>
+    <option value="Pending">Pending Review</option>
+    <option value="Abnormal">Abnormal Findings</option>
+    <option value="Normal">Normal Findings</option>
+  </select>
+</div>
+
+{(currentUser?.role === UserRole.ADMIN ||
+  currentUser?.canViewAllDepartments) && (
+  <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+    <Users size={16} className="text-emerald-500" />
+
+    <select
+      className="bg-transparent border-none outline-none text-xs font-medium appearance-none cursor-pointer"
+      value={filterDepartment}
+      onChange={(e) =>
+        setFilterDepartment(
+          e.target.value as 'All' | 'OPD KKL' | 'PBOA'
+        )
+      }
+    >
+      <option value="All">All Departments</option>
+      <option value="OPD KKL">OPD KKL</option>
+      <option value="PBOA">PBOA</option>
+    </select>
+  </div>
+)}
               
               {(searchQuery || filterDate || filterStatus !== 'All' || filterReview !== 'All') && (
                 <button 
-                  onClick={() => { setSearchQuery(''); setFilterDate(''); setFilterStatus('All'); setFilterReview('All'); }}
+                  onClick={() => { setSearchQuery(''); setFilterDate(''); setFilterStatus('All'); setFilterReview('All'); setFilterDepartment('All'); }}
                   className="text-xs text-blue-600 font-bold hover:underline px-2"
                 >
                   Clear Filters
@@ -2023,16 +2308,26 @@ const paginatedAppointments =
 
                     return (
                       <motion.tr 
-                        key={app.id}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className={`group hover:bg-slate-50 transition-colors ${
-                          (app.status === AppointmentStatus.DONE || app.status === AppointmentStatus.DONE_REVIEW) ? 'bg-emerald-50/20' : 
-                          app.status === AppointmentStatus.DONE_FUNDUS ? 'bg-blue-50/20' :
-                          app.status === AppointmentStatus.NO_SHOW ? 'bg-rose-50/20' : ''
-                        }`}
-                      >
+  key={app.id}
+  initial={{ opacity: 0 }}
+  animate={{ opacity: 1 }}
+  exit={{ opacity: 0 }}
+  className={`group hover:bg-slate-50 transition-colors border-l-4 ${
+    
+    app.department === 'OPD KKL'
+      ? 'border-l-sky-500'
+      : 'border-l-emerald-500'
+
+  } ${
+    (app.status === AppointmentStatus.DONE || app.status === AppointmentStatus.DONE_REVIEW)
+      ? 'bg-emerald-50/20'
+      : app.status === AppointmentStatus.DONE_FUNDUS
+      ? 'bg-blue-50/20'
+      : app.status === AppointmentStatus.NO_SHOW
+      ? 'bg-rose-50/20'
+      : ''
+  }`}
+>
 
                       <td className="px-3 md:px-6 py-3 md:py-4">
                         <div className="flex flex-col items-center gap-1">
@@ -2094,6 +2389,15 @@ const paginatedAppointments =
                             {app.otherDisease && (
                               <span className="text-[8px] bg-slate-50 text-slate-600 px-1 py-[1px] rounded font-bold border border-slate-100 uppercase">{app.otherDisease}</span>
                             )}
+                            <span
+  className={`text-[8px] px-2 py-[1px] rounded font-black border uppercase ${
+    app.department === 'OPD KKL'
+      ? 'bg-sky-50 text-sky-700 border-sky-200'
+      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  }`}
+>
+  {app.department}
+</span>
                           </div>
                           <span className="text-[9px] md:text-[10px] font-mono text-slate-400 mt-1">
   IC: {app.icNumber}
@@ -2293,7 +2597,7 @@ setSelectedReviewSummary(app);
     Page {currentPage} of {totalPages || 1}
   </span>
 
-  <div className="flex items-center gap-2 flex-wrap">
+<div className="flex items-center gap-2 flex-wrap">
 
   <button
     onClick={() =>
@@ -2307,21 +2611,62 @@ setSelectedReviewSummary(app);
     Previous
   </button>
 
-  {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+  {currentPage > 3 && (
+    <>
+      <button
+        onClick={() => setCurrentPage(1)}
+        className="w-8 h-8 rounded-lg text-xs font-black bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"
+      >
+        1
+      </button>
 
-    <button
-      key={page}
-      onClick={() => setCurrentPage(page)}
-      className={`w-8 h-8 rounded-lg text-xs font-black transition-all ${
-        currentPage === page
-          ? 'bg-slate-900 text-white'
-          : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-      }`}
-    >
-      {page}
-    </button>
+      <span className="text-slate-400 px-1">
+        ...
+      </span>
+    </>
+  )}
 
-  ))}
+  {Array.from(
+    { length: totalPages },
+    (_, i) => i + 1
+  )
+    .filter(
+      page =>
+        page >= currentPage - 2 &&
+        page <= currentPage + 2
+    )
+    .map(page => (
+
+      <button
+        key={page}
+        onClick={() => setCurrentPage(page)}
+        className={`w-8 h-8 rounded-lg text-xs font-black transition-all ${
+          currentPage === page
+            ? 'bg-slate-900 text-white'
+            : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+        }`}
+      >
+        {page}
+      </button>
+
+    ))}
+
+  {currentPage < totalPages - 2 && (
+    <>
+      <span className="text-slate-400 px-1">
+        ...
+      </span>
+
+      <button
+        onClick={() =>
+          setCurrentPage(totalPages)
+        }
+        className="w-8 h-8 rounded-lg text-xs font-black bg-white border border-slate-200 text-slate-600 hover:bg-slate-100"
+      >
+        {totalPages}
+      </button>
+    </>
+  )}
 
   <button
     onClick={() =>
@@ -2404,59 +2749,197 @@ setSelectedReviewSummary(app);
                     {editingUser ? <Edit2 size={14} className="text-blue-500" /> : <UserPlus size={14} className="text-blue-500" />}
                     {editingUser ? `Editing Account: ${editingUser.id}` : 'Register New Clinical Staff'}
                   </h3>
-                  <form onSubmit={editingUser ? updateStaffMember : addStaffMember} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 bg-blue-50/50 p-4 rounded-2xl border border-blue-100">
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">Staff User ID</label>
-                      <input 
-                        type="text" 
-                        required
-                        disabled={!!editingUser}
-                        placeholder=""
-                        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold disabled:bg-slate-100 disabled:text-slate-500"
-                        value={editingUser ? editingUser.id : newStaffId}
-                        onChange={e => editingUser ? setEditingUser({...editingUser, id: e.target.value}) : setNewStaffId(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">Password</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder=""
-                        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
-                        value={editingUser ? editingUser.password : newStaffPass}
-                        onChange={e => editingUser ? setEditingUser({...editingUser, password: e.target.value}) : setNewStaffPass(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">Display Name</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder="e.g. Dr. Johny"
-                        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
-                        value={editingUser ? editingUser.displayName : newStaffName}
-                        onChange={e => editingUser ? setEditingUser({...editingUser, displayName: e.target.value}) : setNewStaffName(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex flex-col justify-end gap-2">
-                       <button 
-                        type="submit"
-                        className={`w-full ${editingUser ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'} text-white font-black py-2.5 rounded-xl transition-all shadow-lg active:scale-95 text-[10px] uppercase tracking-widest`}
-                      >
-                        {editingUser ? 'Save Changes' : 'Create Account'}
-                      </button>
-                      {editingUser && (
-                        <button 
-                          type="button"
-                          onClick={() => setEditingUser(null)}
-                          className="w-full bg-white border border-slate-200 text-slate-500 font-bold py-1.5 rounded-lg text-[9px] uppercase tracking-widest hover:bg-slate-50"
-                        >
-                          Cancel Edit
-                        </button>
-                      )}
-                    </div>
-                  </form>
+                  <form
+  onSubmit={editingUser ? updateStaffMember : addStaffMember}
+  className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100"
+>
+
+  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+    <div className="space-y-1">
+      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+        Staff User ID
+      </label>
+
+      <input
+        type="text"
+        required
+        disabled={!!editingUser}
+        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold disabled:bg-slate-100 disabled:text-slate-500"
+        value={editingUser ? editingUser.id : newStaffId}
+        onChange={e =>
+          editingUser
+            ? setEditingUser({
+                ...editingUser,
+                id: e.target.value
+              })
+            : setNewStaffId(e.target.value)
+        }
+      />
+    </div>
+
+    <div className="space-y-1">
+      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+        Password
+      </label>
+
+      <input
+        type="text"
+        required
+        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
+        value={editingUser ? editingUser.password : newStaffPass}
+        onChange={e =>
+          editingUser
+            ? setEditingUser({
+                ...editingUser,
+                password: e.target.value
+              })
+            : setNewStaffPass(e.target.value)
+        }
+      />
+    </div>
+
+    <div className="space-y-1">
+      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+        Display Name
+      </label>
+
+      <input
+        type="text"
+        required
+        placeholder="e.g. Dr. Johny"
+        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
+        value={
+          editingUser
+            ? editingUser.displayName
+            : newStaffName
+        }
+        onChange={e =>
+          editingUser
+            ? setEditingUser({
+                ...editingUser,
+                displayName: e.target.value
+              })
+            : setNewStaffName(e.target.value)
+        }
+      />
+    </div>
+
+  </div>
+
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+
+    <div className="space-y-1">
+      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+        Department
+      </label>
+
+      <select
+        value={
+          editingUser
+            ? editingUser.department
+            : newStaffDepartment
+        }
+        onChange={(e) => {
+
+          const value =
+            e.target.value as
+              | 'OPD KKL'
+              | 'PBOA';
+
+          editingUser
+            ? setEditingUser({
+                ...editingUser,
+                department: value
+              })
+            : setNewStaffDepartment(value);
+
+        }}
+        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
+      >
+        <option value="OPD KKL">
+          OPD KKL
+        </option>
+
+        <option value="PBOA">
+          PBOA
+        </option>
+      </select>
+    </div>
+
+    <div className="space-y-1">
+      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+        Access Level
+      </label>
+
+      <label className="flex items-center gap-3 px-4 py-3 rounded-xl border border-blue-200 bg-white cursor-pointer hover:bg-blue-50 transition h-[46px]">
+
+        <input
+          type="checkbox"
+          checked={
+            editingUser
+              ? editingUser.canViewAllDepartments
+              : newStaffMA
+          }
+          onChange={(e) => {
+
+            editingUser
+              ? setEditingUser({
+                  ...editingUser,
+                  canViewAllDepartments:
+                    e.target.checked
+                })
+              : setNewStaffMA(
+                  e.target.checked
+                );
+
+          }}
+          className="w-4 h-4"
+        />
+
+        <div className="flex flex-col">
+          <span className="text-xs font-bold text-slate-700">
+            MA Access
+          </span>
+
+          <span className="text-[10px] text-slate-400">
+            Can view all departments
+          </span>
+        </div>
+
+      </label>
+    </div>
+
+  </div>
+
+  <div className="flex justify-end mt-5 gap-2">
+
+    {editingUser && (
+      <button
+        type="button"
+        onClick={() => setEditingUser(null)}
+        className="bg-white border border-slate-200 text-slate-500 font-bold px-4 py-2 rounded-xl text-[10px] uppercase tracking-widest hover:bg-slate-50"
+      >
+        Cancel Edit
+      </button>
+    )}
+
+    <button
+      type="submit"
+      className={`${
+        editingUser
+          ? 'bg-emerald-600 hover:bg-emerald-700'
+          : 'bg-blue-600 hover:bg-blue-700'
+      } text-white font-black px-5 py-2.5 rounded-xl transition-all shadow-lg active:scale-95 text-[10px] uppercase tracking-widest`}
+    >
+      {editingUser
+        ? 'Save Changes'
+        : 'Create Account'}
+    </button>
+
+  </div>
+
+</form>
                 </section>
 
                 {/* Existing Staff List */}
@@ -2470,13 +2953,45 @@ setSelectedReviewSummary(app);
                             {u.role === UserRole.ADMIN ? <ShieldCheck size={20} /> : <UserIcon size={20} />}
                           </div>
                           <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-black text-slate-800 tracking-tight text-base">{u.displayName}</span>
-                              <span className="text-[10px] text-slate-400 font-bold">({u.id})</span>
-                              <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${u.role === UserRole.ADMIN ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
-                                {u.role}
-                              </span>
-                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+
+  <span className="font-black text-slate-800 tracking-tight text-base">
+    {u.displayName}
+  </span>
+
+  <span className="text-[10px] text-slate-400 font-bold">
+    ({u.id})
+  </span>
+
+  <span
+    className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
+      u.role === UserRole.ADMIN
+        ? 'bg-blue-600 text-white'
+        : 'bg-slate-200 text-slate-600'
+    }`}
+  >
+    {u.role}
+  </span>
+
+  {/* Department Badge */}
+  <span
+    className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
+      u.department === 'OPD KKL'
+        ? 'bg-sky-100 text-sky-700'
+        : 'bg-emerald-100 text-emerald-700'
+    }`}
+  >
+    {u.department}
+  </span>
+
+  {/* MA Badge */}
+  {u.canViewAllDepartments && (
+    <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700">
+      ALL ACCESS
+    </span>
+  )}
+
+</div>
                             <div className="flex items-center gap-3 mt-1">
                               <span className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
                                 <Key size={10} /> ••••••
@@ -2640,6 +3155,35 @@ setSelectedReviewSummary(app);
                         onChange={handlePhoneChange}
                         className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none uppercase"
                       />
+                      <div className="space-y-1">
+  <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+    Department
+  </label>
+
+  <select
+    value={formDepartment}
+    onChange={(e) =>
+      setFormDepartment(
+        e.target.value as
+          | 'OPD KKL'
+          | 'PBOA'
+      )
+    }
+    disabled={
+  currentUser?.role !== UserRole.ADMIN &&
+  !currentUser?.canViewAllDepartments
+}
+    className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
+  >
+    <option value="OPD KKL">
+      OPD KKL
+    </option>
+
+    <option value="PBOA">
+      PBOA
+    </option>
+  </select>
+</div>
                     </div>
                   </div>
 
