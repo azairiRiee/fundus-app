@@ -49,7 +49,7 @@ import {
   limit
 } from 'firebase/firestore';
 
-const APP_VERSION = "V3.1.0";
+const APP_VERSION = "v3.2.1";
 
 // --- Types & Constants ---
 
@@ -127,6 +127,7 @@ const STORAGE_KEY = 'fundus_appointments';
 const USERS_KEY = 'fundus_users';
 const ACTIVITY_LOGS_KEY = 'fundus_activity_logs';
 const DISEASE_OPTIONS = ['DM', 'HTN', 'LIPID', 'CKD'];
+const PBOA_LIMIT = 10;
 
 // --- Helper Components ---
 
@@ -204,17 +205,21 @@ export default function App() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [showAccountSuccess, setShowAccountSuccess] = useState(false);
+  const [showPboaWarning, setShowPboaWarning] =useState(false);
   const [showActivityLogs, setShowActivityLogs] = useState(false);
   
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   
+  
+  const [showTCASchedule, setShowTCASchedule] = useState(false);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [selectedPhotoApp, setSelectedPhotoApp] = useState<{app: Appointment, eye: 'right' | 'left'} | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formIC, setFormIC] = useState('');
   const [formPhone, setFormPhone] = useState('');
   const [formDepartment, setFormDepartment] = useState<'OPD KKL' | 'PBOA'>('OPD KKL');
+  const [selectedDate, setSelectedDate] = useState('');
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
   const [deletingApp, setDeletingApp] = useState<Appointment | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
@@ -250,11 +255,16 @@ export default function App() {
       setFormDepartment(editingAppointment.department || 'OPD KKL'
 );
     } else if (isFormOpen) {
-      setFormIC('');
-      setFormPhone('');
-      setFormDepartment('OPD KKL');
-    }
-  }, [isFormOpen, editingAppointment]);
+  setFormIC('');
+  setFormPhone('');
+
+  setFormDepartment(
+    currentUser?.department || 'OPD KKL'
+  );
+
+  setSelectedDate(todayStr);
+}
+  }, [isFormOpen, editingAppointment, currentUser]);
 
   useEffect(() => {
     if (selectedPhotoApp) {
@@ -1324,25 +1334,53 @@ uploadImage();
 ) => {
 
   try {
+// ===== PBOA RULES =====
+if (!editingAppointment && formDepartment === 'PBOA') {
 
+  const selectedDate = new Date(data.date || '');
+
+  // Friday only
+  if (selectedDate.getDay() !== 5) {
+
+    alert(
+      'PBOA appointments can only be scheduled on Fridays.'
+    );
+
+    return;
+  }
+
+  // Check slot count
+  const pboaCount = appointments.filter(
+    app =>
+      app.department === 'PBOA' &&
+      app.date === data.date
+  ).length;
+
+  if (pboaCount >= PBOA_LIMIT) {
+
+    alert(
+      `PBOA slot is full for ${data.date}. Please select the next available Friday.`
+    );
+
+    return;
+  }
+
+}
     if (editingAppointment) {
 
       if (!editingAppointment.firestoreId) return;
 
       await updateDoc(
-        doc(
-          db,
-          "appointments",
-          editingAppointment.firestoreId
-        ),
-        {
-          ...data,
-          department: formDepartment,
-          updatedBy:
-            currentUser?.id || 'unknown',
-          updatedAt: Date.now()
-        }
-      );
+  doc(
+    db,
+    "appointments",
+    editingAppointment.firestoreId
+  ),
+  {
+    ...data,
+    department: formDepartment
+  }
+);
 
       addActivityLog('Updated Appointment', data.patientName || editingAppointment.patientName || '-');
 
@@ -1629,6 +1667,35 @@ const paginatedAppointments =
   };
 
 }, [appointments]);
+
+const pboaSchedule = useMemo(() => {
+
+  const today = new Date();
+
+  const grouped: Record<string, number> = {};
+
+  appointments
+    .filter(
+      app =>
+        app.department === 'PBOA' &&
+        new Date(app.date) >= today
+    )
+    .forEach(app => {
+
+      grouped[app.date] =
+        (grouped[app.date] || 0) + 1;
+
+    });
+
+  return Object.entries(grouped)
+    .sort(
+      ([a], [b]) =>
+        new Date(a).getTime() -
+        new Date(b).getTime()
+    );
+
+}, [appointments]);
+
   // --- Views ---
 
   if (!currentUser) {
@@ -1760,7 +1827,43 @@ const paginatedAppointments =
 
   return (
   <>
+{showPboaWarning && (
 
+  <div className="fixed inset-0 z-[99999] bg-black/40 flex items-center justify-center">
+
+    <div className="bg-white rounded-2xl shadow-2xl p-6 w-[350px]">
+
+      <div className="flex items-center gap-3 mb-4">
+
+        <AlertCircle
+          className="text-amber-500"
+          size={24}
+        />
+
+        <h3 className="font-black text-slate-800">
+          Invalid Date
+        </h3>
+
+      </div>
+
+      <p className="text-sm text-slate-600 mb-6">
+        ⚠️ PBOA appointments are only available on Fridays.
+      </p>
+
+      <button
+        onClick={() =>
+          setShowPboaWarning(false)
+        }
+        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-xl"
+      >
+        OK
+      </button>
+
+    </div>
+
+  </div>
+
+)}
     {isAuthenticating && (
 
   <div className="fixed inset-0 z-[99999] bg-black/30 backdrop-blur-sm flex items-center justify-center">
@@ -1793,6 +1896,119 @@ const paginatedAppointments =
   </div>
 
 )}
+
+{showTCASchedule && (
+
+  <div className="fixed inset-0 z-[99999] bg-black/40 flex items-center justify-center">
+
+    <div className="bg-white rounded-3xl shadow-2xl w-[500px] max-h-[80vh] overflow-y-auto">
+
+      <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+
+        <div>
+
+          <h2 className="text-lg font-black text-slate-800">
+            📅 PBOA TCA Schedule
+          </h2>
+
+          <p className="text-xs text-slate-500 font-semibold">
+            Friday Appointment Capacity
+          </p>
+
+        </div>
+
+        <button
+          onClick={() =>
+            setShowTCASchedule(false)
+          }
+          className="text-slate-400 hover:text-slate-700"
+        >
+          ✕
+        </button>
+
+      </div>
+
+      <div className="p-5 space-y-3">
+
+        {pboaSchedule.length === 0 ? (
+
+          <div className="text-center py-10 text-slate-400 font-medium">
+            No upcoming PBOA appointments
+          </div>
+
+        ) : (
+
+          pboaSchedule.map(([date, count]) => {
+
+            const remaining =
+              PBOA_LIMIT - count;
+
+            return (
+
+              <div
+                key={date}
+                className="border border-slate-200 rounded-2xl p-4"
+              >
+
+                <div className="flex items-center justify-between">
+
+                  <div>
+
+                    <p className="font-black text-slate-800">
+                      {new Date(date).toLocaleDateString(
+                        'en-GB',
+                        {
+                          day: '2-digit',
+                          month: 'long',
+                          year: 'numeric'
+                        }
+                      )}
+                    </p>
+
+                    <p className="text-xs text-slate-500 font-semibold">
+                      {count} / {PBOA_LIMIT} Patients
+                    </p>
+
+                  </div>
+
+                  {remaining <= 0 ? (
+
+                    <span className="px-3 py-1 rounded-full bg-red-100 text-red-700 text-xs font-black">
+                      FULL
+                    </span>
+
+                  ) : remaining <= 3 ? (
+
+                    <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-black">
+                      {remaining} Left
+                    </span>
+
+                  ) : (
+
+                    <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-black">
+                      {remaining} Left
+                    </span>
+
+                  )}
+
+                </div>
+
+              </div>
+
+            );
+
+          })
+
+        )}
+
+      </div>
+
+    </div>
+
+  </div>
+
+)}
+
 {showAccountSuccess && (
 
   <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[99999]">
@@ -1902,81 +2118,160 @@ const paginatedAppointments =
         
         {/* Monthly Stats Dashboard */}
         <section className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
-          <div className="mb-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-            <div>
-  <h1 className="text-2xl font-black text-slate-800 tracking-tight">
-    Practice Summary
-  </h1>
+          <div className="grid grid-cols-12 gap-4 items-stretch">
 
-  <p className="text-3xl font-black text-slate-300 leading-none mt-1">
-    {yearlyStats.year}
-  </p>
-</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-100">
-                  <Activity size={20} />
-                </div>
-                <div>
-  <p className="text-xs font-black text-blue-500 uppercase tracking-widest">
-    Total Case
-  </p>
+  {/* Practice Summary */}
+  <div className="col-span-2 flex flex-col justify-center">
+    <h1 className="text-2xl font-black text-slate-800 tracking-tight">
+      Practice Summary
+    </h1>
 
-  <div className="flex gap-2 mt-1">
-    <span className="text-[9px] font-black text-sky-600">
-      OPD {yearlyStats.opd}
-    </span>
-
-    <span className="text-[9px] font-black text-emerald-600">
-      PBOA {yearlyStats.pboa}
-    </span>
+    <p className="text-3xl font-black text-slate-300 leading-none mt-1">
+      {yearlyStats.year}
+    </p>
   </div>
+
+ {/* Total Case */}
+<div className="col-span-2 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3">
+
+  <p className="text-xs font-black text-blue-500 uppercase tracking-widest text-center mb-3">
+    TOTAL CASE
+  </p>
+
+  <div className="flex items-center justify-between">
+
+    {/* Icon */}
+    <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-lg shadow-blue-100">
+      <Activity size={20} />
+    </div>
+
+    {/* OPD + PBOA */}
+    <div className="flex flex-col items-center gap-2">
+
+      <div className="text-center">
+        <p className="text-[9px] font-black text-sky-600 uppercase">
+          OPD
+        </p>
+        <p className="text-lg font-black text-sky-600 leading-none">
+          {yearlyStats.opd}
+        </p>
+      </div>
+
+      <div className="text-center">
+        <p className="text-[9px] font-black text-emerald-600 uppercase">
+          PBOA
+        </p>
+        <p className="text-lg font-black text-emerald-600 leading-none">
+          {yearlyStats.pboa}
+        </p>
+      </div>
+
+    </div>
+
+    {/* Divider */}
+    <div className="h-16 w-px bg-slate-300" />
+
+    {/* Total */}
+    <p className="text-5xl font-black text-slate-900 leading-none">
+      {yearlyStats.total}
+    </p>
+
+  </div>
+
 </div>
 
-<p className="text-3xl font-black text-slate-900 leading-none ml-2">
-  {yearlyStats.total}
+  {/* Pending Review */}
+<div className="col-span-2 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+
+  <p className="text-xs font-black text-indigo-500 uppercase tracking-widest text-center mb-3">
+    PENDING REVIEW
+  </p>
+
+  <div className="flex items-center justify-between">
+
+    {/* Icon */}
+    <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-100">
+      <Search size={20} />
+    </div>
+
+    {/* Divider */}
+    <div className="h-16 w-px bg-slate-300" />
+
+    {/* Total */}
+    <p className="text-5xl font-black text-slate-900 leading-none">
+      {yearlyStats.reviewPending}
+    </p>
+
+  </div>
+
+</div>
+
+  {/* Monthly Analytics */}
+  <div className="col-span-6 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+
+    <div className="flex items-center justify-between gap-4">
+
+      <div>
+        <h2 className="text-sm font-bold text-blue-600 uppercase tracking-widest mb-1">
+          Monthly Analytics
+        </h2>
+
+        <p className="text-slate-500 text-sm font-bold">
+  {new Date().toLocaleString('en-US', {
+    month: 'long',
+    year: 'numeric'
+  })}
 </p>
-              </div>
-              <div className="flex items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-                <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-100">
-                  <Search size={20} />
-                </div>
-                <div>
-                  <p className="text-xs font-black text-indigo-500 uppercase tracking-widest">Pending Review</p>
-                  <p className="text-[10px] font-bold text-slate-500">{yearlyStats.year}</p>
-                </div>
-                <p className="text-3xl font-black text-slate-900 leading-none ml-2">{yearlyStats.reviewPending}</p>
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 rounded-2xl border border-slate-200 bg-slate-50/60 p-4 md:p-5">
-            <div>
-              <h2 className="text-sm font-bold text-blue-600 uppercase tracking-widest mb-1">Monthly Analytics</h2>
-              <p className="text-slate-500 text-xs mt-1 uppercase font-bold tracking-tighter">Current Period: {new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })}</p>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-8 flex-1 md:flex-none">
-              <div className="text-center bg-slate-50 p-4 rounded-2xl md:bg-transparent md:p-0">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Total</p>
-                <p className="text-3xl font-black text-slate-900">{monthlyStats.total}</p>
-                <p className="text-[9px] text-slate-400 font-bold uppercase mt-1">Cases</p>
-              </div>
-              <div className="text-center bg-blue-50 p-4 rounded-2xl md:bg-transparent md:p-0">
-                <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider mb-1">Pending Fundus</p>
-                <p className="text-3xl font-black text-blue-600">{monthlyStats.fundusPending}</p>
-                <p className="text-[9px] text-blue-400 font-bold uppercase mt-1">Image Needed</p>
-              </div>
-              <div className="text-center bg-indigo-50 p-4 rounded-2xl md:bg-transparent md:p-0">
-                <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-wider mb-1">Pending Review</p>
-                <p className="text-3xl font-black text-indigo-600">{monthlyStats.reviewPending}</p>
-                <p className="text-[9px] text-indigo-400 font-bold uppercase mt-1">Review Needed</p>
-              </div>
-              <div className="text-center bg-amber-50 p-4 rounded-2xl md:bg-transparent md:p-0">
-                <p className="text-[10px] font-bold text-amber-500 uppercase tracking-wider mb-1">Incomplete</p>
-                <p className="text-3xl font-black text-amber-600">{monthlyStats.totalPending}</p>
-                <p className="text-[9px] text-amber-400 font-bold uppercase mt-1">Total Queue</p>
-              </div>
-            </div>
-          </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-10">
+
+        <div className="text-center">
+          <p className="text-[10px] font-bold text-slate-400 uppercase">
+            Total
+          </p>
+          <p className="text-3xl font-black">
+            {monthlyStats.total}
+          </p>
+          <p className="text-[10px] font-bold text-slate-400 uppercase">
+            Cases
+          </p>
+        </div>
+
+        <div className="text-center">
+          <p className="text-[10px] font-bold text-blue-500 uppercase">
+            Pending Fundus
+          </p>
+          <p className="text-3xl font-black text-blue-600">
+            {monthlyStats.fundusPending}
+          </p>
+        </div>
+
+        <div className="text-center">
+          <p className="text-[10px] font-bold text-indigo-500 uppercase">
+            Pending Review
+          </p>
+          <p className="text-3xl font-black text-indigo-600">
+            {monthlyStats.reviewPending}
+          </p>
+        </div>
+
+        <div className="text-center">
+          <p className="text-[10px] font-bold text-amber-500 uppercase">
+            Incomplete Cases
+          </p>
+          <p className="text-3xl font-black text-amber-600">
+            {monthlyStats.totalPending}
+          </p>
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+</div>
         </section>
         
         {/* Today's Quick Section */}
@@ -2006,13 +2301,25 @@ const paginatedAppointments =
 </div>
 
             </div>
-            <button 
-              onClick={() => setIsFormOpen(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-sm transition-all active:scale-95"
-            >
-              <Plus size={18} />
-              New Appointment
-            </button>
+            <div className="flex items-center gap-2">
+
+  <button
+    onClick={() => setShowTCASchedule(true)}
+    className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-sm transition-all"
+  >
+    <Calendar size={18} />
+    TCA Schedule
+  </button>
+
+  <button
+    onClick={() => setIsFormOpen(true)}
+    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-sm transition-all active:scale-95"
+  >
+    <Plus size={18} />
+    New Appointment
+  </button>
+
+</div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -2107,7 +2414,10 @@ const paginatedAppointments =
 }
                        </button>
                        <button 
-                        disabled={uploadingImageId === `${app.id}-left`}
+                        disabled={
+  uploadingImageId === `${app.id}-left` ||
+  !app.rightEyePhoto
+}
                          onClick={() => {
                            const input = document.createElement('input');
                            input.type = 'file';
@@ -2116,10 +2426,12 @@ const paginatedAppointments =
                            input.click();
                          }}
                          className={`py-2 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
-                           app.leftEyePhoto
-                             ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
-                             : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'
-                         }`}
+  app.leftEyePhoto
+    ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+    : !app.rightEyePhoto
+    ? 'bg-slate-100 text-slate-400 border border-slate-200'
+    : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'
+}`}
                        >
                          { app.leftEyePhoto ? <CheckCircle2 size={10} /> : <Plus size={10} /> }
 
@@ -2384,7 +2696,7 @@ const paginatedAppointments =
                           <span className="font-bold text-[13px] text-slate-800">{app.patientName}</span>
                           <div className="flex flex-wrap gap-1 mt-0.5">
                             {app.diseaseTypes?.map(d => (
-                              <span key={d} className="text-[8px] bg-blue-50 text-blue-600 px-1 py-[1px] rounded font-bold border border-blue-100 uppercase">{d}</span>
+                              <span key={d} className="text-[8px] bg-rose-100 text-rose-700 px-1 py-[1px] rounded font-bold border border-blue-100 uppercase">{d}</span>
                             ))}
                             {app.otherDisease && (
                               <span className="text-[8px] bg-slate-50 text-slate-600 px-1 py-[1px] rounded font-bold border border-slate-100 uppercase">{app.otherDisease}</span>
@@ -3229,15 +3541,63 @@ setSelectedReviewSummary(app);
                   </div>
                   <div className="grid grid-cols-1">
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Date</label>
-                      <input 
-                        name="date"
-                        required
-                        type="date" 
-                        defaultValue={editingAppointment?.date || todayStr}
-                        className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                      />
-                    </div>
+  <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+    Date
+  </label>
+
+ <input
+  name="date"
+  required
+  type="date"
+  value={selectedDate}
+  onChange={(e) => {
+    const value = e.target.value;
+
+    if (formDepartment === 'PBOA') {
+
+      const selectedDateObj = new Date(value);
+
+      if (selectedDateObj.getDay() !== 5) {
+
+        setShowPboaWarning(true);
+        return;
+      }
+    }
+
+    setSelectedDate(value);
+  }}
+/>
+
+  {formDepartment === 'PBOA' && selectedDate && (() => {
+
+  const selectedDateObj = new Date(selectedDate);
+
+  const isFriday = selectedDateObj.getDay() === 5;
+
+  const remainingSlots =
+    PBOA_LIMIT -
+    appointments.filter(
+      app =>
+        app.department === 'PBOA' &&
+        app.date === selectedDate
+    ).length;
+
+  return isFriday ? (
+
+    <p className="text-[10px] font-bold text-emerald-600">
+      Remaining Slots: {remainingSlots} / {PBOA_LIMIT}
+    </p>
+
+  ) : (
+
+    <p className="text-[10px] font-bold text-rose-600">
+      No Slot Available for PBOA on this date.
+    </p>
+
+  );
+
+})()}
+</div>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Remarks</label>
@@ -3421,7 +3781,7 @@ setSelectedReviewSummary(app);
                     <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Patient History</span>
                     <div className="flex flex-wrap gap-1">
                       {selectedPhotoApp?.app?.diseaseTypes?.map(d => (
-                        <span key={d} className="px-2 py-1 bg-blue-100 text-blue-700 text-[10px] font-bold rounded uppercase">{d}</span>
+                        <span key={d} className="px-2 py-1 bg-red-100 text-red-700 text-[10px] font-bold rounded uppercase">{d}</span>
                       ))}
                       {selectedPhotoApp?.app?.otherDisease && (
                         <span className="px-2 py-1 bg-slate-200 text-slate-700 text-[10px] font-bold rounded uppercase">{selectedPhotoApp?.app?.otherDisease}</span>
