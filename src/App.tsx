@@ -49,7 +49,7 @@ import {
   limit
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.2.1";
+const APP_VERSION = "v3.2.2";
 
 // --- Types & Constants ---
 
@@ -4394,7 +4394,7 @@ setSelectedReviewSummary(app);
 
     <span
       key={disease}
-      className="px-2 py-1 rounded-lg bg-blue-100 text-blue-700 text-[10px] font-black uppercase"
+      className="px-2 py-1 rounded-lg bg-red-100 text-red-700 text-[10px] font-black uppercase"
     >
       {disease}
     </span>

@@ -16,3 +16,10 @@
 .transition-all {
   transition-duration: 200ms;
 }
+
+/* Clickable cursor */
+button:not(:disabled),
+[role="button"],
+a {
+  cursor: pointer;
+}
