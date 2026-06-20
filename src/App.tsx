@@ -2288,7 +2288,7 @@ const pboaSchedule = useMemo(() => {
         </div>
 
         <div className="text-center">
-          <p className="text-[9px] font-bold text-blue-500 uppercase">
+          <p className="text-[10px] font-bold text-blue-500 uppercase">
             Pending Fundus
           </p>
           <p className="text-3xl font-black text-blue-600">
@@ -2297,7 +2297,7 @@ const pboaSchedule = useMemo(() => {
         </div>
 
         <div className="text-center">
-          <p className="text-[9px] font-bold text-indigo-500 uppercase">
+          <p className="text-[10px] font-bold text-indigo-500 uppercase">
             Pending Review
           </p>
           <p className="text-3xl font-black text-indigo-600">
@@ -2306,7 +2306,7 @@ const pboaSchedule = useMemo(() => {
         </div>
 
         <div className="text-center">
-          <p className="text-[9px] font-bold text-amber-500 uppercase">
+          <p className="text-[10px] font-bold text-amber-500 uppercase">
             Incomplete Cases
           </p>
           <p className="text-3xl font-black text-amber-600">
