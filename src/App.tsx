@@ -181,6 +181,7 @@ export default function App() {
   const [tempUserId, setTempUserId] = useState('');
   const [tempPassword, setTempPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [showStaffForm, setShowStaffForm] = useState(false);
   
   const [showAdminConsole, setShowAdminConsole] = useState(false);
   const [newStaffId, setNewStaffId] = useState('');
@@ -3073,7 +3074,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl flex flex-col max-h-[70vh] md:max-h-[80vh]"
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <div className="flex items-center gap-3">
@@ -3103,16 +3104,32 @@ setSelectedReviewSummary(app);
                 </button>
               </div>
 
-              <div className="p-6 space-y-8">
+              <div className="p-4 md:p-6 space-y-4 md:space-y-8 overflow-y-auto">
                 {/* Add/Edit Staff Form */}
                 <section>
-                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-                    {editingUser ? <Edit2 size={14} className="text-blue-500" /> : <UserPlus size={14} className="text-blue-500" />}
-                    {editingUser ? `Editing Account: ${editingUser.id}` : 'Register New Clinical Staff'}
-                  </h3>
-                  <form
+
+  <button
+    type="button"
+    onClick={() => setShowStaffForm(!showStaffForm)}
+    className="w-full flex items-center justify-between mb-4"
+  >
+    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+      {editingUser ? <Edit2 size={14} className="text-blue-500" /> : <UserPlus size={14} className="text-blue-500" />}
+      {editingUser ? `Editing Account: ${editingUser.id}` : 'Register New Clinical Staff'}
+    </h3>
+
+    {!editingUser && (
+      <span className="text-xs font-bold text-blue-600">
+        {showStaffForm ? 'Hide' : 'Show'}
+      </span>
+    )}
+  </button>
+
+  {(showStaffForm || editingUser) && (
+
+  <form
   onSubmit={editingUser ? updateStaffMember : addStaffMember}
-  className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100"
+  className="bg-blue-50/50 p-3 md:p-4 rounded-2xl border border-blue-100"
 >
 
   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -3301,9 +3318,12 @@ setSelectedReviewSummary(app);
   </div>
 
 </form>
-                </section>
 
-                {/* Existing Staff List */}
+)}
+
+</section>
+
+{/* Existing Staff List */}
 <section className="flex flex-col max-h-[420px]">
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Current System Users ({users.length})</h3>
                   <div className="space-y-2 overflow-y-auto overscroll-contain pr-2 h-full">
@@ -3367,14 +3387,14 @@ setSelectedReviewSummary(app);
                           <div className="flex flex-wrap items-center gap-2">
                             <button 
                               onClick={() => setEditingUser(u)}
-                              className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                              className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all md:opacity-0 md:group-hover:opacity-100"
                               title="Edit User"
                             >
                               <Edit2 size={18} />
                             </button>
                             <button 
                               onClick={() => setUserToDelete(u)}
-                              className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all opacity-0 group-hover:opacity-100"
+                              className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all md:opacity-0 md:group-hover:opacity-100"
                               title="Delete User"
                             >
                               <Trash2 size={18} />
