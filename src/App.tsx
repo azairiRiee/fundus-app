@@ -364,7 +364,7 @@ export default function App() {
       timestamp: Date.now()
     };
 
-    setActivityLogs(prev => [logEntry, ...prev].slice(0, 100));
+    setActivityLogs(prev => [logEntry, ...prev].slice(0, 50));
 
     addDoc(
   collection(db, "activityLogs"),
@@ -379,11 +379,11 @@ export default function App() {
     )
   );
 
-  if (logsSnapshot.size > 100) {
+  if (logsSnapshot.size > 50) {
 
     const logs = logsSnapshot.docs;
 
-    for (let i = 100; i < logs.length; i++) {
+    for (let i = 50; i < logs.length; i++) {
 
       await deleteDoc(logs[i].ref);
 
@@ -745,7 +745,7 @@ const unsubscribeActivityLogs = onSnapshot(
   query(
     collection(db, "activityLogs"),
     orderBy("timestamp", "desc"),
-    limit(100)
+    limit(50)
   ),
   (snapshot) => {
 
