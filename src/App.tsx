@@ -2280,12 +2280,13 @@ const pboaSchedule = useMemo(() => {
           <p className="text-[10px] font-bold text-slate-400 uppercase">
             Total
           </p>
-          <p className="text-3xl font-black">
-            {monthlyStats.total}
-          </p>
           <p className="text-[10px] font-bold text-slate-400 uppercase">
             Cases
           </p>
+          <p className="text-3xl font-black">
+            {monthlyStats.total}
+          </p>
+          
         </div>
 
         <div className="text-center">
