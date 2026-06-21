@@ -46,7 +46,8 @@ import {
   doc,
   query,
   orderBy,
-  limit
+  limit,
+  getDocs
 } from 'firebase/firestore';
 
 const APP_VERSION = "v3.2.2";
@@ -363,17 +364,42 @@ export default function App() {
       timestamp: Date.now()
     };
 
-    setActivityLogs(prev => [logEntry, ...prev].slice(0, 300));
+    setActivityLogs(prev => [logEntry, ...prev].slice(0, 100));
 
     addDoc(
+  collection(db, "activityLogs"),
+  logEntry
+)
+.then(async () => {
+
+  const logsSnapshot = await getDocs(
+    query(
       collection(db, "activityLogs"),
-      logEntry
-    ).catch(error => {
-      console.error(
-        "Failed to save activity log to Firestore",
-        error
-      );
-    });
+      orderBy("timestamp", "desc")
+    )
+  );
+
+  if (logsSnapshot.size > 100) {
+
+    const logs = logsSnapshot.docs;
+
+    for (let i = 100; i < logs.length; i++) {
+
+      await deleteDoc(logs[i].ref);
+
+    }
+
+  }
+
+})
+.catch(error => {
+
+  console.error(
+    "Failed to save activity log to Firestore",
+    error
+  );
+
+});
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -719,7 +745,7 @@ const unsubscribeActivityLogs = onSnapshot(
   query(
     collection(db, "activityLogs"),
     orderBy("timestamp", "desc"),
-    limit(300)
+    limit(100)
   ),
   (snapshot) => {
 
