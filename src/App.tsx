@@ -1730,22 +1730,55 @@ const paginatedAppointments =
 
 }, [appointments]);
 
-const pboaSchedule = useMemo(() => {
+const tcaSchedule = useMemo(() => {
 
   const today = new Date();
 
-  const grouped: Record<string, number> = {};
+  const grouped: Record<
+    string,
+    {
+      opd: number;
+      pboa: number;
+      total: number;
+    }
+  > = {};
 
   appointments
     .filter(
       app =>
-        app.department === 'PBOA' &&
         new Date(app.date) >= today
     )
     .forEach(app => {
 
-      grouped[app.date] =
-        (grouped[app.date] || 0) + 1;
+      if (!grouped[app.date]) {
+
+        grouped[app.date] = {
+          opd: 0,
+          pboa: 0,
+          total: 0
+        };
+
+      }
+
+      if (
+        app.department ===
+        'OPD KKL'
+      ) {
+
+        grouped[app.date].opd++;
+
+      }
+
+      if (
+        app.department ===
+        'PBOA'
+      ) {
+
+        grouped[app.date].pboa++;
+
+      }
+
+      grouped[app.date].total++;
 
     });
 
@@ -1755,6 +1788,35 @@ const pboaSchedule = useMemo(() => {
         new Date(a).getTime() -
         new Date(b).getTime()
     );
+
+}, [appointments]);
+
+const tomorrowTCA = useMemo(() => {
+
+  const tomorrow = new Date();
+
+  tomorrow.setDate(
+    tomorrow.getDate() + 1
+  );
+
+  const tomorrowStr =
+    tomorrow.toLocaleDateString('en-CA');
+
+  return {
+
+    opd: appointments.filter(
+      app =>
+        app.date === tomorrowStr &&
+        app.department === 'OPD KKL'
+    ).length,
+
+    pboa: appointments.filter(
+      app =>
+        app.date === tomorrowStr &&
+        app.department === 'PBOA'
+    ).length
+
+  };
 
 }, [appointments]);
 
@@ -1965,16 +2027,16 @@ const pboaSchedule = useMemo(() => {
 
     <div className="bg-white rounded-3xl shadow-2xl w-[92vw] max-w-[500px] max-h-[70vh] overflow-y-auto">
 
-      <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+      <div className="p-5 border-b border-slate-300 flex items-center justify-between bg-gradient-to-r from-slate-100 to-slate-200">
 
         <div>
 
           <h2 className="text-lg font-black text-slate-800">
-            📅 PBOA TCA Schedule
+            📅 Fundus TCA Schedule
           </h2>
 
-          <p className="text-xs text-slate-500 font-semibold">
-            Friday Appointment Capacity
+          <p className="text-xs text-slate-600 font-semibold">
+            Upcoming TCA Appointments
           </p>
 
         </div>
@@ -1992,66 +2054,130 @@ const pboaSchedule = useMemo(() => {
 
       <div className="p-5 space-y-3">
 
-        {pboaSchedule.length === 0 ? (
+        {tcaSchedule.length === 0 ? (
 
           <div className="text-center py-6 md:py-10 text-slate-400 font-medium">
-  No upcoming PBOA appointments
+  No upcoming appointments
 </div>
 
         ) : (
 
-          pboaSchedule.map(([date, count]) => {
-
-            const remaining =
-              PBOA_LIMIT - count;
+          tcaSchedule.map(([date, stats]) => {
 
             return (
 
               <div
                 key={date}
-                className="border border-slate-200 rounded-2xl p-4"
+                className="border border-slate-200 rounded-2xl p-4 md:p-5"
               >
 
                 <div className="flex items-center justify-between">
 
                   <div>
 
-                    <p className="font-black text-slate-800">
-                      {new Date(date).toLocaleDateString(
-                        'en-GB',
-                        {
-                          day: '2-digit',
-                          month: 'long',
-                          year: 'numeric'
-                        }
-                      )}
-                    </p>
+                    <div className="flex items-start justify-between gap-3">
 
-                    <p className="text-xs text-slate-500 font-semibold">
-                      {count} / {PBOA_LIMIT} Patients
-                    </p>
+  <p className="font-black text-slate-800">
+    {new Date(date).toLocaleDateString(
+      'en-GB',
+      {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric'
+      }
+    )},
+    {' '}
+    {new Date(date).toLocaleDateString(
+      'en-GB',
+      {
+        weekday: 'long'
+      }
+    )}
+  </p>
+
+  <div className="flex items-center gap-2">
+
+    {(() => {
+
+      const tomorrow = new Date();
+
+      tomorrow.setDate(
+        tomorrow.getDate() + 1
+      );
+
+      return date === tomorrow.toLocaleDateString('en-CA');
+
+    })() && (
+
+      <span className="bg-amber-100 text-amber-700 border border-amber-300 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wide whitespace-nowrap flex items-center gap-1">
+        🔔 TOMORROW
+      </span>
+
+    )}
+
+    {(() => {
+
+      const today = new Date();
+
+      const nextWeek = new Date();
+
+      nextWeek.setDate(
+        today.getDate() + 7
+      );
+
+      const currentDate =
+        new Date(date);
+
+      return (
+        currentDate > today &&
+        currentDate <= nextWeek
+      );
+
+    })() &&
+
+    date !== (() => {
+
+      const tomorrow = new Date();
+
+      tomorrow.setDate(
+        tomorrow.getDate() + 1
+      );
+
+      return tomorrow.toLocaleDateString('en-CA');
+
+    })() && (
+
+      <span className="bg-sky-100 text-sky-700 border border-sky-300 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wide whitespace-nowrap">
+        📅 THIS WEEK
+      </span>
+
+    )}
+
+  </div>
+
+</div>
+
+                    <div className="mt-2 space-y-1">
+
+  <p className="text-xs font-semibold text-sky-600">
+    OPD KKL : {stats.opd} Patients
+  </p>
+
+  <p className="text-xs font-semibold text-emerald-600">
+    PBOA : {stats.pboa} Patients
+  </p>
+
+  <div className="border-t border-slate-200 pt-1 mt-1">
+
+    <p className="text-xs font-black text-slate-700">
+      Total : {stats.total} Patients
+    </p>
+
+  </div>
+
+</div>
 
                   </div>
-
-                  {remaining <= 0 ? (
-
-                    <span className="px-3 py-1 rounded-full bg-red-100 text-red-700 text-xs font-black">
-                      FULL
-                    </span>
-
-                  ) : remaining <= 3 ? (
-
-                    <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-black">
-                      {remaining} Left
-                    </span>
-
-                  ) : (
-
-                    <span className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-black">
-                      {remaining} Left
-                    </span>
-
-                  )}
 
                 </div>
 
@@ -2365,7 +2491,7 @@ const pboaSchedule = useMemo(() => {
                   {todayAppointments.length} Active
                 </span>
               </div>
-              <div className="flex items-center gap-2 ml-2">
+              <div className="flex flex-wrap items-center gap-2 ml-2">
 
   <span className="bg-sky-100 text-sky-700 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter border border-sky-200">
     OPD KKL: {todayDepartmentStats.opd}
@@ -2375,10 +2501,77 @@ const pboaSchedule = useMemo(() => {
     PBOA: {todayDepartmentStats.pboa}
   </span>
 
+  {(tomorrowTCA.opd > 0 || tomorrowTCA.pboa > 0) && (
+
+    <div className="md:hidden flex items-center gap-1 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
+
+      <span>🔔</span>
+
+      <div className="w-5 h-5 rounded-full bg-sky-500 text-white flex items-center justify-center text-[10px] font-black">
+        O
+      </div>
+
+      <span className="text-xs font-black">
+        {tomorrowTCA.opd}
+      </span>
+
+      <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-black">
+        P
+      </div>
+
+      <span className="text-xs font-black">
+        {tomorrowTCA.pboa}
+      </span>
+
+    </div>
+
+  )}
+
 </div>
 
             </div>
             <div className="flex flex-wrap items-center gap-2">
+
+  {(tomorrowTCA.opd > 0 ||
+    tomorrowTCA.pboa > 0) && (
+
+    <div className="hidden md:flex items-center gap-2 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
+
+      <span className="text-amber-600">
+        🔔
+      </span>
+
+      <span className="hidden md:inline text-xs font-bold text-slate-700">
+        Tomorrow's TCA
+      </span>
+
+      <div className="flex items-center gap-1">
+
+  <div className="w-5 h-5 rounded-full bg-sky-500 text-white flex items-center justify-center text-[10px] font-black">
+    O
+  </div>
+
+  <span className="text-xs font-black text-slate-700">
+    {tomorrowTCA.opd}
+  </span>
+
+</div>
+
+<div className="flex items-center gap-1">
+
+  <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-black">
+    P
+  </div>
+
+  <span className="text-xs font-black text-slate-700">
+    {tomorrowTCA.pboa}
+  </span>
+
+</div>
+
+    </div>
+
+  )}
 
   <button
     onClick={() => setShowTCASchedule(true)}
