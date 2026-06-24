@@ -50,7 +50,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.2.2";
+const APP_VERSION = "v3.3.0";
 
 // --- Types & Constants ---
 
@@ -633,7 +633,7 @@ reviewPendingPBOA:
  // Search & Filter State
 const [searchQuery, setSearchQuery] = useState('');
 const [filterDate, setFilterDate] = useState('');
-const [filterStatus, setFilterStatus] = useState<AppointmentStatus | 'All'>('All');
+const [filterStatus, setFilterStatus] = useState<AppointmentStatus | 'All' | 'Active'>('Active');
 const [filterReview, setFilterReview] = useState<'All' | 'Pending' | 'Abnormal' | 'Normal'>('All');
 const [filterDepartment, setFilterDepartment] =
   useState<'All' | 'OPD KKL' | 'PBOA'>('All');
@@ -1635,7 +1635,15 @@ if (!editingAppointment && formDepartment === 'PBOA') {
           patientName.toLowerCase().includes(q) ||
           icNumber.includes(searchQuery);
         const matchesDate = !filterDate || app.date === filterDate;
-        const matchesStatus = filterStatus === 'All' || app.status === filterStatus;
+        const today = new Date();
+today.setHours(23,59,59,999);
+
+const appointmentDate = new Date(app.date);
+
+const matchesStatus =
+  filterStatus === 'All'
+    ? true
+    : appointmentDate <= today;
         
         const hasPhotos = !!(app.rightEyePhoto || app.leftEyePhoto);
         const hasBothReviews = !!(app.rightEyeReview && app.leftEyeReview);
@@ -2223,7 +2231,7 @@ const tomorrowTCA = useMemo(() => {
 
 )}
 
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900">
+    <div className="min-h-screen bg-gradient-to-br from-slate-300 via-emerald-100 to-indigo-500 flex flex-col font-sans text-slate-900">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-3 py-2 md:h-16 flex flex-col md:flex-row md:items-center justify-center md:justify-between gap-3 md:gap-4">
@@ -2810,10 +2818,8 @@ const tomorrowTCA = useMemo(() => {
                   value={filterStatus}
                   onChange={e => setFilterStatus(e.target.value as any)}
                 >
-                  <option value="All">All Status (All Records)</option>
-                  <option value={AppointmentStatus.PENDING}>Pending (Initial)</option>
-                  <option value={AppointmentStatus.DONE}>Done (Completed)</option>
-                  <option value={AppointmentStatus.NO_SHOW}>No Show (Missed)</option>
+                  <option value="Active">Active Queue</option>
+                  <option value="All">All Records</option>
                 </select>
               </div>
 
@@ -2852,9 +2858,9 @@ const tomorrowTCA = useMemo(() => {
   </div>
 )}
               
-              {(searchQuery || filterDate || filterStatus !== 'All' || filterReview !== 'All') && (
+              {(searchQuery || filterDate || filterStatus !== 'Active' || filterReview !== 'All') && (
                 <button 
-                  onClick={() => { setSearchQuery(''); setFilterDate(''); setFilterStatus('All'); setFilterReview('All'); setFilterDepartment('All'); }}
+                  onClick={() => { setSearchQuery(''); setFilterDate(''); setFilterStatus('Active'); setFilterReview('All'); setFilterDepartment('All'); }}
                   className="text-xs text-blue-600 font-bold hover:underline px-2"
                 >
                   Clear Filters
@@ -3268,11 +3274,11 @@ setSelectedReviewSummary(app);
 
         <div className="text-center py-3 flex flex-col">
   
-  <span className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">
+  <span className="text-[10px] text-slate-500 font-bold tracking-widest uppercase">
     Fundus Klinik Kesihatan Lintang • {APP_VERSION}
   </span>
 
-  <span className="text-[9px] text-slate-300 font-semibold tracking-wide mt-1">
+  <span className="text-[9px] text-slate-400 font-semibold tracking-wide mt-1">
     Created by Azairi
   </span>
 
