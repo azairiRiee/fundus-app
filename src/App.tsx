@@ -997,21 +997,16 @@ const addStaffMember = (e: React.FormEvent) => {
   }
 
   const newUser: User = {
-
   id,
-
   password: newStaffPass,
-
   displayName: newStaffName.trim(),
-
   role: UserRole.STAFF,
 
-  department: 'OPD KKL',
+  department: newStaffDepartment,
 
-  canViewAllDepartments: false,
+  canViewAllDepartments: newStaffMA,
 
   createdAt: Date.now()
-
 };
 
   addDoc(
