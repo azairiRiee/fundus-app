@@ -50,7 +50,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.3.0";
+const APP_VERSION = "v3.3.1";
 
 // --- Types & Constants ---
 
@@ -2386,17 +2386,40 @@ const tomorrowTCA = useMemo(() => {
 </div>
 
   {/* Pending Review */}
-<div className="col-span-1 lg:col-span-2 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
+<div className="col-span-1 lg:col-span-2 rounded-2xl border border-violet-100 bg-violet-50 px-3 py-3 min-h-[120px]">
 
-  <p className="text-xs font-black text-indigo-500 uppercase tracking-widest text-center mb-3">
+  <p className="text-xs font-black text-violet-600 uppercase tracking-widest text-center mb-3">
     PENDING REVIEW
   </p>
 
   <div className="flex items-center justify-between">
 
     {/* Icon */}
-    <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-lg shadow-indigo-100">
+    <div className="w-10 h-10 rounded-xl bg-violet-600 text-white flex items-center justify-center shadow-lg shadow-violet-100">
       <Search size={20} />
+    </div>
+
+    {/* OPD + PBOA */}
+    <div className="flex flex-col items-center gap-2">
+
+      <div className="text-center">
+        <p className="text-[9px] font-black text-sky-600 uppercase">
+          OPD
+        </p>
+        <p className="text-lg font-black text-sky-600 leading-none">
+          {yearlyStats.reviewPendingOPD}
+        </p>
+      </div>
+
+      <div className="text-center">
+        <p className="text-[9px] font-black text-emerald-600 uppercase">
+          PBOA
+        </p>
+        <p className="text-lg font-black text-emerald-600 leading-none">
+          {yearlyStats.reviewPendingPBOA}
+        </p>
+      </div>
+
     </div>
 
     {/* Divider */}
