@@ -50,7 +50,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.3.1";
+const APP_VERSION = "v3.3.2";
 
 // --- Types & Constants ---
 
@@ -89,7 +89,10 @@ interface Appointment {
   phoneNumber: string;
   date: string;
   remarks: string;
+
   rightEyePhoto?: string;
+  rightEyePhotoPublicId?: string;
+
   rightEyeReview?: string;
   rightEyeReviewDetails?: {
     status: 'Normal' | 'Abnormal' | '';
@@ -99,6 +102,8 @@ interface Appointment {
     comment?: string;
   };
   leftEyePhoto?: string;
+  leftEyePhotoPublicId?: string;
+
   leftEyeReview?: string;
   leftEyeReviewDetails?: {
     status: 'Normal' | 'Abnormal' | '';
@@ -1163,7 +1168,10 @@ deleteDoc(
 
 console.log(data);
 
-return data.secure_url;
+return {
+  url: data.secure_url,
+  publicId: data.public_id
+};
 
 };
   const handleImageUpload = (id: string, eye: 'right' | 'left', e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1175,7 +1183,7 @@ return data.secure_url;
 
   setUploadingImageId(`${id}-${eye}`);
 
-  const imageUrl = await uploadToCloudinary(file);
+  const image = await uploadToCloudinary(file);
 
     const appToUpdate = appointments.find(
   app =>
@@ -1207,21 +1215,26 @@ if (hasRight && hasLeft) {
 }
     const updatedData = {
 
-      status: nextStatus,
+  status: nextStatus,
 
-      [eye === 'right'
-        ? 'rightEyePhoto'
-        : 'leftEyePhoto'
-      ]: imageUrl,
+  [eye === 'right'
+    ? 'rightEyePhoto'
+    : 'leftEyePhoto'
+  ]: image.url,
 
-      [eye === 'right'
-        ? 'rightEyeUploadedBy'
-        : 'leftEyeUploadedBy'
-      ]: currentUser?.id || 'UNKNOWN',
+  [eye === 'right'
+    ? 'rightEyePhotoPublicId'
+    : 'leftEyePhotoPublicId'
+  ]: image.publicId,
 
-      updatedBy: currentUser?.id || 'unknown',
-      updatedAt: Date.now()
-    };
+  [eye === 'right'
+    ? 'rightEyeUploadedBy'
+    : 'leftEyeUploadedBy'
+  ]: currentUser?.id || 'UNKNOWN',
+
+  updatedBy: currentUser?.id || 'unknown',
+  updatedAt: Date.now()
+};
 
     await updateDoc(
   doc(
