@@ -50,7 +50,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.3.4";
+const APP_VERSION = "v3.3.5";
 
 // --- Types & Constants ---
 
@@ -221,6 +221,10 @@ export default function App() {
   
   const [showTCASchedule, setShowTCASchedule] = useState(false);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+
+  const notificationAudio = useRef(new Audio('/notification.mp3'));
+  const previousAppointmentCount = useRef(0);
+
   const [selectedPhotoApp, setSelectedPhotoApp] = useState<{app: Appointment, eye: 'right' | 'left'} | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formIC, setFormIC] = useState('');
@@ -699,14 +703,30 @@ const unsubscribe = onSnapshot(
   collection(db, "appointments"),
   (snapshot) => {
 
-    const firestoreApps = snapshot.docs.map(docSnapshot => ({
+    // Detect appointment baru (skip initial load)
+if (previousAppointmentCount.current !== 0) {
+
+  const added = snapshot.docChanges().some(
+    change => change.type === "added"
+  );
+
+  if (added) {
+    notificationAudio.current.currentTime = 0;
+
+    notificationAudio.current.play().catch(() => {
+      // Browser block autoplay, ignore
+    });
+  }
+}
+
+const firestoreApps = snapshot.docs.map(docSnapshot => ({
   firestoreId: docSnapshot.id,
   ...docSnapshot.data()
 })) as Appointment[];
 
-    if (firestoreApps.length > 0) {
-      setAppointments(firestoreApps);
-    }
+previousAppointmentCount.current = firestoreApps.length;
+
+setAppointments(firestoreApps);
 
   }
 );
