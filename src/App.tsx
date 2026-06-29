@@ -50,7 +50,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.3.2";
+const APP_VERSION = "v3.3.4";
 
 // --- Types & Constants ---
 
@@ -1674,9 +1674,22 @@ const matchesStatus =
   matchesDepartment
 );
       })
-      .sort((a, b) =>
-  (b.createdAt || 0) - (a.createdAt || 0)
-);
+      .sort((a, b) => {
+
+  if (filterStatus === 'All') {
+
+    const dateCompare = b.date.localeCompare(a.date);
+
+    if (dateCompare !== 0) {
+      return dateCompare;
+    }
+
+    return (b.createdAt || 0) - (a.createdAt || 0);
+  }
+
+  return (b.createdAt || 0) - (a.createdAt || 0);
+
+});
   }, [appointments, searchQuery, filterDate, filterStatus, filterReview, filterDepartment]);
 
   const totalPages = Math.ceil(
