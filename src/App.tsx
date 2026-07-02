@@ -50,7 +50,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.3.5";
+const APP_VERSION = "v3.3.5-beta";
 
 // --- Types & Constants ---
 
@@ -221,10 +221,6 @@ export default function App() {
   
   const [showTCASchedule, setShowTCASchedule] = useState(false);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
-
-  const notificationAudio = useRef(new Audio('/notification.mp3'));
-  const previousAppointmentCount = useRef(0);
-
   const [selectedPhotoApp, setSelectedPhotoApp] = useState<{app: Appointment, eye: 'right' | 'left'} | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formIC, setFormIC] = useState('');
@@ -654,7 +650,7 @@ const ITEMS_PER_PAGE = 5;
 useEffect(() => {
 
   // Load Appointments from localStorage first
-  const savedApps = localStorage.getItem(STORAGE_KEY);
+ /* const savedApps = localStorage.getItem(STORAGE_KEY);
 
   if (savedApps) {
     try {
@@ -676,7 +672,7 @@ useEffect(() => {
       );
     }
   }
-
+*/
   const savedActivityLogs = localStorage.getItem(ACTIVITY_LOGS_KEY);
 
   if (savedActivityLogs) {
@@ -703,30 +699,14 @@ const unsubscribe = onSnapshot(
   collection(db, "appointments"),
   (snapshot) => {
 
-    // Detect appointment baru (skip initial load)
-if (previousAppointmentCount.current !== 0) {
-
-  const added = snapshot.docChanges().some(
-    change => change.type === "added"
-  );
-
-  if (added) {
-    notificationAudio.current.currentTime = 0;
-
-    notificationAudio.current.play().catch(() => {
-      // Browser block autoplay, ignore
-    });
-  }
-}
-
-const firestoreApps = snapshot.docs.map(docSnapshot => ({
+    const firestoreApps = snapshot.docs.map(docSnapshot => ({
   firestoreId: docSnapshot.id,
   ...docSnapshot.data()
 })) as Appointment[];
 
-previousAppointmentCount.current = firestoreApps.length;
-
-setAppointments(firestoreApps);
+    if (firestoreApps.length > 0) {
+      setAppointments(firestoreApps);
+    }
 
   }
 );
@@ -793,7 +773,7 @@ return () => {
 
 
 // Sync Appointments with localStorage
-useEffect(() => {
+/*useEffect(() => {
 
   try {
 
@@ -823,7 +803,7 @@ useEffect(() => {
   }
 
 }, [appointments]);
-
+*/
 
 // Sync Activity Logs with localStorage
 useEffect(() => {
@@ -1668,10 +1648,7 @@ today.setHours(23,59,59,999);
 
 const appointmentDate = new Date(app.date);
 
-const matchesStatus =
-  filterStatus === 'All'
-    ? true
-    : appointmentDate <= today;
+const matchesStatus = true;
         
         const hasPhotos = !!(app.rightEyePhoto || app.leftEyePhoto);
         const hasBothReviews = !!(app.rightEyeReview && app.leftEyeReview);
@@ -1710,7 +1687,15 @@ const matchesStatus =
   return (b.createdAt || 0) - (a.createdAt || 0);
 
 });
-  }, [appointments, searchQuery, filterDate, filterStatus, filterReview, filterDepartment]);
+  }, [
+  appointments,
+  currentUser,
+  searchQuery,
+  filterDate,
+  filterStatus,
+  filterReview,
+  filterDepartment
+]);
 
   const totalPages = Math.ceil(
   sortedAndFilteredAppointments.length /
