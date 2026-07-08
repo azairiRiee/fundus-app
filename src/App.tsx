@@ -25,7 +25,9 @@ import {
   UserPlus,
   ShieldCheck,
   UserCog,
+  CameraOff,
   Eye,
+  ScanEye,
   EyeOff,
   Key,
   Activity
@@ -50,7 +52,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.3.5-beta";
+const APP_VERSION = "v3.4.0";
 
 // --- Types & Constants ---
 
@@ -81,8 +83,17 @@ enum AppointmentStatus {
   NO_SHOW = 'No Show'
 }
 
+/* =========================
+   Image Status Type
+========================= */
+type ImageStatus =
+  | "Pending"
+  | "Captured"
+  | "Not Obtainable";
+
 interface Appointment {
   id: string;
+  firestoreId?: string;
   patientName: string;
   department: 'OPD KKL' | 'PBOA';
   icNumber: string;
@@ -90,9 +101,30 @@ interface Appointment {
   date: string;
   remarks: string;
 
+  // =========================
+  // Fundus Images
+  // =========================
   rightEyePhoto?: string;
   rightEyePhotoPublicId?: string;
 
+  leftEyePhoto?: string;
+  leftEyePhotoPublicId?: string;
+
+  // =========================
+  // Image Capture Status
+  // =========================
+  rightEyeImageStatus?: ImageStatus;
+leftEyeImageStatus?: ImageStatus;
+
+  rightEyeImageReason?: string;
+  leftEyeImageReason?: string;
+
+  imageStatusUpdatedBy?: string;
+  imageStatusUpdatedAt?: number;
+
+  // =========================
+  // Clinical Review
+  // =========================
   rightEyeReview?: string;
   rightEyeReviewDetails?: {
     status: 'Normal' | 'Abnormal' | '';
@@ -101,8 +133,6 @@ interface Appointment {
     othersText?: string;
     comment?: string;
   };
-  leftEyePhoto?: string;
-  leftEyePhotoPublicId?: string;
 
   leftEyeReview?: string;
   leftEyeReviewDetails?: {
@@ -112,12 +142,15 @@ interface Appointment {
     othersText?: string;
     comment?: string;
   };
+
   status: AppointmentStatus;
   diseaseTypes: string[];
   otherDisease: string;
+
   createdBy: string;
   rightEyeUploadedBy?: string;
   leftEyeUploadedBy?: string;
+
   updatedBy: string;
   createdAt: number;
 }
@@ -237,6 +270,29 @@ export default function App() {
   const [summaryEye, setSummaryEye] = useState<'right' | 'left'>('right');
   const [selectedReviewSummary, setSelectedReviewSummary] = useState<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const [showImageNotObtainable, setShowImageNotObtainable] = useState(false);
+        useEffect(() => {
+  document.body.style.overflow = showImageNotObtainable
+    ? "hidden"
+    : "";
+
+  return () => {
+    document.body.style.overflow = "";
+  };
+}, [showImageNotObtainable]);
+const [selectedUnableApp, setSelectedUnableApp] =
+  useState<Appointment | null>(null);
+
+const [unableEye, setUnableEye] = useState<
+  "right" | "left" | "both"
+>("right");
+
+const [unableReason, setUnableReason] = useState(
+  "Dense Cataract"
+);
+const [unableOtherReason, setUnableOtherReason] =
+  useState("");
 
   const [rightEyeDetails, setRightEyeDetails] = useState<Appointment['rightEyeReviewDetails']>({
     status: '',
@@ -1198,19 +1254,21 @@ if (!appToUpdate?.firestoreId) {
   return;
 }
 
-    const hasRight =
-  eye === 'right'
+    const rightCompleted =
+  eye === "right"
     ? true
-    : appToUpdate?.rightEyePhoto;
+    : !!appToUpdate?.rightEyePhoto ||
+      appToUpdate?.rightEyeImageStatus === "Not Obtainable";
 
-const hasLeft =
-  eye === 'left'
+const leftCompleted =
+  eye === "left"
     ? true
-    : appToUpdate?.leftEyePhoto;
+    : !!appToUpdate?.leftEyePhoto ||
+      appToUpdate?.leftEyeImageStatus === "Not Obtainable";
 
 let nextStatus = appToUpdate?.status;
 
-if (hasRight && hasLeft) {
+if (rightCompleted && leftCompleted) {
   nextStatus = AppointmentStatus.DONE_FUNDUS;
 }
     const updatedData = {
@@ -1556,6 +1614,102 @@ if (!editingAppointment && formDepartment === 'PBOA') {
       "Failed to delete appointment",
       e
     );
+
+  }
+
+};
+
+const saveImageNotObtainable = async () => {
+
+  if (!selectedUnableApp?.firestoreId) return;
+
+  try {
+
+    const reason =
+      unableReason === "Others"
+        ? unableOtherReason
+        : unableReason;
+
+    const updateData: any = {
+
+      imageStatusUpdatedBy:
+        currentUser?.id || "unknown",
+
+      imageStatusUpdatedAt:
+        Date.now()
+
+    };
+
+    if (
+      unableEye === "right" ||
+      unableEye === "both"
+    ) {
+
+      updateData.rightEyeImageStatus =
+        "Not Obtainable";
+
+      updateData.rightEyeImageReason =
+        reason;
+
+    }
+
+    if (
+      unableEye === "left" ||
+      unableEye === "both"
+    ) {
+
+      updateData.leftEyeImageStatus =
+        "Not Obtainable";
+
+      updateData.leftEyeImageReason =
+        reason;
+
+    }
+// Determine final image status
+const finalRightStatus =
+  updateData.rightEyeImageStatus ??
+  selectedUnableApp.rightEyeImageStatus;
+
+const finalLeftStatus =
+  updateData.leftEyeImageStatus ??
+  selectedUnableApp.leftEyeImageStatus;
+
+const rightCompleted =
+  !!selectedUnableApp.rightEyePhoto ||
+  finalRightStatus === "Not Obtainable";
+
+const leftCompleted =
+  !!selectedUnableApp.leftEyePhoto ||
+  finalLeftStatus === "Not Obtainable";
+
+if (rightCompleted && leftCompleted) {
+  updateData.status = AppointmentStatus.DONE_FUNDUS;
+}
+    await updateDoc(
+
+      doc(
+        db,
+        "appointments",
+        selectedUnableApp.firestoreId
+      ),
+
+      updateData
+
+    );
+
+    addActivityLog(
+
+      "Marked Image Not Obtainable",
+
+      selectedUnableApp.patientName
+
+    );
+
+    setShowImageNotObtainable(false);
+
+  } catch (error) {
+
+    console.error(error);
 
   }
 
@@ -2769,8 +2923,29 @@ const tomorrowTCA = useMemo(() => {
 }
                        </button>
                     </div>
-                    
-                     {(app.rightEyePhoto || app.leftEyePhoto) && (
+
+{/* Image Not Obtainable */}
+<button
+  onClick={() => {
+
+    setSelectedUnableApp(app);
+
+    setUnableEye("right");
+
+    setUnableReason("Dense Cataract");
+
+    setUnableOtherReason("");
+
+    setShowImageNotObtainable(true);
+
+  }}
+  className="w-full mt-2 py-2 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+>
+  <CameraOff size={14} />
+  Image Not Obtainable
+</button>
+
+{(app.rightEyePhoto || app.leftEyePhoto) && (
                        <button 
   onClick={() => {
 
@@ -4023,6 +4198,288 @@ setSelectedReviewSummary(app);
 
       {/* Image Review Modal */}
       <AnimatePresence>
+      {/* Image Not Obtainable Modal */}
+<AnimatePresence>
+  {showImageNotObtainable && selectedUnableApp && (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => setShowImageNotObtainable(false)}
+        className="absolute inset-0 bg-slate-900/80 backdrop-blur-md"
+      />
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9, y: 30 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.9, y: 30 }}
+        transition={{ duration: 0.2 }}
+        className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl"
+      >
+
+        {/* Header */}
+        <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-6 py-5 text-white">
+
+          <div className="flex items-center gap-3">
+
+            <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center">
+
+              <CameraOff size={24} />
+
+            </div>
+
+            <div>
+
+              <h2 className="text-xl font-black">
+                Image Not Obtainable
+              </h2>
+
+              <p className="text-sm text-white/90">
+                Record image capture status
+              </p>
+
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* Body */}
+<div className="p-6">
+
+  {/* Patient */}
+  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+      Patient
+    </p>
+
+    <p className="mt-1 text-lg font-black text-slate-800">
+      {selectedUnableApp.patientName}
+    </p>
+
+    <p className="text-xs text-slate-500">
+      {selectedUnableApp.icNumber}
+    </p>
+  </div>
+
+  {/* Eye Selection */}
+  <div className="mt-6">
+
+    <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3">
+      Affected Eye
+    </p>
+
+    <div className="grid grid-cols-3 gap-3">
+
+      {/* Right */}
+      <button
+        onClick={() => setUnableEye("right")}
+        className={`rounded-2xl border py-3 px-2 transition-all ${
+          unableEye === "right"
+            ? "border-amber-500 bg-amber-50 shadow-md"
+            : "border-slate-200 hover:border-amber-300 hover:bg-amber-50/40"
+        }`}
+      >
+        <div className="flex flex-col items-center">
+
+          <Eye
+            size={18}
+            className={
+              unableEye === "right"
+                ? "text-amber-600"
+                : "text-slate-400"
+            }
+          />
+
+          <p className="mt-1 text-xs font-black">
+            Right
+          </p>
+
+          <p className="text-[10px] text-slate-400">
+            RE
+          </p>
+
+        </div>
+      </button>
+
+      {/* Left */}
+      <button
+        onClick={() => setUnableEye("left")}
+        className={`rounded-2xl border py-3 px-2 transition-all ${
+          unableEye === "left"
+            ? "border-amber-500 bg-amber-50 shadow-md"
+            : "border-slate-200 hover:border-amber-300 hover:bg-amber-50/40"
+        }`}
+      >
+        <div className="flex flex-col items-center">
+
+          <Eye
+            size={18}
+            className={
+              unableEye === "left"
+                ? "text-amber-600"
+                : "text-slate-400"
+            }
+          />
+
+          <p className="mt-1 text-xs font-black">
+            Left
+          </p>
+
+          <p className="text-[10px] text-slate-400">
+            LE
+          </p>
+
+        </div>
+      </button>
+
+      {/* Both */}
+      <button
+        onClick={() => setUnableEye("both")}
+        className={`rounded-2xl border py-3 px-2 transition-all ${
+          unableEye === "both"
+            ? "border-amber-500 bg-amber-50 shadow-md"
+            : "border-slate-200 hover:border-amber-300 hover:bg-amber-50/40"
+        }`}
+      >
+        <div className="flex flex-col items-center">
+
+          <ScanEye
+            size={18}
+            className={
+              unableEye === "both"
+                ? "text-amber-600"
+                : "text-slate-400"
+            }
+          />
+
+          <p className="mt-1 text-xs font-black">
+            Both
+          </p>
+
+          <p className="text-[10px] text-slate-400">
+            RE + LE
+          </p>
+
+        </div>
+      </button>
+
+    </div>
+
+  </div>
+
+  {/* Reason */}
+  <div className="mt-6">
+
+    <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3">
+      Reason
+    </p>
+
+    <div className="grid grid-cols-2 gap-3">
+
+      {[
+        "Dense Cataract",
+        "Small Pupil",
+        "Corneal Opacity",
+        "Vitreous Haemorrhage",
+        "Poor Fixation",
+        "Patient Uncooperative",
+        "Patient Refused",
+        "Equipment Issue",
+        "Others"
+      ].map((reason) => (
+
+        <button
+          key={reason}
+          onClick={() => setUnableReason(reason)}
+          className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+            unableReason === reason
+              ? "border-amber-500 bg-amber-50 shadow-sm"
+              : "border-slate-200 hover:border-amber-300 hover:bg-amber-50/40"
+          }`}
+        >
+
+          <div className="flex items-center justify-between">
+
+            <span
+              className={`text-sm font-bold ${
+                unableReason === reason
+                  ? "text-amber-700"
+                  : "text-slate-700"
+              }`}
+            >
+              {reason}
+            </span>
+
+            {unableReason === reason && (
+              <CheckCircle2
+                size={16}
+                className="text-amber-600"
+              />
+            )}
+
+          </div>
+
+        </button>
+
+      ))}
+
+    </div>
+
+    {unableReason === "Others" && (
+
+      <div className="mt-4">
+
+        <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-2">
+          Additional Notes
+        </p>
+
+        <textarea
+          value={unableOtherReason}
+          onChange={(e) => setUnableOtherReason(e.target.value)}
+          rows={3}
+          className="w-full rounded-xl border border-slate-200 px-3 py-2 outline-none resize-none focus:border-amber-400 focus:ring-2 focus:ring-amber-100"
+          placeholder="Please specify..."
+        />
+
+      </div>
+
+    )}
+
+  </div>
+
+</div>
+
+        {/* Footer */}
+        <div className="flex gap-3 border-t border-slate-100 p-5">
+
+          <button
+            onClick={() => setShowImageNotObtainable(false)}
+            className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 font-bold text-slate-600 transition hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+
+          <button
+  onClick={saveImageNotObtainable}
+  disabled={
+    unableReason === "Others" &&
+    !unableOtherReason.trim()
+  }
+  className="flex-1 rounded-xl bg-amber-500 hover:bg-amber-600 py-2.5 font-bold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+>
+  Save Status
+</button>
+
+        </div>
+
+      </motion.div>
+
+    </div>
+  )}
+</AnimatePresence>
         {selectedPhotoApp && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
             <motion.div 
