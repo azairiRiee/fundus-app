@@ -861,7 +861,7 @@ return () => {
   }
 
 }, [appointments]);
-*/
+
 
 // Sync Activity Logs with localStorage
 useEffect(() => {
@@ -909,7 +909,7 @@ useEffect(() => {
   }
 
 }, [users]);
-
+*/
 
 // Sync Current User
 useEffect(() => {
