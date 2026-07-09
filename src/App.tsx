@@ -30,7 +30,9 @@ import {
   ScanEye,
   EyeOff,
   Key,
-  Activity
+  Activity,
+  AlertTriangle,
+  CircleOff
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -2829,10 +2831,40 @@ const tomorrowTCA = useMemo(() => {
                                 className="w-8 h-8 rounded-full border-2 border-white overflow-hidden bg-slate-100 flex items-center justify-center relative group/btn shadow-sm"
                               >
                                 {photo ? (
-                                  <img src={photo} className="w-full h-full object-cover" alt="" />
-                                ) : (
-                                  <span className="text-[10px] font-bold text-slate-400">{eye === 'right' ? 'R' : 'L'}</span>
-                                )}
+
+  <img
+    src={photo}
+    className="w-full h-full object-cover"
+    alt=""
+  />
+
+) : (
+  (() => {
+
+    const imageStatus =
+      eye === "right"
+        ? app.rightEyeImageStatus
+        : app.leftEyeImageStatus;
+
+    if (imageStatus === "Not Obtainable") {
+
+      return (
+        <CircleOff
+          size={15}
+          className="text-amber-600"
+        />
+      );
+
+    }
+
+    return (
+      <span className="text-[10px] font-bold text-slate-400">
+        {eye === "right" ? "R" : "L"}
+      </span>
+    );
+
+  })()
+)}
                               </button>
                             );
                           })}
@@ -2871,79 +2903,125 @@ const tomorrowTCA = useMemo(() => {
                   <div className="space-y-2 mb-4">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-1 px-1">Upload Images</p>
                      <div className="grid grid-cols-2 gap-2">
-                       <button 
-                         disabled={uploadingImageId === `${app.id}-right`}
-                         onClick={() => {
-                           const input = document.createElement('input');
-                           input.type = 'file';
-                           input.accept = 'image/*';
-                           input.onchange = (e) => handleImageUpload(app.id, 'right', e as any);
-                           input.click();
-                         }}
-                         className={`py-2 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
-                           app.rightEyePhoto
-                             ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
-                             : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'
-                         }`}
-                       >
-                         { app.rightEyePhoto ? <CheckCircle2 size={10} /> : <Plus size={10} /> }
+                       <button
+  disabled={
+    uploadingImageId === `${app.id}-right` ||
+    !!app.rightEyePhoto ||
+    app.rightEyeImageStatus === "Not Obtainable"
+  }
+  onClick={() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = (e) =>
+      handleImageUpload(app.id, "right", e as any);
+    input.click();
+  }}
+  className={`py-2 rounded-xl text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 disabled:cursor-default ${
+    app.rightEyePhoto
+      ? "bg-emerald-50 text-emerald-600 border border-emerald-100"
+      : app.rightEyeImageStatus === "Not Obtainable"
+      ? "bg-amber-50 text-amber-700 border border-amber-200"
+      : "bg-blue-600 text-white shadow-md hover:bg-blue-700"
+  }`}
+>
+  {app.rightEyePhoto ? (
+    <CheckCircle2 size={10} />
+  ) : app.rightEyeImageStatus === "Not Obtainable" ? (
+    <AlertTriangle size={10} />
+  ) : (
+    <Plus size={10} />
+  )}
 
-{
-  uploadingImageId === `${app.id}-right`
-    ? 'Uploading...'
-    : 'Right (RE)'
-}
-                       </button>
-                       <button 
-                        disabled={
-  uploadingImageId === `${app.id}-left` ||
-  !app.rightEyePhoto
-}
-                         onClick={() => {
-                           const input = document.createElement('input');
-                           input.type = 'file';
-                           input.accept = 'image/*';
-                           input.onchange = (e) => handleImageUpload(app.id, 'left', e as any);
-                           input.click();
-                         }}
-                         className={`py-2 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 ${
-  app.leftEyePhoto
-    ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
-    : !app.rightEyePhoto
-    ? 'bg-slate-100 text-slate-400 border border-slate-200'
-    : 'bg-blue-600 text-white shadow-md hover:bg-blue-700'
-}`}
-                       >
-                         { app.leftEyePhoto ? <CheckCircle2 size={10} /> : <Plus size={10} /> }
+  {uploadingImageId === `${app.id}-right`
+    ? "Uploading..."
+    : app.rightEyeImageStatus === "Not Obtainable"
+    ? "RE Not Obtainable"
+    : "Right (RE)"}
+</button>
+                       <button
+  disabled={
+    uploadingImageId === `${app.id}-left` ||
+    (
+      !app.rightEyePhoto &&
+      app.rightEyeImageStatus !== "Not Obtainable"
+    ) ||
+    !!app.leftEyePhoto ||
+    app.leftEyeImageStatus === "Not Obtainable"
+  }
+  onClick={() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = (e) =>
+      handleImageUpload(app.id, "left", e as any);
+    input.click();
+  }}
+  className={`py-2 rounded-xl text-[9px] font-bold uppercase transition-all flex items-center justify-center gap-1.5 disabled:cursor-default ${
+    app.leftEyePhoto
+      ? "bg-emerald-50 text-emerald-600 border border-emerald-100"
+      : app.leftEyeImageStatus === "Not Obtainable"
+      ? "bg-amber-50 text-amber-700 border border-amber-200"
+      : (
+          !app.rightEyePhoto &&
+          app.rightEyeImageStatus !== "Not Obtainable"
+        )
+      ? "bg-slate-100 text-slate-400 border border-slate-200"
+      : "bg-blue-600 text-white shadow-md hover:bg-blue-700"
+  }`}
+>
+  {app.leftEyePhoto ? (
+    <CheckCircle2 size={10} />
+  ) : app.leftEyeImageStatus === "Not Obtainable" ? (
+    <AlertTriangle size={10} />
+  ) : (
+    <Plus size={10} />
+  )}
 
-{
-  uploadingImageId === `${app.id}-left`
-    ? 'Uploading...'
-    : 'Left (LE)'
-}
-                       </button>
+  {uploadingImageId === `${app.id}-left`
+    ? "Uploading..."
+    : app.leftEyeImageStatus === "Not Obtainable"
+    ? "LE Not Obtainable"
+    : "Left (LE)"}
+</button>
                     </div>
 
-{/* Image Not Obtainable */}
-<button
-  onClick={() => {
+{/* Image Status */}
+{(() => {
 
-    setSelectedUnableApp(app);
+  const rightCompleted =
+    !!app.rightEyePhoto ||
+    app.rightEyeImageStatus === "Not Obtainable";
 
-    setUnableEye("right");
+  const leftCompleted =
+    !!app.leftEyePhoto ||
+    app.leftEyeImageStatus === "Not Obtainable";
 
-    setUnableReason("Dense Cataract");
+  return !(rightCompleted && leftCompleted) && (
 
-    setUnableOtherReason("");
+    <button
+      onClick={() => {
 
-    setShowImageNotObtainable(true);
+        setSelectedUnableApp(app);
 
-  }}
-  className="w-full mt-2 py-2 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2"
->
-  <CameraOff size={14} />
-  Image Not Obtainable
-</button>
+        setUnableEye("right");
+
+        setUnableReason("Dense Cataract");
+
+        setUnableOtherReason("");
+
+        setShowImageNotObtainable(true);
+
+      }}
+      className="w-full mt-2 py-2 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+    >
+      <CameraOff size={14} />
+      Image Not Obtainable
+    </button>
+
+  );
+
+})()}
 
 {(app.rightEyePhoto || app.leftEyePhoto) && (
                        <button 
@@ -4498,21 +4576,72 @@ setSelectedReviewSummary(app);
               {/* Photo Area */}
               <div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
                 <div className="flex-1 flex items-center justify-center p-2 md:p-4 overflow-y-auto lg:overflow-hidden relative">
-                   <motion.img 
-  key={`${selectedPhotoApp?.app?.id}-${selectedPhotoApp?.eye}`}
-  drag={zoomScale > 1}
-                    dragMomentum={false}
-                    animate={{
-  scale: zoomScale,
-  x: zoomScale <= 1 ? 0 : undefined,
-  y: zoomScale <= 1 ? 0 : undefined,
-  cursor: zoomScale > 1 ? 'grab' : 'zoom-in'
-}}
-                    transition={{ type: 'spring', stiffness: 400, damping: 40 }}
-                    src={selectedPhotoApp?.eye === 'right' ? selectedPhotoApp?.app?.rightEyePhoto : selectedPhotoApp?.app?.leftEyePhoto} 
-                    className="form-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none" 
-                    alt="Fundus View" 
-                  />
+                   {(
+  selectedPhotoApp?.eye === "right"
+    ? selectedPhotoApp?.app?.rightEyePhoto
+    : selectedPhotoApp?.app?.leftEyePhoto
+) ? (
+
+  <motion.img
+    key={`${selectedPhotoApp?.app?.id}-${selectedPhotoApp?.eye}`}
+    drag={zoomScale > 1}
+    dragMomentum={false}
+    animate={{
+      scale: zoomScale,
+      x: zoomScale <= 1 ? 0 : undefined,
+      y: zoomScale <= 1 ? 0 : undefined,
+      cursor: zoomScale > 1 ? "grab" : "zoom-in",
+    }}
+    transition={{
+      type: "spring",
+      stiffness: 400,
+      damping: 40,
+    }}
+    src={
+      selectedPhotoApp?.eye === "right"
+        ? selectedPhotoApp?.app?.rightEyePhoto
+        : selectedPhotoApp?.app?.leftEyePhoto
+    }
+    className="form-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none"
+    alt="Fundus View"
+  />
+
+) : (
+
+  <div className="flex flex-col items-center justify-center text-center">
+
+    <CircleOff
+      size={80}
+      className="text-amber-500 mb-6"
+    />
+
+    <h2 className="text-3xl font-black text-white">
+      Image Not Obtainable
+    </h2>
+
+    <p className="mt-2 text-slate-300">
+      No fundus image available.
+    </p>
+
+    <div className="mt-8 rounded-2xl border border-amber-300 bg-amber-500/10 px-8 py-5">
+
+      <p className="text-xs font-black uppercase tracking-widest text-amber-300">
+        Reason
+      </p>
+
+      <p className="mt-2 text-xl font-bold text-white">
+        {
+          selectedPhotoApp?.eye === "right"
+            ? selectedPhotoApp?.app?.rightEyeImageReason
+            : selectedPhotoApp?.app?.leftEyeImageReason
+        }
+      </p>
+
+    </div>
+
+  </div>
+
+)}
                 </div>
                 
                 {/* Zoom Indicator */}
@@ -4550,7 +4679,19 @@ setSelectedReviewSummary(app);
                   {['right', 'left'].map(side => (
                     <button 
                       key={side}
-                      disabled={!(side === 'right' ? selectedPhotoApp?.app?.rightEyePhoto : selectedPhotoApp?.app?.leftEyePhoto)}
+                      disabled={
+!(
+side === "right"
+  ? (
+      selectedPhotoApp?.app?.rightEyePhoto ||
+      selectedPhotoApp?.app?.rightEyeImageStatus === "Not Obtainable"
+    )
+  : (
+      selectedPhotoApp?.app?.leftEyePhoto ||
+      selectedPhotoApp?.app?.leftEyeImageStatus === "Not Obtainable"
+    )
+)
+}
                       onClick={() => setSelectedPhotoApp(prev => prev ? ({ ...prev, eye: side as any }) : null)}
                       className={`px-4 py-2 rounded-xl font-bold text-xs transition-all ${
                         selectedPhotoApp?.eye === side 
@@ -4648,6 +4789,15 @@ setSelectedReviewSummary(app);
                         const isSelected = selectedPhotoApp?.eye === eye;
                         const details = eye === 'right' ? rightEyeDetails : leftEyeDetails;
                         const setDetails = eye === 'right' ? setRightEyeDetails : setLeftEyeDetails;
+                        const isNotObtainable =
+  eye === "right"
+    ? selectedPhotoApp?.app?.rightEyeImageStatus === "Not Obtainable"
+    : selectedPhotoApp?.app?.leftEyeImageStatus === "Not Obtainable";
+
+const imageReason =
+  eye === "right"
+    ? selectedPhotoApp?.app?.rightEyeImageReason
+    : selectedPhotoApp?.app?.leftEyeImageReason;
                         
                         return (
                           <div key={eye} className={isSelected ? 'block space-y-4' : 'hidden'}>
