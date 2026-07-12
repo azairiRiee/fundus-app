@@ -3523,12 +3523,17 @@ const tomorrowTCA = useMemo(() => {
     {app.status === AppointmentStatus.PENDING && (
 
   <button
-    onClick={() => markAsNoShow(app)}
-    className="w-full rounded-lg border border-rose-200 bg-rose-50 py-1.5 text-[9px] font-black uppercase tracking-widest text-rose-700 hover:bg-rose-600 hover:text-white transition-all flex items-center justify-center gap-1"
-  >
-    <UserX size={11} />
-    No Show
-  </button>
+  onClick={() =>
+    updateStatus(
+      app.firestoreId,
+      AppointmentStatus.NO_SHOW
+    )
+  }
+  className="flex-1 bg-white hover:bg-rose-600 hover:text-white text-rose-600 border border-rose-200 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1"
+>
+  <XCircle size={14} />
+  No Show
+</button>
 
 )}
  </>
