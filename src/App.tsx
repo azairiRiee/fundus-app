@@ -32,7 +32,8 @@ import {
   Key,
   Activity,
   AlertTriangle,
-  CircleOff
+  CircleOff,
+  UserX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -418,6 +419,25 @@ const [unableOtherReason, setUnableOtherReason] =
   const getUserDisplayName = (id: string) => {
     return users.find(u => u.id === id)?.displayName || id;
   };
+const isEyeCompleted = (
+  review?: string,
+  imageStatus?: string
+) => {
+  return !!review || imageStatus === "Not Obtainable";
+};
+
+const isReviewCompleted = (app: Appointment) => {
+  return (
+    isEyeCompleted(
+      app.rightEyeReview,
+      app.rightEyeImageStatus
+    ) &&
+    isEyeCompleted(
+      app.leftEyeReview,
+      app.leftEyeImageStatus
+    )
+  );
+};
 
   const addActivityLog = (action: string, patient: string = 'System', byOverride?: string) => {
     const logEntry: ActivityLog = {
@@ -679,9 +699,22 @@ reviewPendingPBOA:
   }, [appointments]);
 
   const isAppointmentComplete = (app: Appointment) => {
-    if (!app) return false;
-    return !!(app.rightEyePhoto && app.leftEyePhoto && app.rightEyeReview && app.leftEyeReview);
-  };
+  if (!app) return false;
+
+  const rightDone =
+    !!app.rightEyePhoto ||
+    app.rightEyeImageStatus === "Not Obtainable";
+
+  const leftDone =
+    !!app.leftEyePhoto ||
+    app.leftEyeImageStatus === "Not Obtainable";
+
+  return (
+    rightDone &&
+    leftDone &&
+    isReviewCompleted(app)
+  );
+};
 
   const patientHistory = selectedPhotoApp
   ? appointments.filter(app =>
@@ -1365,20 +1398,37 @@ uploadImage();
       !!selectedPhotoApp?.app?.rightEyeReview ||
       !!selectedPhotoApp?.app?.leftEyeReview;
 
-    const hasPhotos =
-      appToUpdate.rightEyePhoto &&
-      appToUpdate.leftEyePhoto;
+    const rightCompleted =
+  !!appToUpdate.rightEyePhoto ||
+  appToUpdate.rightEyeImageStatus === "Not Obtainable";
 
-    const hasReviews =
-      rightDetails?.status &&
-      leftDetails?.status;
+const leftCompleted =
+  !!appToUpdate.leftEyePhoto ||
+  appToUpdate.leftEyeImageStatus === "Not Obtainable";
 
-    let nextStatus =
-      AppointmentStatus.DONE_REVIEW;
+const hasFundusCompleted =
+  rightCompleted &&
+  leftCompleted;
 
-    if (hasPhotos && hasReviews) {
-      nextStatus = AppointmentStatus.DONE;
-    }
+const hasReviews =
+  isReviewCompleted({
+    ...appToUpdate,
+    rightEyeReview: rightReview,
+    leftEyeReview: leftReview,
+    rightEyeReviewDetails: rightDetails,
+    leftEyeReviewDetails: leftDetails
+  });
+
+let nextStatus =
+  AppointmentStatus.DONE_FUNDUS;
+
+if (
+  hasFundusCompleted &&
+  hasReviews
+) {
+  nextStatus =
+    AppointmentStatus.DONE;
+}
 
     await updateDoc(
       doc(
@@ -1807,7 +1857,8 @@ const appointmentDate = new Date(app.date);
 const matchesStatus = true;
         
         const hasPhotos = !!(app.rightEyePhoto || app.leftEyePhoto);
-        const hasBothReviews = !!(app.rightEyeReview && app.leftEyeReview);
+        const hasBothReviews =
+  isReviewCompleted(app);
         const isAbnormal = app.rightEyeReviewDetails?.status === 'Abnormal' || app.leftEyeReviewDetails?.status === 'Abnormal';
         const isNormal = hasBothReviews && app.rightEyeReviewDetails?.status === 'Normal' && app.leftEyeReviewDetails?.status === 'Normal';
         
@@ -3040,13 +3091,13 @@ const tomorrowTCA = useMemo(() => {
 
   }}
                          className={`w-full py-2 rounded-xl whitespace-nowrap text-[10px] disabled:opacity-50 disabled:cursor-not-allowed text-[10px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${
-                           (app.rightEyeReview && app.leftEyeReview)
+                           isReviewCompleted(app)
                              ? 'bg-indigo-50 text-indigo-600 border border-indigo-100'
                              : 'bg-slate-900 text-white shadow-lg shadow-slate-200 hover:bg-black'
                          }`}
                        >
-                         { (app.rightEyeReview && app.leftEyeReview) ? <CheckCircle2 size={12} /> : <Search size={12} /> }
-                         { (app.rightEyeReview && app.leftEyeReview) ? 'Review Complete' : 'Perform Clinical Review' }
+                         { isReviewCompleted(app) ? <CheckCircle2 size={12} /> : <Search size={12} /> }
+                         { isReviewCompleted(app) ? 'Review Complete' : 'Perform Clinical Review' }
                        </button>
                      )}
                   </div>
@@ -3209,7 +3260,7 @@ const tomorrowTCA = useMemo(() => {
       : 'border-l-emerald-500'
 
   } ${
-    (app.status === AppointmentStatus.DONE || app.status === AppointmentStatus.DONE_REVIEW)
+        app.status === AppointmentStatus.DONE
       ? 'bg-emerald-50/20'
       : app.status === AppointmentStatus.DONE_FUNDUS
       ? 'bg-blue-50/20'
@@ -3221,42 +3272,105 @@ const tomorrowTCA = useMemo(() => {
 
                       <td className="px-3 md:px-6 py-3 md:py-4">
                         <div className="flex flex-col items-center gap-1">
+                          {app.status === AppointmentStatus.NO_SHOW ? (
+
+  <div className="w-[92px] h-10 rounded-lg border border-rose-200 bg-rose-50 flex flex-col items-center justify-center">
+
+    <UserX
+      size={12}
+      className="text-rose-600"
+    />
+
+    <span className="text-[8px] font-black uppercase text-rose-700 mt-0.5">
+      No Show
+    </span>
+
+  </div>
+
+) : (
                           <div className="flex gap-2">
                             {['right', 'left'].map(eye => {
                               const photo = eye === 'right' ? app.rightEyePhoto : app.leftEyePhoto;
                               return (
                                     <div key={eye} className="relative w-10 h-10 group/photo">
                                       {photo ? (
-                                        <>
-                                          <button 
-                                            onClick={() => setSelectedPhotoApp({ app, eye: eye as any })} 
-                                            className="w-full h-full rounded-lg border border-slate-200 overflow-hidden hover:ring-2 hover:ring-blue-500 transition-all bg-white"
-                                          >
-                                            <img src={photo} className="w-full h-full object-cover" alt="" />
-                                          </button>
-                                          <button 
-                                            onClick={() => removeImage(app.id, eye as any)}
-                                            className="absolute -top-1 -right-1 bg-rose-500 text-white rounded-full p-0.5 opacity-0 group-hover/photo:opacity-100 transition-opacity shadow-sm z-10"
-                                          >
-                                            <XCircle size={10} />
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <label className="w-full h-full bg-slate-100 border border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center text-slate-400 cursor-pointer hover:bg-slate-200 transition-colors">
-                                          <Plus size={14} />
-                                          <span className="text-[7px] font-bold uppercase">{eye === 'right' ? 'RE' : 'LE'}</span>
-                                          <input 
-                                            type="file" 
-                                            className="hidden" 
-                                            accept="image/*" 
-                                            onChange={(e) => handleImageUpload(app.id, eye as any, e)}
-                                          />
-                                        </label>
-                                      )}
+
+  <>
+    <button
+      onClick={() => setSelectedPhotoApp({ app, eye: eye as any })}
+      className="w-full h-full rounded-lg border border-slate-200 overflow-hidden hover:ring-2 hover:ring-blue-500 transition-all bg-white"
+    >
+      <img
+        src={photo}
+        className="w-full h-full object-cover"
+        alt=""
+      />
+    </button>
+
+    <button
+      onClick={() => removeImage(app.id, eye as any)}
+      className="absolute -top-1 -right-1 bg-rose-500 text-white rounded-full p-0.5 opacity-0 group-hover/photo:opacity-100 transition-opacity shadow-sm z-10"
+    >
+      <XCircle size={10} />
+    </button>
+
+  </>
+
+) : (
+
+  (eye === "right"
+      ? app.rightEyeImageStatus === "Not Obtainable"
+      : app.leftEyeImageStatus === "Not Obtainable") ? (
+
+    <button
+      onClick={() =>
+        setSelectedPhotoApp({
+          app,
+          eye: eye as any
+        })
+      }
+      className="w-full h-full rounded-lg border border-amber-200 bg-amber-50 flex items-center justify-center hover:bg-amber-100 transition-all"
+    >
+      <CircleOff
+        size={18}
+        className="text-amber-600"
+      />
+    </button>
+
+  ) : (
+
+    <label className="w-full h-full bg-slate-100 border border-dashed border-slate-300 rounded-lg flex flex-col items-center justify-center text-slate-400 cursor-pointer hover:bg-slate-200 transition-colors">
+
+      <Plus size={14} />
+
+      <span className="text-[7px] font-bold uppercase">
+        {eye === "right" ? "RE" : "LE"}
+      </span>
+
+      <input
+        type="file"
+        className="hidden"
+        accept="image/*"
+        onChange={(e) =>
+          handleImageUpload(
+            app.id,
+            eye as any,
+            e
+          )
+        }
+      />
+
+    </label>
+
+  )
+
+)}
                                     </div>
                               );
-                            })}
-                          </div>
+                                })}
+  </div>
+
+)}
                           {(app.rightEyeUploadedBy || app.leftEyeUploadedBy) && (
                             <div className="flex flex-col items-center mt-1">
                               <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
@@ -3321,8 +3435,7 @@ const tomorrowTCA = useMemo(() => {
       <StatusBadge status={app.status} />
     </div>
 
-    {(app.status === AppointmentStatus.DONE ||
-      app.status === AppointmentStatus.DONE_REVIEW) && (
+    {app.status === AppointmentStatus.DONE && (
       <div className="flex flex-col mt-1">
 
         <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
@@ -3340,42 +3453,87 @@ const tomorrowTCA = useMemo(() => {
 </td>
                       <td className="px-6 py-4">
                         <div className="flex flex-wrap items-center gap-2">
+                          {app.status !== AppointmentStatus.NO_SHOW && (
+                            <>
                            <div className="flex gap-1">
-                             <button 
-                               onClick={() => {
-                                 const input = document.createElement('input');
-                                 input.type = 'file';
-                                 input.accept = 'image/*';
-                                 input.onchange = (e) => handleImageUpload(app.id, 'right', e as any);
-                                 input.click();
-                               }}
-                               className={`px-2 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all flex items-center gap-1 ${
-                                 app.rightEyePhoto
-                                   ? 'bg-emerald-50 text-emerald-600 border border-emerald-100 hover:bg-emerald-600 hover:text-white'
-                                   : 'bg-blue-600 text-white shadow hover:bg-blue-700'
-                               }`}
-                             >
-                               { app.rightEyePhoto ? <CheckCircle2 size={10} /> : <Plus size={10} /> }
-                               RE
-                             </button>
-                             <button 
-                               onClick={() => {
-                                 const input = document.createElement('input');
-                                 input.type = 'file';
-                                 input.accept = 'image/*';
-                                 input.onchange = (e) => handleImageUpload(app.id, 'left', e as any);
-                                 input.click();
-                               }}
-                               className={`px-2 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all flex items-center gap-1 ${
-                                 app.leftEyePhoto
-                                   ? 'bg-emerald-50 text-emerald-600 border border-emerald-100 hover:bg-emerald-600 hover:text-white'
-                                   : 'bg-blue-600 text-white shadow hover:bg-blue-700'
-                               }`}
-                             >
-                               { app.leftEyePhoto ? <CheckCircle2 size={10} /> : <Plus size={10} /> }
-                               LE
-                             </button>
+                             <button
+  disabled={
+    !!app.rightEyePhoto ||
+    app.rightEyeImageStatus === "Not Obtainable"
+  }
+  onClick={() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = (e) =>
+      handleImageUpload(app.id, "right", e as any);
+    input.click();
+  }}
+  className={`px-2 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all flex items-center gap-1 ${
+    app.rightEyePhoto
+      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+      : app.rightEyeImageStatus === "Not Obtainable"
+      ? "bg-amber-50 text-amber-700 border border-amber-200"
+      : "bg-blue-600 text-white hover:bg-blue-700 shadow"
+  }`}
+>
+  {app.rightEyePhoto ? (
+    <CheckCircle2 size={10} />
+  ) : app.rightEyeImageStatus === "Not Obtainable" ? (
+    <CircleOff size={10} />
+  ) : (
+    <Plus size={10} />
+  )}
+
+  RE
+</button>
+                             <button
+  disabled={
+    !!app.leftEyePhoto ||
+    app.leftEyeImageStatus === "Not Obtainable"
+  }
+  onClick={() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.onchange = (e) =>
+      handleImageUpload(app.id, "left", e as any);
+    input.click();
+  }}
+  className={`px-2 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all flex items-center gap-1 ${
+    app.leftEyePhoto
+      ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+      : app.leftEyeImageStatus === "Not Obtainable"
+      ? "bg-amber-50 text-amber-700 border border-amber-200"
+      : "bg-blue-600 text-white hover:bg-blue-700 shadow"
+  }`}
+>
+  {app.leftEyePhoto ? (
+    <CheckCircle2 size={10} />
+  ) : app.leftEyeImageStatus === "Not Obtainable" ? (
+    <CircleOff size={10} />
+  ) : (
+    <Plus size={10} />
+  )}
+
+  LE
+</button>
                            </div>
+                           {/* No Show */}
+    {app.status === AppointmentStatus.PENDING && (
+
+  <button
+    onClick={() => markAsNoShow(app)}
+    className="w-full rounded-lg border border-rose-200 bg-rose-50 py-1.5 text-[9px] font-black uppercase tracking-widest text-rose-700 hover:bg-rose-600 hover:text-white transition-all flex items-center justify-center gap-1"
+  >
+    <UserX size={11} />
+    No Show
+  </button>
+
+)}
+ </>
+
+    )}
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -3405,16 +3563,32 @@ setSelectedReviewSummary(app);
 
 }}
                               className={`w-full py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 border ${
-                                (app.rightEyeReview && app.leftEyeReview)
+                                isReviewCompleted(app)
                                   ? 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'
                                   : 'bg-blue-600 text-white border-blue-700 shadow-lg shadow-blue-100 hover:bg-blue-700'
                               }`}
                             >
                               <CheckCircle2 size={14} />
-                              Clinical Review
+                              Perform Clinical Review
                             </button>
                           )}
                           
+                          {app.status === AppointmentStatus.NO_SHOW ? (
+
+  <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-3 text-center">
+
+  <UserX
+    size={14}
+    className="mx-auto mb-1 text-rose-600"
+  />
+
+  <p className="text-[9px] text-rose-600 leading-4 font-medium">
+    Patient did not attend fundus examination appointment.
+  </p>
+
+</div>
+
+) : (
                           <div className="grid grid-cols-2 gap-2">
                             {['right', 'left'].map(eye => {
                               const review = eye === 'right' ? app.rightEyeReview : app.leftEyeReview;
@@ -3430,23 +3604,65 @@ setSelectedReviewSummary(app);
                                   </div>
                                   
                                   {review ? (
-                                    <>
-                                      <span className={`text-[10px] font-bold ${details?.status === 'Abnormal' ? 'text-rose-600' : 'text-emerald-600'} uppercase leading-none`}>
-                                        {details?.status || 'REVIEWED'}
-                                      </span>
-                                      {details?.status === 'Abnormal' && details?.abnormalTypes && details.abnormalTypes.length > 0 && (
-                                        <span className="text-[8px] font-medium text-slate-500 uppercase truncate">
-                                          {details.abnormalTypes.join(', ')}
-                                        </span>
-                                      )}
-                                    </>
-                                  ) : (
-                                    <span className="text-[9px] text-slate-300 italic font-medium uppercase tracking-tighter">Pending</span>
-                                  )}
+
+  <>
+    <span
+      className={`text-[10px] font-bold uppercase leading-none ${
+        details?.status === "Abnormal"
+          ? "text-rose-600"
+          : "text-emerald-600"
+      }`}
+    >
+      {details?.status || "Reviewed"}
+    </span>
+
+    {details?.status === "Abnormal" &&
+      details?.abnormalTypes &&
+      details.abnormalTypes.length > 0 && (
+
+        <span className="text-[8px] font-medium text-slate-500 uppercase truncate">
+          {details.abnormalTypes.join(", ")}
+        </span>
+
+    )}
+
+  </>
+
+) : (
+  (
+    eye === "right"
+      ? app.rightEyeImageStatus === "Not Obtainable"
+      : app.leftEyeImageStatus === "Not Obtainable"
+  ) ? (
+
+    <>
+      <span className="text-[10px] font-bold text-amber-600 uppercase leading-none">
+        Not Obtainable
+      </span>
+
+      <span className="text-[8px] text-slate-500 uppercase truncate">
+        {eye === "right"
+          ? app.rightEyeImageReason
+          : app.leftEyeImageReason}
+      </span>
+
+    </>
+
+  ) : (
+
+    <span className="text-[9px] text-slate-300 italic font-medium uppercase tracking-tighter">
+      Pending review
+    </span>
+
+  )
+)}
                                 </div>
                               );
-                            })}
+                                                        })}
                           </div>
+
+                        )}
+
                         </div>
                       </td>
                       <td className="px-6 py-4 text-right">
