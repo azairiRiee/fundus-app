@@ -3573,8 +3573,15 @@ setSelectedReviewSummary(app);
                                   : 'bg-blue-600 text-white border-blue-700 shadow-lg shadow-blue-100 hover:bg-blue-700'
                               }`}
                             >
-                              <CheckCircle2 size={14} />
-                              Perform Clinical Review
+                              {isReviewCompleted(app)
+  ? <CheckCircle2 size={14} />
+  : <Search size={14} />
+}
+
+{isReviewCompleted(app)
+  ? 'Clinical Review Done'
+  : 'Perform Clinical Review'
+}
                             </button>
                           )}
                           
