@@ -57,7 +57,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.5.0";
+const APP_VERSION = "v3.5.1";
 
 // --- Types & Constants ---
 
