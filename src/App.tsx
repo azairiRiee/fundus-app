@@ -283,6 +283,7 @@ export default function App() {
   const [summaryEye, setSummaryEye] = useState<'right' | 'left'>('right');
   const [selectedReviewSummary, setSelectedReviewSummary] = useState<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [hoveredReviewId, setHoveredReviewId] = useState<string | null>(null);
 
   const [showImageNotObtainable, setShowImageNotObtainable] = useState(false);
         useEffect(() => {
@@ -3320,14 +3321,14 @@ year:'numeric'
             <table className="w-full text-left border-collapse min-w-[950px] md:min-w-[800px]">
               <thead className="bg-slate-50/80 backdrop-blur-sm">
                 <tr className="border-b border-slate-200 bg-slate-200">
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">RE / LE Photos</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Patient Details</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Input By</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Schedule</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Fundus Actions</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Review Findings</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-right">Options</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">RE / LE Photos</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Patient Details</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Input By</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Schedule</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Status</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Fundus Actions</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Review Findings</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Options</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -3464,13 +3465,28 @@ year:'numeric'
   </div>
 
 )}
-                          {(app.rightEyeUploadedBy || app.leftEyeUploadedBy) && (
+                          {(
+  app.rightEyeUploadedBy ||
+  app.leftEyeUploadedBy ||
+  app.rightEyeImageStatus === "Not Obtainable" ||
+  app.leftEyeImageStatus === "Not Obtainable"
+) && (
                             <div className="flex flex-col items-center mt-1">
                               <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
                                 DONE BY:
                               </span>
                               <span className="text-xs text-slate-500 font-black uppercase tracking-tighter mt-0.5">
-                                {getUserDisplayName(app.rightEyeUploadedBy || app.leftEyeUploadedBy || '')}
+                                {getUserDisplayName(
+
+  app.rightEyeUploadedBy ||
+
+  app.leftEyeUploadedBy ||
+
+  app.imageStatusUpdatedBy ||
+
+  ''
+
+)}
                               </span>
                             </div>
                           )}
@@ -3637,7 +3653,9 @@ year:'numeric'
                       <td className="px-6 py-4">
                         <div className="flex flex-col gap-3 min-w-[200px]">
                           {(app.rightEyePhoto || app.leftEyePhoto) && (
-                            <button 
+                            <button
+                                onMouseEnter={() => setHoveredReviewId(app.id)}
+                                onMouseLeave={() => setHoveredReviewId(null)} 
                               onClick={() => {
 
   const isReviewed =
@@ -3667,13 +3685,25 @@ setSelectedReviewSummary(app);
                               }`}
                             >
                               {isReviewCompleted(app)
-  ? <CheckCircle2 size={14} />
-  : <Search size={14} />
+  ? (
+      hoveredReviewId === app.id
+        ? <Eye size={14} />
+        : <CheckCircle2 size={14} />
+    )
+  : (
+      <Search size={14} />
+    )
 }
 
 {isReviewCompleted(app)
-  ? 'Clinical Review Done'
-  : 'Perform Clinical Review'
+  ? (
+      hoveredReviewId === app.id
+        ? 'Review Details'
+        : 'Clinical Review Done'
+    )
+  : (
+      'Perform Clinical Review'
+    )
 }
                             </button>
                           )}
