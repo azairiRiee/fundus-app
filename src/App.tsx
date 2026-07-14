@@ -33,6 +33,8 @@ import {
   Activity,
   AlertTriangle,
   CircleOff,
+  ChevronLeft,
+  ChevronRight,
   UserX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -55,7 +57,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.4.0";
+const APP_VERSION = "v3.5.0";
 
 // --- Types & Constants ---
 
@@ -173,6 +175,14 @@ const PBOA_LIMIT = 10;
 
 // --- Helper Components ---
 
+const changeAnalyticsMonth = (direction: number) => {
+  setSelectedAnalyticsMonth(prev => {
+    const next = new Date(prev);
+    next.setMonth(next.getMonth() + direction);
+    return next;
+  });
+};
+
 const StatusBadge = ({ status }: { status: AppointmentStatus }) => {
   const configs = {
     [AppointmentStatus.PENDING]: "bg-slate-100 text-slate-700 border-slate-200",
@@ -254,7 +264,7 @@ export default function App() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   
-  
+  const [selectedAnalyticsMonth, setSelectedAnalyticsMonth] = useState(new Date());
   const [showTCASchedule, setShowTCASchedule] = useState(false);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [selectedPhotoApp, setSelectedPhotoApp] = useState<{app: Appointment, eye: 'right' | 'left'} | null>(null);
@@ -348,6 +358,32 @@ const [unableOtherReason, setUnableOtherReason] =
   selectedPhotoApp,
   editingAppointment
 ]);
+
+const changeAnalyticsMonth = (
+  direction: number
+) => {
+
+  setSelectedAnalyticsMonth(prev => {
+
+    const d = new Date(prev);
+
+    d.setMonth(
+      d.getMonth() + direction
+    );
+
+    return d;
+
+  });
+
+};
+
+const today = new Date();
+
+const isCurrentMonth =
+  selectedAnalyticsMonth.getMonth() === today.getMonth() &&
+  selectedAnalyticsMonth.getFullYear() ===
+    today.getFullYear();
+
   // Sync IC and Phone state when opening form
   useEffect(() => {
     if (isFormOpen && editingAppointment) {
@@ -547,9 +583,8 @@ const isReviewCompleted = (app: Appointment) => {
   
   // Calculate Monthly Stats
   const monthlyStats = useMemo(() => {
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+    const currentMonth = selectedAnalyticsMonth.getMonth();
+    const currentYear = selectedAnalyticsMonth.getFullYear();
     
     const thisMonthApps = appointments.filter(app => {
       if (!app || !app.date) return false;
@@ -568,7 +603,7 @@ const isReviewCompleted = (app: Appointment) => {
       // Overall still in queue (incomplete) (excluding no-show)
       totalPending: thisMonthApps.filter(a => !(a.rightEyePhoto && a.leftEyePhoto && a.rightEyeReview && a.leftEyeReview)).length
     };
-  }, [appointments]);
+  }, [appointments, selectedAnalyticsMonth]);
 
   const monthlyDepartmentStats = useMemo(() => {
 
@@ -655,7 +690,7 @@ const isReviewCompleted = (app: Appointment) => {
 
   };
 
-}, [appointments]);
+}, [appointments, selectedAnalyticsMonth]);
 
   const yearlyStats = useMemo(() => {
     const currentYear = new Date().getFullYear();
@@ -1484,29 +1519,58 @@ if (
     if (!appointments || appointments.length === 0) return;
     
     const headers = ['Date', 'Patient Name', 'IC Number', 'Phone', 'Diseases', 'Status', 'Right Eye Review', 'Left Eye Review', 'Created By'];
-    const rows = appointments.filter(app => !!app).map(app => [
-      app.date || '',
-      app.patientName || '',
-      app.icNumber || '',
-      app.phoneNumber || '',
-      (app.diseaseTypes || []).join('; ') + (app.otherDisease ? `; ${app.otherDisease}` : ''),
-      app.status || '',
-      (app.rightEyeReview || '').replace(/,/g, ' '),
-      (app.leftEyeReview || '').replace(/,/g, ' '),
-      app.createdBy || ''
-    ]);
+    const month = selectedAnalyticsMonth.getMonth();
+const year = selectedAnalyticsMonth.getFullYear();
+
+const monthlyAppointments = appointments.filter(app => {
+  if (!app || !app.date) return false;
+
+  const d = new Date(app.date);
+
+  return (
+    d.getMonth() === month &&
+    d.getFullYear() === year
+  );
+});
+
+const rows = monthlyAppointments.map(app => [
+  app.date || '',
+  app.patientName || '',
+  app.icNumber || '',
+  app.phoneNumber || '',
+  (app.diseaseTypes || []).join('; ') +
+    (app.otherDisease ? `; ${app.otherDisease}` : ''),
+  app.status || '',
+  (app.rightEyeReview || '').replace(/,/g, ' '),
+  (app.leftEyeReview || '').replace(/,/g, ' '),
+  app.createdBy || ''
+]);
 
     const csvContent = [headers, ...rows].map(e => e.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `Klinik_Kesihatan_Lintang_Fundus_Report_${new Date().toISOString().split('T')[0]}.csv`);
+    const fileMonth = selectedAnalyticsMonth.toLocaleString(
+  "en-US",
+  {
+    month: "long",
+    year: "numeric"
+  }
+).replace(" ", "_");
+
+link.setAttribute(
+  "download",
+  `Klinik_Kesihatan_Lintang_Fundus_Report_${fileMonth}.csv`
+);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    addActivityLog('Exported Monthly Summary CSV', `${appointments.length} records`);
+    addActivityLog(
+  'Exported Monthly Summary CSV',
+  `${monthlyAppointments.length} records`
+);
   };
 
   const upsertAppointment = async (
@@ -2675,20 +2739,56 @@ const tomorrowTCA = useMemo(() => {
   {/* Monthly Analytics */}
   <div className="col-span-2 lg:col-span-6 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
 
-    <div className="flex items-center justify-between gap-4">
+    <div className="flex items-center justify-between">
 
       <div>
         <h2 className="text-sm font-bold text-blue-600 uppercase tracking-widest mb-1">
           Monthly Analytics
         </h2>
 
-        <p className="text-slate-500 text-sm font-bold">
-  {new Date().toLocaleString('en-US', {
-    month: 'long',
-    year: 'numeric'
-  })}
+        <div className="flex items-center gap-3 mt-2">
+
+<button
+onClick={() => changeAnalyticsMonth(-1)}
+className="p-1 rounded-full hover:bg-slate-200"
+>
+<ChevronLeft size={18}/>
+</button>
+
+<p className="text-slate-600 text-sm font-bold min-w-[120px] text-center">
+{
+selectedAnalyticsMonth.toLocaleString(
+'en-US',
+{
+month:'long',
+year:'numeric'
+}
+)
+}
 </p>
-      </div>
+
+<button
+  disabled={isCurrentMonth}
+  onClick={() => changeAnalyticsMonth(1)}
+  className={`p-1 rounded-full transition-all ${
+    isCurrentMonth
+      ? "opacity-30 cursor-not-allowed"
+      : "hover:bg-slate-200"
+  }`}
+>
+  <ChevronRight size={18}/>
+</button>
+
+</div>
+  <button
+    onClick={exportToCSV}
+    className="mt-4 w-full bg-slate-900 border border-slate-800 hover:bg-black text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all"
+  >
+    <Download size={14}/>
+    Generate Monthly Summary
+  </button>
+
+</div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
 
@@ -3146,13 +3246,6 @@ const tomorrowTCA = useMemo(() => {
             </div>
             
             <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
-              <button 
-                onClick={exportToCSV}
-                className="w-full sm:w-auto justify-center bg-slate-900 border border-slate-800 hover:bg-black text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-xl active:scale-95"
-              >
-                 <Download size={14} />
-                 Generate Monthly Summary (CSV)
-              </button>
 
               <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
                 <Calendar size={16} className="text-slate-400" />
