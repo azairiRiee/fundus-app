@@ -35,6 +35,7 @@ import {
   CircleOff,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   UserX
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -57,7 +58,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.5.1";
+const APP_VERSION = "v3.5.3";
 
 // --- Types & Constants ---
 
@@ -280,6 +281,7 @@ export default function App() {
   const [isSavingReview, setIsSavingReview] = useState(false);
   const [isReviewViewMode, setIsReviewViewMode] = useState(false);
   const [selectedHistory, setSelectedHistory] = useState<Appointment | null>(null);
+  const [showPatientHistory, setShowPatientHistory] = useState(false);
   const [summaryEye, setSummaryEye] = useState<'right' | 'left'>('right');
   const [selectedReviewSummary, setSelectedReviewSummary] = useState<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -598,20 +600,50 @@ const isReviewCompleted = (app: Appointment) => {
     return {
       total: thisMonthApps.length,
       // Pending Fundus: Patients with at least one photo missing (excluding no-show)
-      fundusPending: thisMonthApps.filter(a => !a.rightEyePhoto || !a.leftEyePhoto).length,
+      fundusPending: thisMonthApps.filter(a => {
+
+  const rightDone =
+    !!a.rightEyePhoto ||
+    a.rightEyeImageStatus === "Not Obtainable";
+
+  const leftDone =
+    !!a.leftEyePhoto ||
+    a.leftEyeImageStatus === "Not Obtainable";
+
+  return (
+    a.status !== AppointmentStatus.NO_SHOW &&
+    !(rightDone && leftDone)
+  );
+
+}).length,
       // Pending Review: Patients who have photos but haven't finished both eye reviews (excluding no-show)
-      reviewPending: thisMonthApps.filter(a => (a.rightEyePhoto || a.leftEyePhoto) && (!a.rightEyeReview || !a.leftEyeReview)).length,
+      reviewPending: thisMonthApps.filter(a => {
+
+  if (a.status === AppointmentStatus.NO_SHOW)
+    return false;
+
+  const hasImage =
+    !!a.rightEyePhoto ||
+    !!a.leftEyePhoto;
+
+  return (
+    hasImage &&
+    !isReviewCompleted(a)
+  );
+
+}).length,
       // Overall still in queue (incomplete) (excluding no-show)
-      totalPending: thisMonthApps.filter(a => !(a.rightEyePhoto && a.leftEyePhoto && a.rightEyeReview && a.leftEyeReview)).length
+      totalPending: thisMonthApps.filter(a => a.status !== AppointmentStatus.DONE && a.status !== AppointmentStatus.NO_SHOW).length,
     };
   }, [appointments, selectedAnalyticsMonth]);
 
   const monthlyDepartmentStats = useMemo(() => {
 
-  const now = new Date();
+  const currentMonth =
+selectedAnalyticsMonth.getMonth();
 
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
+const currentYear =
+selectedAnalyticsMonth.getFullYear();
 
   const thisMonthApps = appointments.filter(app => {
 
@@ -752,14 +784,20 @@ reviewPendingPBOA:
   );
 };
 
-  const patientHistory = selectedPhotoApp
-  ? appointments.filter(app =>
-      app.icNumber === selectedPhotoApp.app.icNumber &&
-      app.id !== selectedPhotoApp.app.id
-    )
-    .sort((a, b) =>
-      (b.createdAt || 0) - (a.createdAt || 0)
-    )
+  const currentPatient =
+  selectedPhotoApp?.app || selectedReviewSummary;
+
+const patientHistory = currentPatient
+  ? appointments
+      .filter(
+        app =>
+          app.icNumber === currentPatient.icNumber &&
+          app.id !== currentPatient.id &&
+          app.status !== AppointmentStatus.NO_SHOW
+      )
+      .sort(
+        (a, b) => (b.createdAt || 0) - (a.createdAt || 0)
+      )
   : [];
 
  // Search & Filter State
@@ -1799,8 +1837,19 @@ const leftCompleted =
   !!selectedUnableApp.leftEyePhoto ||
   finalLeftStatus === "Not Obtainable";
 
-if (rightCompleted && leftCompleted) {
+// 🔥 NEW LOGIC
+const bothNotObtainable =
+  finalRightStatus === "Not Obtainable" &&
+  finalLeftStatus === "Not Obtainable";
+
+if (bothNotObtainable) {
+
+  updateData.status = AppointmentStatus.DONE;
+
+} else if (rightCompleted && leftCompleted) {
+
   updateData.status = AppointmentStatus.DONE_FUNDUS;
+
 }
     await updateDoc(
 
@@ -2781,6 +2830,9 @@ year:'numeric'
 </button>
 
 </div>
+
+  {currentUser?.role === UserRole.ADMIN && (
+
   <button
     onClick={exportToCSV}
     className="mt-4 w-full bg-slate-900 border border-slate-800 hover:bg-black text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all"
@@ -2788,6 +2840,8 @@ year:'numeric'
     <Download size={14}/>
     Generate Monthly Summary
   </button>
+
+)}
 
 </div>
 
@@ -3386,19 +3440,52 @@ year:'numeric'
                             {['right', 'left'].map(eye => {
                               const photo = eye === 'right' ? app.rightEyePhoto : app.leftEyePhoto;
                               return (
-                                    <div key={eye} className="relative w-10 h-10 group/photo">
+                                    <div key={eye} className="relative w-10 h-10 group/photo overflow-hidden rounded-lg">
                                       {photo ? (
 
   <>
     <button
-      onClick={() => setSelectedPhotoApp({ app, eye: eye as any })}
-      className="w-full h-full rounded-lg border border-slate-200 overflow-hidden hover:ring-2 hover:ring-blue-500 transition-all bg-white"
+  onClick={() => {
+
+    if (isReviewCompleted(app)) {
+
+      document.body.style.overflow = "hidden";
+
+      setShowPatientHistory(false);
+      setSelectedReviewSummary(app);
+
+      return;
+
+    }
+
+    setSelectedPhotoApp({
+      app,
+      eye: eye as any
+    });
+
+  }}
+      className={`w-full h-full rounded-lg overflow-hidden transition-all bg-white
+  ${
+    isReviewCompleted(app)
+      ? "border-emerald-300 hover:ring-2 hover:ring-emerald-500"
+      : "border-slate-200 hover:ring-2 hover:ring-blue-500"
+  }`}
     >
       <img
-        src={photo}
-        className="w-full h-full object-cover"
-        alt=""
-      />
+  src={photo}
+  className="w-full h-full object-cover"
+  alt=""
+/>
+
+  <div className="absolute inset-0 bg-black/45 opacity-0 group-hover/photo:opacity-100 transition-all duration-200 flex items-center justify-center">
+
+    <Eye
+  size={16}
+  className="text-white scale-90 group-hover/photo:scale-110 transition-transform duration-200"
+/>
+
+  </div>
+
     </button>
 
     <button
@@ -3417,18 +3504,46 @@ year:'numeric'
       : app.leftEyeImageStatus === "Not Obtainable") ? (
 
     <button
-      onClick={() =>
-        setSelectedPhotoApp({
-          app,
-          eye: eye as any
-        })
-      }
-      className="w-full h-full rounded-lg border border-amber-200 bg-amber-50 flex items-center justify-center hover:bg-amber-100 transition-all"
+  onClick={() => {
+
+    if (isReviewCompleted(app)) {
+
+      document.body.style.overflow = "hidden";
+
+      setShowPatientHistory(false);
+      setSelectedReviewSummary(app);
+
+      return;
+
+    }
+
+    setSelectedPhotoApp({
+      app,
+      eye: eye as any
+    });
+
+  }}
+      className={`w-full h-full rounded-lg flex items-center justify-center transition-all
+  ${
+    isReviewCompleted(app)
+      ? "border-emerald-300 bg-emerald-50 hover:ring-2 hover:ring-emerald-500"
+      : "border-amber-200 bg-amber-50 hover:bg-amber-100"
+  }`}
     >
       <CircleOff
         size={18}
         className="text-amber-600"
       />
+
+  <div className="absolute inset-0 bg-black/45 opacity-0 group-hover/photo:opacity-100 transition-all duration-200 rounded-lg flex items-center justify-center">
+
+    <Eye
+  size={16}
+  className="text-white scale-90 group-hover/photo:scale-110 transition-transform duration-200"
+/>
+
+  </div>
+
     </button>
 
   ) : (
@@ -3545,18 +3660,40 @@ year:'numeric'
     </div>
 
     {app.status === AppointmentStatus.DONE && (
-      <div className="flex flex-col mt-1">
 
-        <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
-  {app.isEdited ? 'REVIEW EDITED BY:' : 'REVIEW BY:'}
-</span>
+  <div className="flex flex-col mt-1">
 
-        <span className="text-xs text-slate-500 font-black uppercase tracking-tighter mt-0.5">
-          {getUserDisplayName(app.updatedBy || '')}
-        </span>
+    <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
 
-      </div>
-    )}
+      {(app.rightEyeImageStatus === "Not Obtainable" &&
+        app.leftEyeImageStatus === "Not Obtainable")
+
+        ? "IMAGE STATUS BY:"
+
+        : (app.isEdited
+            ? "REVIEW EDITED BY:"
+            : "REVIEW BY:")}
+
+    </span>
+
+    <span className="text-xs text-slate-500 font-black uppercase tracking-tighter mt-0.5">
+
+      {getUserDisplayName(
+
+        (app.rightEyeImageStatus === "Not Obtainable" &&
+         app.leftEyeImageStatus === "Not Obtainable")
+
+          ? (app.imageStatusUpdatedBy || "")
+
+          : (app.updatedBy || "")
+
+      )}
+
+    </span>
+
+  </div>
+
+)}
 
   </div>
 </td>
@@ -3666,6 +3803,7 @@ year:'numeric'
 
     document.body.style.overflow = 'hidden';
 
+setShowPatientHistory(false);
 setSelectedReviewSummary(app);
 
   } else {
@@ -5324,8 +5462,14 @@ const imageReason =
           <button
   type="button"
   onClick={() => {
+
+  setTimeout(() => {
+
     setSelectedHistory(history);
-  }}
+
+  }, 120);
+
+}}
   className="text-[9px] font-bold text-blue-600 uppercase"
 >
   View
@@ -5362,23 +5506,45 @@ const imageReason =
           </div>
         )}
       </AnimatePresence>
-      <AnimatePresence>
+      <AnimatePresence
+  mode="wait"
+  initial={false}
+>
   {selectedHistory && (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[140] flex items-center justify-center p-4">
 
       <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
+  initial={{ opacity: 0 }}
+  animate={{ opacity: 1 }}
+  exit={{ opacity: 0 }}
+  transition={{
+    duration: 0.5
+  }}
         onClick={() => setSelectedHistory(null)}
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
       />
 
       <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.9 }}
-        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6"
+  initial={{
+    opacity: 0,
+    scale: 0.85,
+    y: 60
+  }}
+  animate={{
+    opacity: 1,
+    scale: 1,
+    y: 0
+  }}
+  exit={{
+    opacity: 0,
+    scale: 0.94,
+    y: 30
+  }}
+  transition={{
+    duration: 0.65,
+    ease: [0.16, 1, 0.3, 1]
+  }}
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6"
       >
 
         <div className="flex items-center justify-between mb-6">
@@ -5404,34 +5570,88 @@ const imageReason =
         <div className="bg-slate-50 rounded-2xl p-4 mb-4 text-center">
 
   <p className="text-[9px] uppercase font-black text-slate-400 tracking-wider">
-    Fundus Image Uploaded By
+    {selectedHistory.rightEyeImageStatus === "Not Obtainable" &&
+ selectedHistory.leftEyeImageStatus === "Not Obtainable"
+  ? "Image Status Updated By"
+  : "Fundus Image Uploaded By"}
   </p>
 
   <p className="text-xs font-bold text-slate-700 mt-1">
-    {getUserDisplayName(
-      selectedHistory.rightEyeUploadedBy ||
-      selectedHistory.leftEyeUploadedBy ||
-      '-'
-    )}
-  </p>
+  {getUserDisplayName(
+
+    (selectedHistory.rightEyeImageStatus === "Not Obtainable" &&
+     selectedHistory.leftEyeImageStatus === "Not Obtainable")
+
+      ? (selectedHistory.imageStatusUpdatedBy || "-")
+
+      : (
+          selectedHistory.rightEyeUploadedBy ||
+          selectedHistory.leftEyeUploadedBy ||
+          "-"
+        )
+
+  )}
+</p>
 
 </div>
 
-<div className="grid grid-cols-2 gap-4 mb-4">
+<div className="grid grid-cols-2 gap-6 mb-6">
 
-  {selectedHistory.rightEyePhoto && (
-    <img
-      src={selectedHistory.rightEyePhoto}
-      className="rounded-2xl border border-slate-200"
-    />
-  )}
+  {selectedHistory.rightEyePhoto ? (
 
-  {selectedHistory.leftEyePhoto && (
-    <img
-      src={selectedHistory.leftEyePhoto}
-      className="rounded-2xl border border-slate-200"
+  <img
+    src={selectedHistory.rightEyePhoto}
+    className="w-full aspect-square object-contain rounded-2xl border border-slate-200 bg-black"
+  />
+
+) : selectedHistory.rightEyeImageStatus === "Not Obtainable" ? (
+
+  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 flex flex-col items-center justify-center text-center">
+
+    <CircleOff
+      size={42}
+      className="text-amber-500 mb-3"
     />
-  )}
+
+    <p className="text-sm font-black uppercase text-amber-700">
+      Not Obtainable
+    </p>
+
+    <p className="text-xs text-slate-500 mt-2 uppercase">
+      {selectedHistory.rightEyeImageReason}
+    </p>
+
+  </div>
+
+) : null}
+
+  {selectedHistory.leftEyePhoto ? (
+
+  <img
+    src={selectedHistory.leftEyePhoto}
+    className="w-full aspect-square object-contain rounded-2xl border border-slate-200 bg-black"
+  />
+
+) : selectedHistory.leftEyeImageStatus === "Not Obtainable" ? (
+
+  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 flex flex-col items-center justify-center text-center">
+
+    <CircleOff
+      size={42}
+      className="text-amber-500 mb-3"
+    />
+
+    <p className="text-sm font-black uppercase text-amber-700">
+      Not Obtainable
+    </p>
+
+    <p className="text-xs text-slate-500 mt-2 uppercase">
+      {selectedHistory.leftEyeImageReason}
+    </p>
+
+  </div>
+
+) : null}
 
 </div>
 
@@ -5455,7 +5675,13 @@ const imageReason =
             </h3>
 
             <p className="text-sm font-bold text-slate-700">
-              {selectedHistory.rightEyeReviewDetails?.status || 'No Review'}
+              {selectedHistory.rightEyeImageStatus === "Not Obtainable"
+
+  ? "Not Obtainable"
+
+  : (selectedHistory.rightEyeReviewDetails?.status || "No Review")
+
+}
               {selectedHistory.rightEyeReviewDetails?.abnormalTypes?.length > 0 && (
   <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">
 
@@ -5476,7 +5702,13 @@ const imageReason =
             </p>
 
             <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap uppercase">
-              {selectedHistory.rightEyeReviewDetails?.comment || '-'}
+              {selectedHistory.rightEyeImageStatus === "Not Obtainable"
+
+  ? selectedHistory.rightEyeImageReason
+
+  : (selectedHistory.rightEyeReviewDetails?.comment || "-")
+
+}
             </p>
           </div>
 
@@ -5490,7 +5722,13 @@ const imageReason =
             </p>
 
             <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap uppercase">
-              {selectedHistory.leftEyeReviewDetails?.comment || '-'}
+              {selectedHistory.leftEyeImageStatus === "Not Obtainable"
+
+  ? selectedHistory.leftEyeImageReason
+
+  : (selectedHistory.leftEyeReviewDetails?.comment || "-")
+
+}
             </p>
           </div>
 
@@ -5536,25 +5774,76 @@ const imageReason =
   ref={containerRef}
 >
 
-  <div className="flex-1 flex items-center justify-center p-4 overflow-hidden relative">
+  {/* Photo Area */}
+              <div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
+                <div className="flex-1 flex items-center justify-center p-2 md:p-4 overflow-y-auto lg:overflow-hidden relative">
+                   {(
+  summaryEye === "right"
+    ? selectedReviewSummary.rightEyePhoto
+    : selectedReviewSummary.leftEyePhoto
+) ? (
 
-    <motion.img
-      key={summaryEye}
-      drag={zoomScale > 1}
-      dragMomentum={false}
-      animate={{
-        scale: zoomScale,
-        cursor: zoomScale > 1 ? 'grab' : 'zoom-in'
-      }}
-      transition={{ type: 'spring', stiffness: 400, damping: 40 }}
-      src={
-        summaryEye === 'right'
-          ? selectedReviewSummary.rightEyePhoto
-          : selectedReviewSummary.leftEyePhoto
-      }
-      className="summary-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none"
-      alt="Fundus View"
+  <motion.img
+    key={`${selectedReviewSummary.id}-${summaryEye}`}
+    drag={zoomScale > 1}
+    dragMomentum={false}
+    animate={{
+      scale: zoomScale,
+      x: zoomScale <= 1 ? 0 : undefined,
+      y: zoomScale <= 1 ? 0 : undefined,
+      cursor: zoomScale > 1 ? "grab" : "zoom-in",
+    }}
+    transition={{
+      type: "spring",
+      stiffness: 400,
+      damping: 40,
+    }}
+    src={
+      summaryEye === "right"
+        ? selectedReviewSummary.rightEyePhoto
+        : selectedReviewSummary.leftEyePhoto
+    }
+    className="summary-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none"
+    alt="Fundus View"
+  />
+
+) : (
+
+  <div className="flex flex-col items-center justify-center text-center">
+
+    <CircleOff
+      size={80}
+      className="text-amber-500 mb-6"
     />
+
+    <h2 className="text-3xl font-black text-white">
+      Image Not Obtainable
+    </h2>
+
+    <p className="mt-2 text-slate-300">
+      No fundus image available.
+    </p>
+
+    <div className="mt-8 rounded-2xl border border-amber-300 bg-amber-500/10 px-8 py-5">
+
+      <p className="text-xs font-black uppercase tracking-widest text-amber-300">
+        Reason
+      </p>
+
+      <p className="mt-2 text-xl font-bold text-white">
+        {
+          summaryEye === "right"
+            ? selectedReviewSummary.rightEyeImageReason
+            : selectedReviewSummary.leftEyeImageReason
+        }
+      </p>
+
+    </div>
+
+  </div>
+
+)}
+                </div>
 
   </div>
   {/* Zoom Indicator */}
@@ -5568,15 +5857,32 @@ const imageReason =
 <div className="hidden md:flex absolute bottom-20 left-1/2 -translate-x-1/2 z-20 bg-black/70 backdrop-blur-md px-8 py-3 rounded-2xl border border-white/10 flex items-center gap-6 whitespace-nowrap">
 
   <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
-    Fundus Image Uploaded By:
-  </p>
+  {(summaryEye === "right"
+      ? selectedReviewSummary.rightEyeImageStatus === "Not Obtainable"
+      : selectedReviewSummary.leftEyeImageStatus === "Not Obtainable")
+    ? "Image Status Updated By:"
+    : "Fundus Image Uploaded By:"}
+</p>
 
   <p className="text-[11px] font-bold text-white uppercase">
     {
       getUserDisplayName(
-        summaryEye === 'right'
-          ? selectedReviewSummary.rightEyeUploadedBy
-          : selectedReviewSummary.leftEyeUploadedBy
+        <p className="text-[11px] font-bold text-white uppercase">
+  {getUserDisplayName(
+
+    (summaryEye === "right"
+      ? selectedReviewSummary.rightEyeImageStatus === "Not Obtainable"
+      : selectedReviewSummary.leftEyeImageStatus === "Not Obtainable")
+
+      ? selectedReviewSummary.imageStatusUpdatedBy
+      : (
+          summaryEye === "right"
+            ? selectedReviewSummary.rightEyeUploadedBy
+            : selectedReviewSummary.leftEyeUploadedBy
+        )
+
+  )}
+</p>
       )
     }
   </p>
@@ -5694,6 +6000,85 @@ const imageReason =
 
 </div>
 
+{/* PREVIOUS VISITS */}
+<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+
+  <button
+    onClick={() =>
+      setShowPatientHistory(!showPatientHistory)
+    }
+    disabled={patientHistory.length === 0}
+    className={`w-full flex items-center justify-between px-4 py-3 transition-all ${
+      patientHistory.length === 0
+        ? "cursor-not-allowed bg-slate-50"
+        : "hover:bg-slate-50"
+    }`}
+  >
+
+    <div className="flex flex-col items-start">
+
+      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+        Previous Visits
+      </span>
+
+      <span className="text-xs font-bold text-slate-500">
+        {patientHistory.length} record
+        {patientHistory.length !== 1 && "s"}
+      </span>
+
+    </div>
+
+    <ChevronDown
+      size={18}
+      className={`transition-transform duration-300 ${
+        showPatientHistory ? "rotate-180" : ""
+      } ${
+        patientHistory.length === 0
+          ? "text-slate-300"
+          : "text-slate-500"
+      }`}
+    />
+
+  </button>
+
+  {showPatientHistory && patientHistory.length > 0 && (
+
+    <div className="border-t border-slate-200 p-3 space-y-2 max-h-56 overflow-y-auto">
+
+      {patientHistory.map(history => (
+
+        <button
+          key={history.id}
+          onClick={() => setSelectedHistory(history)}
+          className="w-full flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-200 px-3 py-2 transition-all group"
+        >
+
+          <div className="text-left">
+
+            <p className="text-xs font-bold text-slate-700">
+              {new Date(history.date).toLocaleDateString("en-GB")}
+            </p>
+
+            <p className="text-[10px] uppercase text-slate-400">
+              {history.department}
+            </p>
+
+          </div>
+
+          <Eye
+            size={15}
+            className="text-slate-400 group-hover:text-blue-600"
+          />
+
+        </button>
+
+      ))}
+
+    </div>
+
+  )}
+
+</div>
 {/* FINDINGS */}
 <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col flex-1 min-h-0 overflow-hidden">
   <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-4">
@@ -5715,21 +6100,39 @@ const imageReason =
 
       <div className="mt-4">
 
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-          Status
-        </p>
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+    Status
+  </p>
 
-        <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
-          selectedReviewSummary.rightEyeReviewDetails?.status === 'Abnormal'
-            ? 'bg-rose-100 text-rose-600'
-            : 'bg-emerald-100 text-emerald-600'
-        }`}>
+  {selectedReviewSummary.rightEyeImageStatus === "Not Obtainable" ? (
 
-          {selectedReviewSummary.rightEyeReviewDetails?.status || '-'}
+    <div className="space-y-2">
 
-        </span>
+      <span className="inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase bg-amber-100 text-amber-700">
+        Not Obtainable
+      </span>
 
-      </div>
+      <p className="text-xs font-bold uppercase text-slate-500">
+        {selectedReviewSummary.rightEyeImageReason}
+      </p>
+
+    </div>
+
+  ) : (
+
+    <span
+      className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
+        selectedReviewSummary.rightEyeReviewDetails?.status === "Abnormal"
+          ? "bg-rose-100 text-rose-600"
+          : "bg-emerald-100 text-emerald-600"
+      }`}
+    >
+      {selectedReviewSummary.rightEyeReviewDetails?.status || "-"}
+    </span>
+
+  )}
+
+</div>
 
       {selectedReviewSummary.rightEyeReviewDetails?.abnormalTypes?.length > 0 && (
         <div className="mt-5">
@@ -5806,21 +6209,39 @@ const imageReason =
 
       <div className="mt-4">
 
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-          Status
-        </p>
+  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+    Status
+  </p>
 
-        <span className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
-          selectedReviewSummary.leftEyeReviewDetails?.status === 'Abnormal'
-            ? 'bg-rose-100 text-rose-600'
-            : 'bg-emerald-100 text-emerald-600'
-        }`}>
+  {selectedReviewSummary.leftEyeImageStatus === "Not Obtainable" ? (
 
-          {selectedReviewSummary.leftEyeReviewDetails?.status || '-'}
+    <div className="space-y-2">
 
-        </span>
+      <span className="inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase bg-amber-100 text-amber-700">
+        Not Obtainable
+      </span>
 
-      </div>
+      <p className="text-xs font-bold uppercase text-slate-500">
+        {selectedReviewSummary.leftEyeImageReason}
+      </p>
+
+    </div>
+
+  ) : (
+
+    <span
+      className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
+        selectedReviewSummary.leftEyeReviewDetails?.status === "Abnormal"
+          ? "bg-rose-100 text-rose-600"
+          : "bg-emerald-100 text-emerald-600"
+      }`}
+    >
+      {selectedReviewSummary.leftEyeReviewDetails?.status || "-"}
+    </span>
+
+  )}
+
+</div>
 
       {selectedReviewSummary.leftEyeReviewDetails?.abnormalTypes?.length > 0 && (
         <div className="mt-5">
