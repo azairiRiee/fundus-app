@@ -9,7 +9,7 @@ import {
   Search, 
   Filter, 
   CheckCircle2, 
-  XCircle, 
+  XCircle,
   Clock, 
   Calendar, 
   User as UserIcon, 
@@ -58,7 +58,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.5.3";
+const APP_VERSION = "v3.5.4";
 
 // --- Types & Constants ---
 
@@ -3440,7 +3440,7 @@ year:'numeric'
                             {['right', 'left'].map(eye => {
                               const photo = eye === 'right' ? app.rightEyePhoto : app.leftEyePhoto;
                               return (
-                                    <div key={eye} className="relative w-10 h-10 group/photo overflow-hidden rounded-lg">
+                                    <div key={eye} className="relative w-11 h-11 group/photo overflow-visible">
                                       {photo ? (
 
   <>
@@ -3486,13 +3486,6 @@ year:'numeric'
 
   </div>
 
-    </button>
-
-    <button
-      onClick={() => removeImage(app.id, eye as any)}
-      className="absolute -top-1 -right-1 bg-rose-500 text-white rounded-full p-0.5 opacity-0 group-hover/photo:opacity-100 transition-opacity shadow-sm z-10"
-    >
-      <XCircle size={10} />
     </button>
 
   </>
@@ -4783,7 +4776,7 @@ setSelectedReviewSummary(app);
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.9, y: 30 }}
         transition={{ duration: 0.2 }}
-        className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl"
+        className="relative z-10 w-full max-w-xl max-h-[88vh] overflow-hidden rounded-3xl bg-white shadow-2xl flex flex-col"
       >
 
         {/* Header */}
@@ -4814,15 +4807,15 @@ setSelectedReviewSummary(app);
         </div>
 
         {/* Body */}
-<div className="p-6">
+<div className="flex-1 overflow-y-auto p-5">
 
   {/* Patient */}
-  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
     <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
       Patient
     </p>
 
-    <p className="mt-1 text-lg font-black text-slate-800">
+    <p className="mt-1 text-base font-black text-slate-800">
       {selectedUnableApp.patientName}
     </p>
 
@@ -4843,7 +4836,7 @@ setSelectedReviewSummary(app);
       {/* Right */}
       <button
         onClick={() => setUnableEye("right")}
-        className={`rounded-2xl border py-3 px-2 transition-all ${
+        className={`rounded-2xl border py-2 px-1 transition-all ${
           unableEye === "right"
             ? "border-amber-500 bg-amber-50 shadow-md"
             : "border-slate-200 hover:border-amber-300 hover:bg-amber-50/40"
@@ -4944,7 +4937,7 @@ setSelectedReviewSummary(app);
       Reason
     </p>
 
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
 
       {[
         "Dense Cataract",
@@ -4961,7 +4954,7 @@ setSelectedReviewSummary(app);
         <button
           key={reason}
           onClick={() => setUnableReason(reason)}
-          className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+          className={`rounded-xl border px-3 py-2 text-left transition-all ${
             unableReason === reason
               ? "border-amber-500 bg-amber-50 shadow-sm"
               : "border-slate-200 hover:border-amber-300 hover:bg-amber-50/40"
@@ -4971,7 +4964,7 @@ setSelectedReviewSummary(app);
           <div className="flex items-center justify-between">
 
             <span
-              className={`text-sm font-bold ${
+              className={`text-xs font-bold ${
                 unableReason === reason
                   ? "text-amber-700"
                   : "text-slate-700"
@@ -5020,7 +5013,7 @@ setSelectedReviewSummary(app);
 </div>
 
         {/* Footer */}
-        <div className="flex gap-3 border-t border-slate-100 p-5">
+        <div className="sticky bottom-0 bg-white border-t border-slate-200 p-4 flex gap-3">
 
           <button
             onClick={() => setShowImageNotObtainable(false)}
@@ -5999,86 +5992,6 @@ const imageReason =
   </p>
 
 </div>
-
-{/* PREVIOUS VISITS */}
-<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-
-  <button
-    onClick={() =>
-      setShowPatientHistory(!showPatientHistory)
-    }
-    disabled={patientHistory.length === 0}
-    className={`w-full flex items-center justify-between px-4 py-3 transition-all ${
-      patientHistory.length === 0
-        ? "cursor-not-allowed bg-slate-50"
-        : "hover:bg-slate-50"
-    }`}
-  >
-
-    <div className="flex flex-col items-start">
-
-      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-        Previous Visits
-      </span>
-
-      <span className="text-xs font-bold text-slate-500">
-        {patientHistory.length} record
-        {patientHistory.length !== 1 && "s"}
-      </span>
-
-    </div>
-
-    <ChevronDown
-      size={18}
-      className={`transition-transform duration-300 ${
-        showPatientHistory ? "rotate-180" : ""
-      } ${
-        patientHistory.length === 0
-          ? "text-slate-300"
-          : "text-slate-500"
-      }`}
-    />
-
-  </button>
-
-  {showPatientHistory && patientHistory.length > 0 && (
-
-    <div className="border-t border-slate-200 p-3 space-y-2 max-h-56 overflow-y-auto">
-
-      {patientHistory.map(history => (
-
-        <button
-          key={history.id}
-          onClick={() => setSelectedHistory(history)}
-          className="w-full flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-200 px-3 py-2 transition-all group"
-        >
-
-          <div className="text-left">
-
-            <p className="text-xs font-bold text-slate-700">
-              {new Date(history.date).toLocaleDateString("en-GB")}
-            </p>
-
-            <p className="text-[10px] uppercase text-slate-400">
-              {history.department}
-            </p>
-
-          </div>
-
-          <Eye
-            size={15}
-            className="text-slate-400 group-hover:text-blue-600"
-          />
-
-        </button>
-
-      ))}
-
-    </div>
-
-  )}
-
-</div>
 {/* FINDINGS */}
 <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col flex-1 min-h-0 overflow-hidden">
   <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-4">
@@ -6306,6 +6219,88 @@ const imageReason =
 
     </div>
       </div>
+        </div>
+
+{/* PREVIOUS VISITS */}
+<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+
+  <button
+    onClick={() =>
+      setShowPatientHistory(!showPatientHistory)
+    }
+    disabled={patientHistory.length === 0}
+    className={`w-full flex items-center justify-between px-4 py-3 transition-all ${
+      patientHistory.length === 0
+        ? "cursor-not-allowed bg-slate-50"
+        : "hover:bg-slate-50"
+    }`}
+  >
+
+    <div className="flex flex-col items-start">
+
+      <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+        Previous Visits
+      </span>
+
+      <span className="text-xs font-bold text-slate-500">
+        {patientHistory.length} record
+        {patientHistory.length !== 1 && "s"}
+      </span>
+
+    </div>
+
+    <ChevronDown
+      size={18}
+      className={`transition-transform duration-300 ${
+        showPatientHistory ? "rotate-180" : ""
+      } ${
+        patientHistory.length === 0
+          ? "text-slate-300"
+          : "text-slate-500"
+      }`}
+    />
+
+  </button>
+
+  {showPatientHistory && patientHistory.length > 0 && (
+
+    <div className="border-t border-slate-200 p-3 space-y-2 max-h-56 overflow-y-auto">
+
+      {patientHistory.map(history => (
+
+        <button
+          key={history.id}
+          onClick={() => setSelectedHistory(history)}
+          className="w-full flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-200 px-3 py-2 transition-all group"
+        >
+
+          <div className="text-left">
+
+            <p className="text-xs font-bold text-slate-700">
+              {new Date(history.date).toLocaleDateString("en-GB")}
+            </p>
+
+            <p className="text-[10px] uppercase text-slate-400">
+              {history.department}
+            </p>
+
+          </div>
+
+          <Eye
+            size={15}
+            className="text-slate-400 group-hover:text-blue-600"
+          />
+
+        </button>
+
+      ))}
+
+    </div>
+
+  )}
+
+</div>
+
 <button
   onClick={() => {
 
@@ -6321,8 +6316,6 @@ const imageReason =
 >
   Edit Review
 </button>
-
-  </div>
 
 </div>
   </div>
