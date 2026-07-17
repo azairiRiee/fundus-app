@@ -69,7 +69,7 @@ enum UserRole {
 
 interface User {
   id: string;
-  password?: string;
+  password?: string;f
   role: UserRole;
 
   displayName: string;
@@ -902,8 +902,6 @@ const unsubscribeUsers = onSnapshot(
       });
 
     }
-
-    console.log("USERS SYNC", firestoreUsers);
 
     setUsers(firestoreUsers);
 
@@ -5537,7 +5535,7 @@ const imageReason =
     duration: 0.65,
     ease: [0.16, 1, 0.3, 1]
   }}
-        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-y-auto p-6"
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6"
       >
 
         <div className="flex items-center justify-between mb-6">
