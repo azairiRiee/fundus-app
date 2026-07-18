@@ -58,7 +58,7 @@ import {
   getDocs
 } from 'firebase/firestore';
 
-const APP_VERSION = "v3.5.4";
+const APP_VERSION = "v3.6";
 
 // --- Types & Constants ---
 
@@ -200,6 +200,32 @@ const StatusBadge = ({ status }: { status: AppointmentStatus }) => {
   );
 };
 
+const formatIC = (value: string) => {
+  const digits = value.replace(/\D/g, "").slice(0, 12);
+
+  if (digits.length <= 6) return digits;
+  if (digits.length <= 8)
+    return `${digits.slice(0, 6)}-${digits.slice(6)}`;
+
+  return `${digits.slice(0, 6)}-${digits.slice(6, 8)}-${digits.slice(8)}`;
+};
+
+const normalizeIC = (ic: string) => ic.replace(/\D/g, "");
+
+const isCurrentYear = (date: string) => {
+  return new Date(date).getFullYear() === new Date().getFullYear();
+};
+
+const formatDisplayDate = (date: string) => {
+  const d = new Date(date);
+
+  return d.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
+};
+
 // --- Main Application ---
 
 export default function App() {
@@ -251,9 +277,7 @@ export default function App() {
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
-  const [newDisplayName, setNewDisplayName] = useState(
-  currentUser?.displayName || ''
-);
+  const [newDisplayName, setNewDisplayName] = useState(currentUser?.displayName || '');
 
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
@@ -286,6 +310,12 @@ export default function App() {
   const [selectedReviewSummary, setSelectedReviewSummary] = useState<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredReviewId, setHoveredReviewId] = useState<string | null>(null);
+
+  const [isICLookupOpen, setIsICLookupOpen] = useState(false);
+  const [lookupIC, setLookupIC] = useState("");
+  const [existingPatient, setExistingPatient] = useState<Appointment | null>(null);
+  const [duplicatePatient, setDuplicatePatient] = useState<Appointment | null>(null);
+  const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
 
   const [showImageNotObtainable, setShowImageNotObtainable] = useState(false);
         useEffect(() => {
@@ -387,6 +417,46 @@ const isCurrentMonth =
   selectedAnalyticsMonth.getFullYear() ===
     today.getFullYear();
 
+  const handlePatientLookup = () => {
+
+  const patient =
+    appointments
+      .filter(
+        a => normalizeIC(a.icNumber) === normalizeIC(lookupIC)
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.date).getTime() -
+          new Date(a.date).getTime()
+      )[0] || null;
+
+  const duplicate = appointments.find(
+  a => normalizeIC(a.icNumber) === normalizeIC(lookupIC)
+) || null;
+
+console.log("Duplicate:", duplicate);
+
+  setExistingPatient(patient);
+
+  setFormIC(formatIC(lookupIC));
+
+  if (patient) {
+    setFormPhone(patient.phoneNumber);
+  } else {
+    setFormPhone("");
+  }
+
+  if (duplicate) {
+    setDuplicatePatient(duplicate);
+    setShowDuplicateWarning(true);
+    setIsICLookupOpen(false);
+    return;
+  }
+
+  setIsICLookupOpen(false);
+  setIsFormOpen(true);
+};
+
   // Sync IC and Phone state when opening form
   useEffect(() => {
     if (isFormOpen && editingAppointment) {
@@ -395,16 +465,15 @@ const isCurrentMonth =
       setFormDepartment(editingAppointment.department || 'OPD KKL'
 );
     } else if (isFormOpen) {
-  setFormIC('');
-  setFormPhone('');
 
-  setFormDepartment(
+  // Jangan reset kalau datang daripada Existing Patient
+ setFormDepartment(
     currentUser?.department || 'OPD KKL'
   );
 
   setSelectedDate(todayStr);
 }
-  }, [isFormOpen, editingAppointment, currentUser]);
+  }, [isFormOpen, editingAppointment, currentUser, existingPatient]);
 
   useEffect(() => {
     if (selectedPhotoApp) {
@@ -1312,11 +1381,81 @@ deleteDoc(
 
   // Appointment Handlers
   
+  const compressImage = (
+  file: File,
+  maxWidth = 1600,
+  quality = 0.92
+): Promise<File> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+
+      let { width, height } = img;
+
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext("2d");
+
+      if (!ctx) {
+        reject("Canvas error");
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        blob => {
+          if (!blob) {
+            reject("Compression failed");
+            return;
+          }
+
+          resolve(
+            new File([blob], file.name, {
+              type: "image/jpeg",
+              lastModified: Date.now(),
+            })
+          );
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+
+    img.onerror = reject;
+
+    img.src = URL.createObjectURL(file);
+  });
+};
+
   const uploadToCloudinary = async (file: File) => {
+
+  // Compress image first
+  const compressedFile = await compressImage(file);
+
+  console.log(
+    "Original:",
+    (file.size / 1024 / 1024).toFixed(2),
+    "MB"
+  );
+
+  console.log(
+    "Compressed:",
+    (compressedFile.size / 1024 / 1024).toFixed(2),
+    "MB"
+  );
 
   const formData = new FormData();
 
-  formData.append("file", file);
+  formData.append("file", compressedFile);
   formData.append("upload_preset", "fundus_upload");
 
   const response = await fetch(
@@ -1329,14 +1468,14 @@ deleteDoc(
 
   const data = await response.json();
 
-console.log(data);
+  console.log(data);
 
-return {
-  url: data.secure_url,
-  publicId: data.public_id
+  return {
+    url: data.secure_url,
+    publicId: data.public_id
+  };
 };
 
-};
   const handleImageUpload = (id: string, eye: 'right' | 'left', e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -1915,6 +2054,7 @@ if (bothNotObtainable) {
   const closeForm = () => {
     setIsFormOpen(false);
     setEditingAppointment(null);
+    setExistingPatient(null);
   };
 
   // Derived Values
@@ -2999,12 +3139,15 @@ year:'numeric'
   </button>
 
   <button
-    onClick={() => setIsFormOpen(true)}
-    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-sm transition-all active:scale-95"
-  >
-    <Plus size={18} />
-    New Appointment
-  </button>
+  onClick={() => {
+    setLookupIC("");
+    setIsICLookupOpen(true);
+  }}
+  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-sm transition-all active:scale-95"
+>
+  <Plus size={18} />
+  New Appointment
+</button>
 
 </div>
           </div>
@@ -4466,6 +4609,187 @@ setSelectedReviewSummary(app);
         )}
       </AnimatePresence>
 
+{showDuplicateWarning && duplicatePatient && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+    <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+
+      {/* Header */}
+      <div className="border-b px-6 py-4">
+        <h2 className="text-xl font-bold text-amber-600">
+          ⚠ Fundus Already Performed
+        </h2>
+        <p className="mt-1 text-sm text-slate-500">
+          This patient already has a completed fundus screening for this year.
+        </p>
+      </div>
+
+      {/* Body */}
+      <div className="space-y-4 px-6 py-5">
+
+        <div>
+          <p className="text-xs text-slate-500">Patient</p>
+          <p className="font-semibold">
+            {duplicatePatient.patientName}
+          </p>
+        </div>
+
+        <div>
+          <p className="text-xs text-slate-500">IC Number</p>
+          <p>{duplicatePatient.icNumber}</p>
+        </div>
+
+        <div>
+          <p className="text-xs text-slate-500">Fundus Date</p>
+          <p>{formatDisplayDate(duplicatePatient.date)}</p>
+        </div>
+
+        <div>
+          <p className="text-xs text-slate-500">Department</p>
+          <p>{duplicatePatient.department}</p>
+        </div>
+
+        <div>
+          <p className="text-xs text-slate-500">Status</p>
+          <StatusBadge status={duplicatePatient.status} />
+        </div>
+
+      </div>
+
+      {/* Footer */}
+      <div className="flex justify-end gap-3 border-t px-6 py-4">
+
+        <button
+          onClick={() => {
+  setShowDuplicateWarning(false);
+  setDuplicatePatient(null);
+  setLookupIC("");
+  setIsICLookupOpen(true);
+}}
+          className="rounded-lg border px-4 py-2"
+        >
+          Cancel
+        </button>
+
+        <button
+  onClick={() => {
+  if (!duplicatePatient) return;
+
+  setSelectedHistory(duplicatePatient);
+}}
+  className="rounded-lg border px-4 py-2"
+>
+  View Previous
+</button>
+        <button
+          onClick={() => {
+  setShowDuplicateWarning(false);
+  setDuplicatePatient(null);
+  setIsFormOpen(true);
+}}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+        >
+          Continue Anyway
+        </button>
+
+      </div>
+
+    </div>
+  </div>
+)}
+
+{/* IC Lookup Modal */}
+
+<AnimatePresence>
+  {isICLookupOpen && (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={() => setIsICLookupOpen(false)}
+        className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+      />
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        className="relative z-10 bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden"
+      >
+
+        <div className="px-6 py-5 border-b border-slate-100">
+
+          <h2 className="text-xl font-bold text-slate-800">
+            New Appointment
+          </h2>
+
+          <p className="text-sm text-slate-500 mt-1">
+            Enter patient's IC Number
+          </p>
+
+        </div>
+
+        <div className="p-6">
+
+          <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+            IC Number
+          </label>
+
+          <input
+  autoFocus
+  value={lookupIC}
+  onChange={(e) => {
+    // Hanya nombor dan maksimum 12 digit
+    const digits = e.target.value.replace(/\D/g, "").slice(0, 12);
+  setLookupIC(digits);
+}}
+  onKeyDown={(e) => {
+  if (
+    e.key === "Enter" &&
+    lookupIC.replace(/\D/g, "").length === 12
+  ) {
+    e.preventDefault();
+    handlePatientLookup();
+  }
+}}
+  inputMode="numeric"
+  maxLength={12}
+  placeholder="900101085555"
+  className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+/>
+
+          <div className="flex gap-3 mt-6">
+
+            <button
+              onClick={() => setIsICLookupOpen(false)}
+              className="flex-1 py-3 rounded-xl border border-slate-200 font-semibold hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+
+            <button
+  disabled={lookupIC.replace(/\D/g, "").length !== 12}
+  onClick={handlePatientLookup}
+  className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
+    lookupIC.replace(/\D/g, "").length === 12
+      ? "bg-blue-600 hover:bg-blue-700 text-white"
+      : "bg-slate-200 text-slate-400 cursor-not-allowed"
+  }`}
+>
+  Continue
+</button>
+
+          </div>
+
+        </div>
+
+      </motion.div>
+
+    </div>
+  )}
+</AnimatePresence>
+
       {/* Appointment Modal Overlay */}
       <AnimatePresence>
         {isFormOpen && (
@@ -4514,25 +4838,28 @@ setSelectedReviewSummary(app);
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Patient Name</label>
                     <input 
-                      name="patientName"
-                      required
-                      type="text" 
-                      defaultValue={editingAppointment?.patientName || ''}
-                      className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none uppercase"
-                    />
+  name="patientName"
+  required
+  type="text"
+  defaultValue={
+    editingAppointment?.patientName ??
+    existingPatient?.patientName ??
+    ""
+  }
+  className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none uppercase"
+/>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">IC Number</label>
-                      <input 
-                        name="icNumber"
-                        required
-                        type="text" 
-                        value={formIC}
-                        onChange={handleICChange}
-                        className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none uppercase"
-                      />
+                      <input
+  name="icNumber"
+  type="text"
+  value={formIC}
+  readOnly
+  className="w-full px-4 py-2 border border-slate-200 rounded-lg bg-slate-100 text-slate-600 cursor-not-allowed"
+/>
                     </div>
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Phone Number</label>
@@ -4584,7 +4911,11 @@ setSelectedReviewSummary(app);
                           <input 
                             type="checkbox" 
                             name={`disease_${d}`}
-                            defaultChecked={editingAppointment ? !!editingAppointment.diseaseTypes?.includes(d) : false}
+                            defaultChecked={
+  editingAppointment
+    ? !!editingAppointment.diseaseTypes?.includes(d)
+    : !!existingPatient?.diseaseTypes?.includes(d)
+}
                             className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                           />
                           <span className="text-sm font-medium text-slate-700 group-hover:text-blue-600">{d}</span>
@@ -4596,7 +4927,11 @@ setSelectedReviewSummary(app);
                         <input 
                           type="checkbox" 
                           name="has_other"
-                          defaultChecked={!!editingAppointment?.otherDisease}
+                          defaultChecked={
+  editingAppointment
+    ? !!editingAppointment.otherDisease
+    : !!existingPatient?.otherDisease
+}
                           onChange={(e) => {
                             const input = document.getElementById('other-input') as HTMLInputElement;
                             if (input) input.disabled = !e.target.checked;
@@ -4609,8 +4944,8 @@ setSelectedReviewSummary(app);
                         id="other-input"
                         name="otherDisease"
                         type="text" 
-                        disabled={!editingAppointment?.otherDisease}
-                        defaultValue={editingAppointment?.otherDisease}
+                        disabled={!(editingAppointment?.otherDisease || existingPatient?.otherDisease)}
+                        defaultValue={editingAppointment?.otherDisease ?? existingPatient?.otherDisease ?? ""}
                         placeholder="Please specify..."
                         className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 uppercase disabled:bg-slate-50 disabled:text-slate-400"
                       />
