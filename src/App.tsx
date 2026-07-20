@@ -419,22 +419,22 @@ const isCurrentMonth =
 
   const handlePatientLookup = () => {
 
-  const patient =
-    appointments
-      .filter(
-        a => normalizeIC(a.icNumber) === normalizeIC(lookupIC)
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.date).getTime() -
-          new Date(a.date).getTime()
-      )[0] || null;
+  const patientRecords = appointments
+  .filter(
+    a =>
+      normalizeIC(a.icNumber) === normalizeIC(lookupIC) &&
+      a.status !== AppointmentStatus.NO_SHOW
+  )
+  .sort(
+    (a, b) =>
+      new Date(b.date).getTime() -
+      new Date(a.date).getTime()
+  );
 
-  const duplicate = appointments.find(
-  a => normalizeIC(a.icNumber) === normalizeIC(lookupIC)
-) || null;
+  const patient = patientRecords[0] || null;
 
-console.log("Duplicate:", duplicate);
+  const duplicate =
+  patientRecords.find(a => isCurrentYear(a.date)) || null;
 
   setExistingPatient(patient);
 
@@ -1383,7 +1383,7 @@ deleteDoc(
   
   const compressImage = (
   file: File,
-  maxWidth = 1600,
+  maxWidth = 2560,
   quality = 0.92
 ): Promise<File> => {
   return new Promise((resolve, reject) => {
@@ -1468,8 +1468,6 @@ deleteDoc(
 
   const data = await response.json();
 
-  console.log(data);
-
   return {
     url: data.secure_url,
     publicId: data.public_id
@@ -1492,8 +1490,6 @@ deleteDoc(
     app.id === id ||
     app.firestoreId === id
 );
-
-    console.log(appToUpdate);
 
 if (!appToUpdate?.firestoreId) {
   console.log("NO FIRESTORE ID");
@@ -4619,7 +4615,7 @@ setSelectedReviewSummary(app);
           ⚠ Fundus Already Performed
         </h2>
         <p className="mt-1 text-sm text-slate-500">
-          This patient already has a completed fundus screening for this year.
+          This patient already has a fundus screening for this year.
         </p>
       </div>
 
