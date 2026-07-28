@@ -1,8 +1,22 @@
+# Node
 node_modules/
-build/
 dist/
-coverage/
-.DS_Store
-*.log
-.env*
-!.env.example
+
+# Python
+ai-backend/venv/
+venv/
+__pycache__/
+*.pyc
+
+# Output
+ai-backend/output/
+
+# VS Code
+.vscode/
+
+# Environment
+.env
+
+# Logs
+vite-dev.log
+vite-dev.err.log

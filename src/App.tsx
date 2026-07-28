@@ -240,21 +240,7 @@ export default function App() {
     }
   });
   
-  const [users, setUsers] = useState<User[]>([
-  {
-  id: 'admin',
-  password: 'cokkodok',
-  displayName: 'Administrator',
-
-  role: UserRole.ADMIN,
-
-  department: 'OPD KKL',
-
-  canViewAllDepartments: true,
-
-  createdAt: Date.now()
-}
-]);
+  const [users, setUsers] = useState<User[]>([]);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authMessage, setAuthMessage] = useState('');
   const [tempUserId, setTempUserId] = useState('');
@@ -955,22 +941,6 @@ const unsubscribeUsers = onSnapshot(
       firestoreId: doc.id,
       ...doc.data()
     })) as User[];
-
-    const hasAdmin = firestoreUsers.some(
-      u => u.id === 'admin'
-    );
-
-    if (!hasAdmin) {
-
-      firestoreUsers.unshift({
-        id: 'admin',
-        password: 'cokkodok',
-        displayName: 'Administrator',
-        role: UserRole.ADMIN,
-        createdAt: Date.now()
-      });
-
-    }
 
     setUsers(firestoreUsers);
 
