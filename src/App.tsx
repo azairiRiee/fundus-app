@@ -58,6 +58,8 @@ import {
   getDocs
 } from 'firebase/firestore';
 
+import { analyzeFundus } from "./services/aiService";
+
 const APP_VERSION = "v3.6";
 
 // --- Types & Constants ---
@@ -97,7 +99,20 @@ type ImageStatus =
   | "Captured"
   | "Not Obtainable";
 
-interface Appointment {
+  interface AIPrediction {
+    label: string;
+    confidence: number;
+    description: string;
+  }
+
+  interface AIResult {
+    success: boolean;
+    filename: string;
+    analysis_time: string;
+    predictions: AIPrediction[];
+  }
+
+  interface Appointment {
   id: string;
   firestoreId?: string;
   patientName: string;
@@ -120,7 +135,7 @@ interface Appointment {
   // Image Capture Status
   // =========================
   rightEyeImageStatus?: ImageStatus;
-leftEyeImageStatus?: ImageStatus;
+  leftEyeImageStatus?: ImageStatus;
 
   rightEyeImageReason?: string;
   leftEyeImageReason?: string;
@@ -129,8 +144,17 @@ leftEyeImageStatus?: ImageStatus;
   imageStatusUpdatedAt?: number;
 
   // =========================
+  // AI Analysis
+  // =========================
+
+  rightEyeAIResult?: AIResult;
+
+  leftEyeAIResult?: AIResult;
+
+  // =========================
   // Clinical Review
   // =========================
+  
   rightEyeReview?: string;
   rightEyeReviewDetails?: {
     status: 'Normal' | 'Abnormal' | '';
@@ -289,7 +313,14 @@ export default function App() {
   const [zoomScale, setZoomScale] = useState(1);
   const [uploadingImageId, setUploadingImageId] = useState<string | null>(null);
   const [isSavingReview, setIsSavingReview] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isReviewViewMode, setIsReviewViewMode] = useState(false);
+
+  const [rightEyeAIResult, setRightEyeAIResult] = useState<AIResult | null>(null);
+  const [leftEyeAIResult, setLeftEyeAIResult] = useState<AIResult | null>(null);
+  const [showAIResult, setShowAIResult] = useState(true);
+  const [expandedPrediction, setExpandedPrediction] = useState<number | null>(0);
+  
   const [selectedHistory, setSelectedHistory] = useState<Appointment | null>(null);
   const [showPatientHistory, setShowPatientHistory] = useState(false);
   const [summaryEye, setSummaryEye] = useState<'right' | 'left'>('right');
@@ -378,6 +409,118 @@ const [unableOtherReason, setUnableOtherReason] =
   editingAppointment
 ]);
 
+const analyzeWithAI = async () => {
+
+  let imageUrl = "";
+
+  if (selectedPhotoApp?.eye === "right") {
+    imageUrl = selectedPhotoApp.app.rightEyePhoto;
+  } else {
+    imageUrl = selectedPhotoApp?.app.leftEyePhoto;
+  }
+
+  if (!imageUrl) {
+    alert("No fundus image available for AI analysis.");
+    return;
+  }
+
+  setIsAnalyzing(true);
+
+  try {
+
+    const result = await analyzeFundus(imageUrl);
+    setShowAIResult(true);
+    console.log(result);
+    if (selectedPhotoApp?.eye === "right") {
+      setRightEyeAIResult(result);
+    } else {
+      setLeftEyeAIResult(result);
+    }
+
+  } catch (error) {
+
+    console.error("AI ERROR:", error);
+
+  } finally {
+
+    setIsAnalyzing(false);
+
+  }
+
+};
+
+const currentAIResult =
+  selectedPhotoApp?.eye === "right"
+    ? rightEyeAIResult
+    : leftEyeAIResult;
+
+const getPredictionColor = (label: string) => {
+
+  const value = label.toLowerCase();
+
+  if (value === "normal") {
+    return "text-emerald-400";
+  }
+
+  if (
+    value.includes("media") ||
+    value.includes("opacity") ||
+    value.includes("ungradable")
+  ) {
+    return "text-amber-400";
+  }
+
+  return "text-red-400";
+};
+
+const applyAISuggestion = (prediction: any) => {
+
+    if (!prediction) return;
+
+    const label = prediction.label.toLowerCase();
+
+    const updateEyeDetails = (details: any) => {
+
+    if (selectedPhotoApp?.eye === "right") {
+
+        setRightEyeDetails(details);
+
+    } else {
+
+        setLeftEyeDetails(details);
+
+    }
+
+};
+
+switch (label) {
+
+    case "normal":
+
+        updateEyeDetails({
+
+            status: "Normal",
+
+            abnormalTypes: [],
+
+            npdrSeverity: "",
+
+            othersText: "",
+
+            comment: ""
+
+        });
+
+        break;
+
+    default:
+
+        alert("Mapping not available yet.");
+
+}
+
+};
+
 const changeAnalyticsMonth = (
   direction: number
 ) => {
@@ -454,8 +597,10 @@ const isCurrentMonth =
 
   // Jangan reset kalau datang daripada Existing Patient
  setFormDepartment(
-    currentUser?.department || 'OPD KKL'
-  );
+  existingPatient?.department ||
+  currentUser?.department ||
+  'OPD KKL'
+);
 
   setSelectedDate(todayStr);
 }
@@ -1640,6 +1785,8 @@ if (
 
     setIsReviewViewMode(true);
 
+    setRightEyeAIResult(null);
+    setLeftEyeAIResult(null);
     setSelectedPhotoApp(null);
 
   } catch (e) {
@@ -2036,83 +2183,127 @@ if (bothNotObtainable) {
 
 };
   
-  const sortedAndFilteredAppointments = useMemo(() => {
-    return appointments
-  .filter(app => {
+const sortedAndFilteredAppointments = useMemo(() => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-    // ADMIN nampak semua
-    if (currentUser?.role === UserRole.ADMIN) {
-      return true;
-    }
+  return appointments
+    .filter(app => {
 
-    // MA nampak semua
-    if (currentUser?.canViewAllDepartments) {
-      return true;
-    }
+      // =========================
+      // DEPARTMENT ACCESS
+      // =========================
 
-    // Staff biasa ikut department
-    return (
-      app.department ===
-      currentUser?.department
-    );
+      // ADMIN nampak semua
+      if (currentUser?.role === UserRole.ADMIN) {
+        return true;
+      }
 
-  })
-  .filter(app => {
-        if (!app) return false;
-        const patientName = app.patientName || '';
-        const icNumber = app.icNumber || '';
-        
-        const q = searchQuery.toLowerCase();
-        const matchesSearch = 
-          patientName.toLowerCase().includes(q) ||
-          icNumber.includes(searchQuery);
-        const matchesDate = !filterDate || app.date === filterDate;
-        const today = new Date();
-today.setHours(23,59,59,999);
+      // MA nampak semua
+      if (currentUser?.canViewAllDepartments) {
+        return true;
+      }
 
-const appointmentDate = new Date(app.date);
+      // Staff biasa ikut department
+      return app.department === currentUser?.department;
+    })
 
-const matchesStatus = true;
-        
-        const hasPhotos = !!(app.rightEyePhoto || app.leftEyePhoto);
-        const hasBothReviews =
-  isReviewCompleted(app);
-        const isAbnormal = app.rightEyeReviewDetails?.status === 'Abnormal' || app.leftEyeReviewDetails?.status === 'Abnormal';
-        const isNormal = hasBothReviews && app.rightEyeReviewDetails?.status === 'Normal' && app.leftEyeReviewDetails?.status === 'Normal';
-        
-        const matchesReview = filterReview === 'All' || 
-          (filterReview === 'Pending' && hasPhotos && !hasBothReviews) ||
-          (filterReview === 'Abnormal' && isAbnormal) ||
-          (filterReview === 'Normal' && isNormal);
-        
-          const matchesDepartment =
-  filterDepartment === 'All' ||
-  app.department === filterDepartment;
-        return (
-  matchesSearch &&
-  matchesDate &&
-  matchesStatus &&
-  matchesReview &&
-  matchesDepartment
-);
-      })
-      .sort((a, b) => {
+    .filter(app => {
+      if (!app) return false;
 
-  if (filterStatus === 'All') {
+      const patientName = app.patientName || '';
+      const icNumber = app.icNumber || '';
 
-    const dateCompare = b.date.localeCompare(a.date);
+      const q = searchQuery.toLowerCase();
 
-    if (dateCompare !== 0) {
-      return dateCompare;
-    }
+      const matchesSearch =
+        patientName.toLowerCase().includes(q) ||
+        icNumber.includes(searchQuery);
 
-    return (b.createdAt || 0) - (a.createdAt || 0);
-  }
+      // =========================
+      // DATE FILTER
+      // =========================
 
-  return (b.createdAt || 0) - (a.createdAt || 0);
+      const matchesDate =
+        !filterDate || app.date === filterDate;
 
-});
-  }, [
+      // =========================
+      // ACTIVE QUEUE
+      // =========================
+
+      const appointmentDate = new Date(app.date);
+      appointmentDate.setHours(0, 0, 0, 0);
+
+      const matchesActiveQueue =
+        filterStatus === 'All' ||
+        appointmentDate <= today;
+
+      // =========================
+      // REVIEW FILTER
+      // =========================
+
+      const hasPhotos =
+        !!(app.rightEyePhoto || app.leftEyePhoto);
+
+      const hasBothReviews =
+        isReviewCompleted(app);
+
+      const isAbnormal =
+        app.rightEyeReviewDetails?.status === 'Abnormal' ||
+        app.leftEyeReviewDetails?.status === 'Abnormal';
+
+      const isNormal =
+        hasBothReviews &&
+        app.rightEyeReviewDetails?.status === 'Normal' &&
+        app.leftEyeReviewDetails?.status === 'Normal';
+
+      const matchesReview =
+        filterReview === 'All' ||
+        (filterReview === 'Pending' &&
+          hasPhotos &&
+          !hasBothReviews) ||
+        (filterReview === 'Abnormal' &&
+          isAbnormal) ||
+        (filterReview === 'Normal' &&
+          isNormal);
+
+      // =========================
+      // DEPARTMENT FILTER
+      // =========================
+
+      const matchesDepartment =
+        filterDepartment === 'All' ||
+        app.department === filterDepartment;
+
+      return (
+        matchesSearch &&
+        matchesDate &&
+        matchesActiveQueue &&
+        matchesReview &&
+        matchesDepartment
+      );
+    })
+
+    // =========================
+    // SORT
+    // LATEST DATE → OLDEST DATE
+    // =========================
+
+    .sort((a, b) => {
+
+      const dateCompare =
+        new Date(b.date).getTime() -
+        new Date(a.date).getTime();
+
+      if (dateCompare !== 0) {
+        return dateCompare;
+      }
+
+      // Same date → latest created first
+      return (b.createdAt || 0) - (a.createdAt || 0);
+    });
+
+}, [
   appointments,
   currentUser,
   searchQuery,
@@ -2484,7 +2675,7 @@ const tomorrowTCA = useMemo(() => {
 
   <div className="fixed inset-0 z-[99999] bg-black/40 flex items-center justify-center">
 
-    <div className="bg-white rounded-3xl shadow-2xl w-[92vw] max-w-[500px] max-h-[70vh] overflow-y-auto">
+    <div className="bg-white rounded-3xl shadow-2xl w-[92vw] max-w-[560px] max-h-[80vh] flex flex-col overflow-hidden">
 
       <div className="p-5 border-b border-slate-300 flex items-center justify-between bg-gradient-to-r from-slate-100 to-slate-200">
 
@@ -2511,7 +2702,7 @@ const tomorrowTCA = useMemo(() => {
 
       </div>
 
-      <div className="p-5 space-y-3">
+      <div className="p-5 space-y-3 overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
 
         {tcaSchedule.length === 0 ? (
 
@@ -2527,7 +2718,7 @@ const tomorrowTCA = useMemo(() => {
 
               <div
                 key={date}
-                className="border border-slate-200 rounded-2xl p-4 md:p-5"
+                className="border border-slate-200 rounded-2xl p-4 md:p-5 bg-white shadow-sm hover:shadow-md hover:border-blue-200 transition-all"
               >
 
                 <div className="flex items-center justify-between">
@@ -3005,7 +3196,18 @@ year:'numeric'
           <div className="flex items-center justify-between">
             <div className="flex flex-wrap items-center gap-2">
               <Clock size={20} className="text-blue-600" />
-              <h2 className="text-lg font-bold text-slate-800 tracking-tight">Today's Queue</h2>
+
+<h2 className="text-lg font-bold text-slate-800 tracking-tight">
+  Today's Queue
+</h2>
+
+<span className="text-sm font-semibold text-slate-500">
+  {new Date().toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  })}
+</span>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter shadow-sm">
                   {allTodayAppointments.length} Total Cases
@@ -4038,24 +4240,75 @@ setSelectedReviewSummary(app);
 
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex justify-end gap-2 md:opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button 
-                            onClick={() => { setEditingAppointment(app); setIsFormOpen(true); }}
-                            className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                            title="Edit"
-                          >
-                            <Edit2 size={18} />
-                          </button>
-                          <button 
-                            onClick={() => confirmDelete(app)}
-                            className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors group/del"
-                            title="Delete Patient Record"
-                          >
-                            <Trash2 size={18} className="group-hover/del:scale-110 transition-transform" />
-                          </button>
-                        </div>
-                      </td>
+<td className="px-6 py-4 text-center">
+
+  {(() => {
+    const canRepeatFundus =
+      app.status === AppointmentStatus.DONE ||
+      app.status === AppointmentStatus.NO_SHOW;
+
+    return (
+      <div className="flex flex-col items-center gap-2">
+
+        {/* ADMIN ONLY */}
+        {currentUser?.role === UserRole.ADMIN && (
+          <div className="flex items-center gap-2">
+
+            <button
+              onClick={() => {
+                setEditingAppointment(app);
+                setIsFormOpen(true);
+              }}
+              className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+              title="Edit"
+            >
+              <Edit2 size={18} />
+            </button>
+
+            <button
+              onClick={() => confirmDelete(app)}
+              className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+              title="Delete Patient Record"
+            >
+              <Trash2 size={18} />
+            </button>
+
+          </div>
+        )}
+
+        {/* REPEAT FUNDUS */}
+        <button
+          disabled={!canRepeatFundus}
+          onClick={() => {
+            if (!canRepeatFundus) return;
+
+            setEditingAppointment(null);
+            setExistingPatient(app);
+            setFormIC(app.icNumber);
+            setFormPhone(app.phoneNumber);
+            setFormDepartment(app.department || 'OPD KKL');
+            setSelectedDate(todayStr);
+            setIsFormOpen(true);
+          }}
+          className={`px-3 py-1.5 rounded-lg text-[10px] font-bold transition-colors ${
+            canRepeatFundus
+              ? 'bg-cyan-600 text-white hover:bg-blue-700 cursor-pointer'
+              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+          }`}
+          title={
+            canRepeatFundus
+              ? 'Repeat Fundus'
+              : 'Available after Done or No Show'
+          }
+        >
+          Repeat Fundus
+        </button>
+
+      </div>
+    );
+  })()}
+
+</td>
                     </motion.tr>
                   );
                 })}
@@ -5345,7 +5598,15 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setSelectedPhotoApp(null)}
+              onClick={() => {
+
+    setRightEyeAIResult(null);
+
+    setLeftEyeAIResult(null);
+
+    setSelectedPhotoApp(null);
+
+}}
               className="absolute inset-0 bg-slate-900/80 backdrop-blur-md"
             />
             <motion.div 
@@ -5354,9 +5615,157 @@ setSelectedReviewSummary(app);
               exit={{ opacity: 0, scale: 0.9, y: 30 }}
               className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[95vh] lg:max-h-[90vh] overflow-y-auto scroll-smooth lg:overflow-hidden relative z-10 flex flex-col lg:flex-row"
             >
-              {/* Photo Area */}
-              <div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
-                <div className="flex-1 flex items-center justify-center p-2 md:p-4 overflow-y-auto lg:overflow-hidden relative">
+{/* Photo Area Bahagian Review Form*/}
+<div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
+<div className="flex-1 flex items-center justify-center p-2 md:p-4 overflow-y-auto lg:overflow-hidden relative">
+
+{/* 🤖 AI Panel */}
+
+<div className="absolute top-5 left-1/2 -translate-x-1/2 z-30 w-[330px]">
+
+  <div className="rounded-2xl border border-slate-700 bg-slate-900/80 backdrop-blur-md shadow-2xl px-4 py-3 flex flex-col items-center">
+
+    <p className="text-[9px] uppercase tracking-[0.3em] text-slate-400 text-center font-bold">
+      AI ASSISTED REVIEW
+    </p>
+    <p className="mt-1 text-center text-[9px] text-slate-500">
+  Powered by OpenEye-FM
+</p>
+
+    <button
+  onClick={analyzeWithAI}
+  disabled={isAnalyzing}
+  className="mt-3 w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 py-2.5 text-white font-bold transition-all disabled:opacity-60">
+
+  {isAnalyzing ? "Analyzing..." : currentAIResult ? "Re-analyze" : "Analyze Fundus"}
+
+</button>
+
+    <div className="mt-3 flex justify-center">
+
+  <span className="text-[10px] font-bold text-blue-300">
+
+    {selectedPhotoApp?.eye === "right"
+      ? "RIGHT EYE (RE)"
+      : "LEFT EYE (LE)"}
+
+  </span>
+
+</div>
+
+{currentAIResult && (
+
+  showAIResult ? (
+
+    <>
+
+      <div className="mt-4 border-t border-white/10 pt-4">
+
+        <p className="text-[10px] uppercase tracking-[0.25em] text-slate-500">
+          AI SUGGESTIONS
+        </p>
+
+        <div className="mt-3 space-y-2">
+  {currentAIResult.predictions.map((prediction: any, index: number) => (
+    <div
+  key={`${prediction.label}-${index}`}
+  className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden"
+>
+      <button
+  type="button"
+  onClick={() =>
+    setExpandedPrediction(
+      expandedPrediction === index ? null : index
+    )
+  }
+  className="w-full p-3 flex items-center justify-between hover:bg-white/5 transition-all"
+>
+
+        <div>
+          <p className={`font-bold ${getPredictionColor(prediction.label)}`}>
+            {prediction.label}
+          </p>
+
+          <p className="text-xs text-slate-400">
+            {prediction.confidence}%
+          </p>
+        </div>
+
+      </button>
+      {expandedPrediction === index && (
+
+<div className="px-3 pb-3 border-t border-white/10">
+
+  <p className="mt-3 text-xs text-slate-400 uppercase tracking-widest">
+    Description
+  </p>
+
+  <p className="mt-2 text-sm text-slate-300 leading-6">
+    {prediction.description}
+  </p>
+
+  <button
+    type="button"
+    onClick={() => applyAISuggestion(prediction)}
+    className="mt-4 w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 py-2 text-white font-bold transition-all"
+  >
+    Apply AI Suggestion
+  </button>
+
+</div>
+
+)}
+    </div>
+  ))}
+</div>
+</div>
+      <button
+        type="button"
+        onClick={() => setShowAIResult(false)}
+        className="mt-2 w-full rounded-xl border border-slate-700 py-2 text-sm text-slate-300 hover:bg-slate-800 transition-all"
+      >
+        ▲ Hide Result
+      </button>
+
+    </>
+
+  ) : (
+
+    <button
+      type="button"
+      onClick={() => setShowAIResult(true)}
+      className="mt-4 w-full rounded-xl border border-indigo-500 py-2 text-sm text-indigo-300 hover:bg-indigo-600/10 transition-all"
+    >
+      ▼ Show Result
+    </button>
+
+  )
+
+)}
+  </div>
+
+</div>
+
+{isAnalyzing && (
+  <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+
+    <div className="flex flex-col items-center">
+
+      <div className="h-12 w-12 rounded-full border-4 border-white/20 border-t-white animate-spin"></div>
+
+      <p className="mt-4 text-white font-semibold">
+        Analyzing Fundus Image...
+      </p>
+
+      <p className="text-sm text-slate-300">
+        Please wait...
+      </p>
+
+    </div>
+
+  </div>
+)}
+  
                    {(
   selectedPhotoApp?.eye === "right"
     ? selectedPhotoApp?.app?.rightEyePhoto
@@ -5494,7 +5903,16 @@ side === "right"
                     <p className="text-sm font-mono text-slate-500 uppercase mt-1">IC: {selectedPhotoApp?.app?.icNumber}</p>
                     
                   </div>
-                  <button onClick={() => setSelectedPhotoApp(null)} className="text-slate-400 hover:text-slate-600">
+                  <button
+  onClick={() => {
+
+    setRightEyeAIResult(null);
+
+    setLeftEyeAIResult(null);
+
+    setSelectedPhotoApp(null);
+
+  }} className="text-slate-400 hover:text-slate-600">
                     <XCircle size={28} />
                   </button>
                 </div>
