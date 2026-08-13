@@ -31,6 +31,7 @@ import {
   EyeOff,
   Key,
   Activity,
+  BarChart3,
   AlertTriangle,
   CircleOff,
   ChevronLeft,
@@ -177,6 +178,9 @@ type ImageStatus =
   diseaseTypes: string[];
   otherDisease: string;
 
+  referred?: boolean;
+  referralComment?: string;
+
   createdBy: string;
   rightEyeUploadedBy?: string;
   leftEyeUploadedBy?: string;
@@ -295,6 +299,7 @@ export default function App() {
   const [showAccountSuccess, setShowAccountSuccess] = useState(false);
   const [showPboaWarning, setShowPboaWarning] =useState(false);
   const [showActivityLogs, setShowActivityLogs] = useState(false);
+  const [showMonthlySummary, setShowMonthlySummary] = useState(false);
   
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
@@ -313,6 +318,8 @@ export default function App() {
   const [zoomScale, setZoomScale] = useState(1);
   const [uploadingImageId, setUploadingImageId] = useState<string | null>(null);
   const [isSavingReview, setIsSavingReview] = useState(false);
+  const [isReferred, setIsReferred] = useState(false);
+  const [referralComment, setReferralComment] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isReviewViewMode, setIsReviewViewMode] = useState(false);
 
@@ -379,6 +386,7 @@ const [unableOtherReason, setUnableOtherReason] =
     showTCASchedule ||
     showAdminConsole ||
     showActivityLogs ||
+    showMonthlySummary ||
     isFormOpen ||
     !!selectedPhotoApp ||
     !!editingAppointment;
@@ -404,6 +412,7 @@ const [unableOtherReason, setUnableOtherReason] =
   showTCASchedule,
   showAdminConsole,
   showActivityLogs,
+  showMonthlySummary,
   isFormOpen,
   selectedPhotoApp,
   editingAppointment
@@ -627,6 +636,10 @@ const isCurrentMonth =
         comment: ''
       });
       setZoomScale(1);
+
+      // Reset referral state ikut patient yang sedang dibuka
+      setIsReferred(selectedPhotoApp.app.referred === true);
+      setReferralComment(selectedPhotoApp.app.referralComment || '');
     }
   }, [selectedPhotoApp?.app?.id]);
 
@@ -836,6 +849,259 @@ const isReviewCompleted = (app: Appointment) => {
       totalPending: thisMonthApps.filter(a => a.status !== AppointmentStatus.DONE && a.status !== AppointmentStatus.NO_SHOW).length,
     };
   }, [appointments, selectedAnalyticsMonth]);
+
+// ===== MONTHLY RETEN KK LINTANG =====
+const monthlyRetenStats = useMemo(() => {
+
+  const currentMonth = selectedAnalyticsMonth.getMonth();
+  const currentYear = selectedAnalyticsMonth.getFullYear();
+
+  // Semua appointment dalam bulan yang dipilih
+  // No Show tidak dikira sebagai screening
+  const monthlyApps = appointments.filter(app => {
+
+    if (!app || !app.date) return false;
+
+    const appDate = new Date(app.date);
+
+    return (
+      appDate.getMonth() === currentMonth &&
+      appDate.getFullYear() === currentYear &&
+      app.status !== AppointmentStatus.NO_SHOW
+    );
+
+  });
+
+
+  // Helper:
+  // Sekurang-kurangnya satu fundus image berjaya diambil
+  const hasPhotograph = (app: Appointment) => {
+    return !!(
+      app.rightEyePhoto ||
+      app.leftEyePhoto
+    );
+  };
+
+
+  // Helper:
+// Determine overall screening outcome
+const getScreeningOutcome = (
+  app: Appointment
+): 'Normal' | 'Abnormal' | 'Not Obtainable' | 'Not Review Yet' => {
+
+  const rightNotObtainable =
+    app.rightEyeImageStatus === 'Not Obtainable';
+
+  const leftNotObtainable =
+    app.leftEyeImageStatus === 'Not Obtainable';
+
+  const rightNormal =
+    app.rightEyeReviewDetails?.status === 'Normal';
+
+  const leftNormal =
+    app.leftEyeReviewDetails?.status === 'Normal';
+
+  const hasCataract =
+  hasFinding(app, 'Cataract') ||
+  app.rightEyeImageReason?.trim().toLowerCase() === 'dense cataract' ||
+  app.leftEyeImageReason?.trim().toLowerCase() === 'dense cataract';
+
+  const hasBothReviews =
+    isReviewCompleted(app);
+
+// RULE 1
+// Kedua-dua mata Normal
+if (rightNormal && leftNormal) {
+  return 'Normal';
+}
+
+
+// RULE 2
+// Cataract / Dense Cataract = ABNORMAL
+if (hasCataract) {
+  return 'Abnormal';
+}
+
+
+// RULE 3
+// Ada mata Not Obtainable
+if (rightNotObtainable || leftNotObtainable) {
+  return 'Not Obtainable';
+}
+
+
+// RULE 4
+// Review belum lengkap
+if (!hasBothReviews) {
+  return 'Not Review Yet';
+}
+
+
+// RULE 5
+// Selain daripada keadaan di atas = ABNORMAL
+return 'Abnormal';
+};
+
+
+// Compatibility helpers
+// Kekalkan nama lama supaya code lain tidak crash.
+
+const isNormal = (app: Appointment) => {
+  return getScreeningOutcome(app) === 'Normal';
+};
+
+
+const isAbnormal = (app: Appointment) => {
+  return getScreeningOutcome(app) === 'Abnormal';
+};
+
+
+const isNotObtainable = (app: Appointment) => {
+  return getScreeningOutcome(app) === 'Not Obtainable';
+};
+
+
+  // Helper:
+  // Check finding pada kedua-dua mata
+  const hasFinding = (
+    app: Appointment,
+    finding: string
+  ) => {
+
+    const right =
+      app.rightEyeReviewDetails?.abnormalTypes || [];
+
+    const left =
+      app.leftEyeReviewDetails?.abnormalTypes || [];
+
+    return (
+      right.includes(finding) ||
+      left.includes(finding)
+    );
+
+  };
+
+
+  // Helper:
+  // Check NPDR severity
+  const hasNPDRSeverity = (
+    app: Appointment,
+    severity: 'mild' | 'moderate' | 'severe'
+  ) => {
+
+    return (
+      app.rightEyeReviewDetails?.npdrSeverity === severity ||
+      app.leftEyeReviewDetails?.npdrSeverity === severity
+    );
+
+  };
+
+
+  return {
+
+    // =========================
+    // SCREENING SUMMARY
+    // =========================
+
+    opd: monthlyApps.filter(
+      app => app.department === 'OPD KKL'
+    ).length,
+
+    pboa: monthlyApps.filter(
+      app => app.department === 'PBOA'
+    ).length,
+
+    // HSS belum aktif
+    hss: 0,
+
+    total: monthlyApps.length,
+
+
+    // =========================
+    // OUTCOME SCREENING
+    // =========================
+
+normal: monthlyApps.filter(
+  app => getScreeningOutcome(app) === 'Normal'
+).length,
+
+abnormal: monthlyApps.filter(
+  app => getScreeningOutcome(app) === 'Abnormal'
+).length,
+
+notObtainable: monthlyApps.filter(
+  app => getScreeningOutcome(app) === 'Not Obtainable'
+).length,
+
+notReviewYet: monthlyApps.filter(
+  app => getScreeningOutcome(app) === 'Not Review Yet'
+).length,
+
+    // =========================
+    // RETEN FINDINGS
+    // =========================
+
+    mildNPDR: monthlyApps.filter(
+      app => hasNPDRSeverity(app, 'mild')
+    ).length,
+
+    moderateNPDR: monthlyApps.filter(
+      app => hasNPDRSeverity(app, 'moderate')
+    ).length,
+
+    severeNPDR: monthlyApps.filter(
+      app => hasNPDRSeverity(app, 'severe')
+    ).length,
+
+    pdr: monthlyApps.filter(
+      app => hasFinding(app, 'PDR')
+    ).length,
+
+    maculopathy: monthlyApps.filter(
+      app => hasFinding(app, 'Maculopathy')
+    ).length,
+
+    aded: monthlyApps.filter(
+      app => hasFinding(app, 'ADED')
+    ).length,
+
+    cataract: monthlyApps.filter(app => {
+
+  const hasCataractFinding =
+    hasFinding(app, 'Cataract');
+
+  const hasDenseCataract =
+    app.rightEyeImageReason?.trim().toLowerCase() === 'dense cataract' ||
+    app.leftEyeImageReason?.trim().toLowerCase() === 'dense cataract';
+
+  return hasCataractFinding || hasDenseCataract;
+
+}).length,
+
+    notObtainable: monthlyApps.filter(
+      isNotObtainable
+    ).length,
+
+    others: monthlyApps.filter(
+      app => hasFinding(app, 'Others')
+    ).length,
+
+    referred: monthlyApps.filter(
+      app => app.referred === true
+    ).length,
+
+
+    // =========================
+    // PHOTOGRAPHS TAKEN
+    // =========================
+
+    photographs: monthlyApps.filter(
+      hasPhotograph
+    ).length
+
+  };
+
+}, [appointments, selectedAnalyticsMonth]);
 
   const monthlyDepartmentStats = useMemo(() => {
 
@@ -1772,7 +2038,14 @@ if (
           currentUser?.id || 'unknown',
 
         updatedAt: Date.now(),
-        isEdited:
+
+referred: isReferred,
+
+referralComment: isReferred
+  ? referralComment.trim()
+  : '',
+
+isEdited:
   isEditedReview
 
       }
@@ -2914,7 +3187,22 @@ const tomorrowTCA = useMemo(() => {
 
 </button>
 
-      <button 
+<button
+  onClick={() => setShowMonthlySummary(true)}
+  className="flex items-center gap-2 px-2 py-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 rounded-lg text-xs font-bold transition-all border border-cyan-200"
+>
+  <BarChart3 size={15} className="text-cyan-600" />
+
+  <span className="hidden md:inline">
+    Monthly Summary
+  </span>
+
+  <span className="md:hidden">
+    Summary
+  </span>
+</button>
+
+<button 
   onClick={() => setShowActivityLogs(true)}
   className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
 >
@@ -3342,7 +3630,10 @@ year:'numeric'
                             return (
                               <button 
                                 key={eye}
-                                onClick={() => setSelectedPhotoApp({ app, eye: eye as any })} 
+                                onClick={() => {
+  setSelectedPhotoApp({ app, eye: eye as any });
+  setIsReferred(app.referred === true);
+}} 
                                 className="w-8 h-8 rounded-full border-2 border-white overflow-hidden bg-slate-100 flex items-center justify-center relative group/btn shadow-sm"
                               >
                                 {photo ? (
@@ -6044,7 +6335,7 @@ const imageReason =
                                   className="space-y-4 pt-2"
                                 >
                                   <div className="grid grid-cols-1 gap-3">
-                                    {(['NPDR', 'PDR', 'Maculopathy', 'Others'] as const).map(type => (
+                                    {(['NPDR', 'PDR', 'Maculopathy', 'ADED', 'Others'] as const).map(type => (
                                       <div key={type} className="space-y-2">
                                         <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 cursor-pointer transition-colors group">
                                           <input
@@ -6193,7 +6484,41 @@ const imageReason =
 
   </div>
 )}
+<div className="pt-4 border-t border-slate-100">
+  <label className="flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer transition-colors">
+    <input
+  type="checkbox"
+  checked={isReferred}
+  onChange={(e) => setIsReferred(e.target.checked)}
+  className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+/>
 
+    <div>
+      <span className="text-sm font-bold text-slate-700">
+        Kes Dirujuk
+      </span>
+
+      <p className="text-[10px] text-slate-400 mt-0.5">
+        Tandakan jika pesakit perlu dirujuk
+      </p>
+    </div>
+  </label>
+</div>
+{isReferred && (
+  <div className="mt-3">
+    <label className="block text-xs font-bold text-slate-600 mb-1.5">
+      Catatan
+    </label>
+
+    <textarea
+      value={referralComment}
+      onChange={(e) => setReferralComment(e.target.value)}
+      placeholder="Catatan rujukan (jika ada)"
+      rows={3}
+      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+    />
+  </div>
+)}
                     <div className="pt-6 mt-auto shrink-0">
                       <button 
   type="submit"
@@ -6709,6 +7034,25 @@ const imageReason =
   </p>
 
 </div>
+
+{selectedReviewSummary.referred === true && (
+  <div className="bg-amber-50 rounded-2xl border border-amber-200 p-4">
+    <div className="flex items-start gap-3">
+      <div className="flex-1 min-w-0">
+        <p className="text-[11px] font-black uppercase tracking-widest text-amber-700">
+          ✓ Kes Dirujuk
+        </p>
+
+        {selectedReviewSummary.referralComment && (
+          <p className="text-sm text-slate-700 mt-2 whitespace-pre-wrap uppercase">
+            {selectedReviewSummary.referralComment}
+          </p>
+        )}
+      </div>
+    </div>
+  </div>
+)}
+
 {/* FINDINGS */}
 <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col flex-1 min-h-0 overflow-hidden">
   <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-4">
@@ -6939,6 +7283,7 @@ const imageReason =
         </div>
 
 {/* PREVIOUS VISITS */}
+{patientHistory.length > 0 && (
 <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
 
   <button
@@ -7017,7 +7362,9 @@ const imageReason =
   )}
 
 </div>
+)}
 
+{/* EDIT REVIEW BUTTON */}
 <button
   onClick={() => {
 
@@ -7263,6 +7610,352 @@ const imageReason =
   )}
 
 </AnimatePresence>
+
+{/* MONTHLY SUMMARY MODAL */}
+<AnimatePresence>
+  {showMonthlySummary && (
+    <div
+      className="fixed inset-0 z-[145] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
+      onClick={() => setShowMonthlySummary(false)}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 10 }}
+        transition={{ duration: 0.2 }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-5xl max-h-[90vh] bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden"
+      >
+
+        {/* HEADER */}
+<div className="px-6 py-5 border-b border-slate-200">
+
+  <div className="flex items-start justify-between gap-4">
+
+    {/* TITLE */}
+    <div className="min-w-0">
+      <h2 className="text-xl md:text-2xl font-black text-slate-800">
+        Monthly Summary
+      </h2>
+
+      <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mt-1">
+        Reten Saringan Fundus Kamera — Klinik Kesihatan Lintang
+      </p>
+    </div>
+
+
+    {/* MONTH NAVIGATION + CLOSE */}
+    <div className="flex items-center gap-2 shrink-0">
+
+    <div className="flex items-center gap-3 mt-2">
+
+  <button
+    onClick={() => changeAnalyticsMonth(-1)}
+    className="p-1 rounded-full hover:bg-slate-200"
+  >
+    <ChevronLeft size={18}/>
+  </button>
+
+  <p className="text-slate-600 text-sm font-bold min-w-[120px] text-center">
+    {
+      selectedAnalyticsMonth.toLocaleString(
+        'en-US',
+        {
+          month: 'long',
+          year: 'numeric'
+        }
+      )
+    }
+  </p>
+
+  <button
+    disabled={isCurrentMonth}
+    onClick={() => changeAnalyticsMonth(1)}
+    className={`p-1 rounded-full transition-all ${
+      isCurrentMonth
+        ? "opacity-30 cursor-not-allowed"
+        : "hover:bg-slate-200"
+    }`}
+  >
+    <ChevronRight size={18}/>
+  </button>
+
+</div>
+
+
+      {/* CLOSE */}
+      <button
+        onClick={() => setShowMonthlySummary(false)}
+        className="ml-2 w-9 h-9 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 flex items-center justify-center font-black transition-all"
+        title="Close"
+      >
+        ×
+      </button>
+
+    </div>
+
+  </div>
+
+</div>
+
+        {/* CONTENT */}
+<div className="p-6 overflow-y-auto max-h-[calc(90vh-100px)]">
+
+  {/* ===== SCREENING SUMMARY ===== */}
+  <section>
+    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">
+      Screening Summary
+    </p>
+
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+
+      {/* OPD KKL */}
+      <div className="bg-sky-50 border border-sky-100 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-sky-600">
+          OPD KKL
+        </p>
+
+        <p className="text-3xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.opd}
+        </p>
+
+        <p className="text-[10px] font-bold text-slate-400 uppercase">
+          Cases
+        </p>
+      </div>
+
+      {/* PBOA */}
+      <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">
+          PBOA
+        </p>
+
+        <p className="text-3xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.pboa}
+        </p>
+
+        <p className="text-[10px] font-bold text-slate-400 uppercase">
+          Cases
+        </p>
+      </div>
+
+      {/* HSS */}
+      <div className="bg-violet-50 border border-violet-100 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-violet-600">
+          HSS
+        </p>
+
+        <p className="text-3xl font-black text-slate-800 mt-1">
+          0
+        </p>
+
+        <p className="text-[10px] font-bold text-slate-400 uppercase">
+          Coming Soon
+        </p>
+      </div>
+
+      {/* TOTAL */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+          Total
+        </p>
+
+        <p className="text-3xl font-black text-white mt-1">
+          {monthlyRetenStats.total}
+        </p>
+
+        <p className="text-[10px] font-bold text-slate-400 uppercase">
+          Cases
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+
+  {/* ===== OUTCOME SCREENING ===== */}
+  <section className="mt-6">
+
+    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">
+      Outcome Screening
+    </p>
+
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+
+      {/* NORMAL */}
+      <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5">
+        <div className="flex items-center justify-between">
+
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">
+              ✓ Normal
+            </p>
+
+            <p className="text-3xl font-black text-slate-800 mt-1">
+              {monthlyRetenStats.normal}
+            </p>
+          </div>
+
+        </div>
+      </div>
+
+
+      {/* ABNORMAL */}
+      <div className="bg-rose-50 border border-rose-100 rounded-2xl p-5">
+        <div className="flex items-center justify-between">
+
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-rose-600">
+              ⚠ Abnormal
+            </p>
+
+            <p className="text-3xl font-black text-slate-800 mt-1">
+              {monthlyRetenStats.abnormal}
+            </p>
+          </div>
+
+        </div>
+      </div>
+
+      {/* NOT OBTAINABLE */}
+      <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">
+            ◯ Not Obtainable
+          </p>
+
+          <p className="text-3xl font-black text-slate-800 mt-1">
+            {monthlyRetenStats.notObtainable}
+          </p>
+        </div>
+      </div>
+      {/* NOT REVIEW YET */}
+<div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
+  <div>
+    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+      ◷ Not Review Yet
+    </p>
+
+    <p className="text-3xl font-black text-slate-800 mt-1">
+      {monthlyRetenStats.notReviewYet}
+    </p>
+  </div>
+</div>
+    </div>
+
+  </section>
+
+
+  {/* ===== RETEN FINDINGS ===== */}
+  <section className="mt-6">
+
+    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">
+      Reten Findings
+    </p>
+
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+
+      {/* MILD NPDR */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          Mild NPDR
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.mildNPDR}
+        </p>
+      </div>
+
+      {/* MODERATE NPDR */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          Moderate NPDR
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.moderateNPDR}
+        </p>
+      </div>
+
+      {/* SEVERE NPDR */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          Severe NPDR
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.severeNPDR}
+        </p>
+      </div>
+
+      {/* PDR */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          PDR
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.pdr}
+        </p>
+      </div>
+
+      {/* MACULOPATHY */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          Maculopathy
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.maculopathy}
+        </p>
+      </div>
+
+      {/* ADED */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          ADED
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.aded}
+        </p>
+      </div>
+
+      {/* CATARACT */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          Cataract
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.cataract}
+        </p>
+      </div>
+
+      {/* LAIN-LAIN */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-slate-400">
+          Lain-lain
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.others}
+        </p>
+      </div>
+
+      {/* REFERRED */}
+      <div className="bg-cyan-50 border border-cyan-100 rounded-2xl p-4">
+        <p className="text-[10px] font-black uppercase text-cyan-600">
+          ✓ Kes Dirujuk
+        </p>
+        <p className="text-2xl font-black text-slate-800 mt-1">
+          {monthlyRetenStats.referred}
+        </p>
+      </div>
+
+    </div>
+
+  </section>
+
+</div>
+
+      </motion.div>
+    </div>
+  )}
+</AnimatePresence>
+
 {/* ACTIVITY LOG MODAL */}
 <AnimatePresence>
 
