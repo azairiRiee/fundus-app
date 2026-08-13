@@ -3421,7 +3421,7 @@ year:'numeric'
     className="mt-4 w-full bg-slate-900 border border-slate-800 hover:bg-black text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all"
   >
     <Download size={14}/>
-    Generate Monthly Summary
+    Export Monthly CSV
   </button>
 
 )}
