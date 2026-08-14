@@ -3787,7 +3787,7 @@ year:'numeric'
                     <h3 className="font-bold text-slate-800 text-[15px] leading-tight truncate">
                       {app.patientName}
                     </h3>
-                  <p className="text-[10px] font-mono font-medium text-slate-500 mb-4">{app.icNumber}</p>
+                  <p className="text-[11px] font-medium text-slate-500 mb-4">{app.icNumber}</p>
 
                   <div className="space-y-2 mb-4">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-1 px-1">Upload Images</p>
@@ -4102,14 +4102,14 @@ year:'numeric'
             <table className="w-full text-left border-collapse min-w-[950px] md:min-w-[800px]">
               <thead className="bg-slate-50/80 backdrop-blur-sm">
                 <tr className="border-b border-slate-200 bg-slate-200">
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">RE / LE Photos</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Patient Details</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Input By</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Schedule</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Status</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Fundus Actions</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Review Findings</th>
-                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-400 uppercase tracking-wider text-center">Options</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">RE / LE Photos</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">Patient Details</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">Input By</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">Schedule</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">Status</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">Fundus Actions</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">Review Findings</th>
+                  <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">Options</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -6419,7 +6419,7 @@ side === "right"
                 <div className="flex justify-between items-start mb-6">
                   <div>
                     <h2 className="text-2xl font-bold text-slate-800 tracking-tight">{selectedPhotoApp?.app?.patientName}</h2>
-                    <p className="text-sm font-mono text-slate-500 uppercase mt-1">IC: {selectedPhotoApp?.app?.icNumber}</p>
+                    <p className="text-sm text-slate-500 uppercase mt-1">IC: {selectedPhotoApp?.app?.icNumber}</p>
                     
                   </div>
                   <button
