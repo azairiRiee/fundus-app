@@ -3988,31 +3988,39 @@ year:'numeric'
 {/* DATE RANGE FILTER */}
 <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
 
-  <Calendar size={16} className="text-slate-400 shrink-0" />
+  <Calendar size={16} className="text-orange-500 shrink-0" />
 
   <input
-    type="date"
-    aria-label="Start date"
-    title="Start date"
-    className="bg-transparent border-none outline-none text-xs font-medium w-[120px]"
-    value={filterDateFrom}
-    max={filterDateTo || undefined}
-    onChange={e => setFilterDateFrom(e.target.value)}
-  />
+  type="date"
+  aria-label="Start date"
+  title="Start date"
+  className={`bg-transparent border-none outline-none text-xs w-[120px] ${
+    filterDateFrom
+      ? "text-slate-800 font-bold"
+      : "text-slate-400 font-medium"
+  }`}
+  value={filterDateFrom}
+  max={filterDateTo || undefined}
+  onChange={e => setFilterDateFrom(e.target.value)}
+/>
 
   <span className="text-black-500 font-bold">
-    →
+    ⬌
   </span>
 
   <input
-    type="date"
-    aria-label="End date"
-    title="End date"
-    className="bg-transparent border-none outline-none text-xs font-medium w-[120px]"
-    value={filterDateTo}
-    min={filterDateFrom || undefined}
-    onChange={e => setFilterDateTo(e.target.value)}
-  />
+  type="date"
+  aria-label="End date"
+  title="End date"
+  className={`bg-transparent border-none outline-none text-xs w-[120px] ${
+    filterDateTo
+      ? "text-slate-800 font-bold"
+      : "text-slate-400 font-medium"
+  }`}
+  value={filterDateTo}
+  min={filterDateFrom || undefined}
+  onChange={e => setFilterDateTo(e.target.value)}
+/>
 
 </div>
 
