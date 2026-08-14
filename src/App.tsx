@@ -4310,7 +4310,7 @@ year:'numeric'
                               <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
                                 DONE BY:
                               </span>
-                              <span className="text-xs text-slate-500 font-black uppercase tracking-tighter mt-0.5">
+                              <span className="text-xs text-slate-600 font-black uppercase tracking-tighter mt-0.5">
                                 {getUserDisplayName(
 
   app.rightEyeUploadedBy ||
@@ -4358,8 +4358,8 @@ year:'numeric'
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex flex-col">
-                          <span className="text-sm font-black text-slate-800 uppercase tracking-tighter">{getUserDisplayName(app.createdBy)}</span>
-                          <span className="text-[9px] text-slate-400 font-bold uppercase">{app.createdBy}</span>
+                          <span className="text-sm font-black text-slate-600 uppercase tracking-tighter">{getUserDisplayName(app.createdBy)}</span>
+                          
                         </div>
                       </td>
                       <td className="px-6 py-4">
@@ -4396,7 +4396,7 @@ year:'numeric'
 
     </span>
 
-    <span className="text-xs text-slate-500 font-black uppercase tracking-tighter mt-0.5">
+    <span className="text-xs text-slate-600 font-black uppercase tracking-tighter mt-0.5">
 
       {getUserDisplayName(
 
