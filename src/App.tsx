@@ -72,7 +72,7 @@ enum UserRole {
 
 interface User {
   id: string;
-  password?: string;f
+  password?: string;
   role: UserRole;
 
   displayName: string;
@@ -204,14 +204,6 @@ const PBOA_LIMIT = 10;
 
 // --- Helper Components ---
 
-const changeAnalyticsMonth = (direction: number) => {
-  setSelectedAnalyticsMonth(prev => {
-    const next = new Date(prev);
-    next.setMonth(next.getMonth() + direction);
-    return next;
-  });
-};
-
 const StatusBadge = ({ status }: { status: AppointmentStatus }) => {
   const configs = {
     [AppointmentStatus.PENDING]: "bg-slate-100 text-slate-700 border-slate-200",
@@ -326,6 +318,7 @@ export default function App() {
   const [rightEyeAIResult, setRightEyeAIResult] = useState<AIResult | null>(null);
   const [leftEyeAIResult, setLeftEyeAIResult] = useState<AIResult | null>(null);
   const [showAIResult, setShowAIResult] = useState(true);
+  const [isAIPanelOpen, setIsAIPanelOpen] = useState(false);
   const [expandedPrediction, setExpandedPrediction] = useState<number | null>(0);
   
   const [selectedHistory, setSelectedHistory] = useState<Appointment | null>(null);
@@ -457,6 +450,11 @@ const analyzeWithAI = async () => {
   }
 
 };
+
+// Reset AI panel bila buka patient baru
+useEffect(() => {
+  setIsAIPanelOpen(false);
+}, [selectedPhotoApp?.app?.id]);
 
 const currentAIResult =
   selectedPhotoApp?.eye === "right"
@@ -798,55 +796,59 @@ const isReviewCompleted = (app: Appointment) => {
 }, [selectedPhotoApp]);
   
   // Calculate Monthly Stats
+  // KK Lintang workload: include ALL referring/source departments; exclude No Show only.
+  // Pending Fundus and Pending Review are intentionally non-overlapping.
   const monthlyStats = useMemo(() => {
     const currentMonth = selectedAnalyticsMonth.getMonth();
     const currentYear = selectedAnalyticsMonth.getFullYear();
-    
+
     const thisMonthApps = appointments.filter(app => {
       if (!app || !app.date) return false;
+
       const appDate = new Date(app.date);
-      const isThisMonth = appDate.getMonth() === currentMonth && appDate.getFullYear() === currentYear;
-      const isNotNoShow = app.status !== AppointmentStatus.NO_SHOW;
-      return isThisMonth && isNotNoShow;
+
+      return (
+        appDate.getMonth() === currentMonth &&
+        appDate.getFullYear() === currentYear &&
+        app.status !== AppointmentStatus.NO_SHOW
+      );
     });
 
+    const isFundusComplete = (app: Appointment) => {
+      const rightDone =
+        !!app.rightEyePhoto ||
+        app.rightEyeImageStatus === "Not Obtainable";
+
+      const leftDone =
+        !!app.leftEyePhoto ||
+        app.leftEyeImageStatus === "Not Obtainable";
+
+      return rightDone && leftDone;
+    };
+
+    const isCaseComplete = (app: Appointment) =>
+      isFundusComplete(app) && isReviewCompleted(app);
+
     return {
+      // Total KK Lintang workload for the selected month.
       total: thisMonthApps.length,
-      // Pending Fundus: Patients with at least one photo missing (excluding no-show)
-      fundusPending: thisMonthApps.filter(a => {
 
-  const rightDone =
-    !!a.rightEyePhoto ||
-    a.rightEyeImageStatus === "Not Obtainable";
+      // One or both eyes still need fundus capture / Not Obtainable marking.
+      fundusPending: thisMonthApps.filter(
+        app => !isFundusComplete(app)
+      ).length,
 
-  const leftDone =
-    !!a.leftEyePhoto ||
-    a.leftEyeImageStatus === "Not Obtainable";
+      // Fundus is complete, but clinical review is still incomplete.
+      reviewPending: thisMonthApps.filter(
+        app =>
+          isFundusComplete(app) &&
+          !isReviewCompleted(app)
+      ).length,
 
-  return (
-    a.status !== AppointmentStatus.NO_SHOW &&
-    !(rightDone && leftDone)
-  );
-
-}).length,
-      // Pending Review: Patients who have photos but haven't finished both eye reviews (excluding no-show)
-      reviewPending: thisMonthApps.filter(a => {
-
-  if (a.status === AppointmentStatus.NO_SHOW)
-    return false;
-
-  const hasImage =
-    !!a.rightEyePhoto ||
-    !!a.leftEyePhoto;
-
-  return (
-    hasImage &&
-    !isReviewCompleted(a)
-  );
-
-}).length,
-      // Overall still in queue (incomplete) (excluding no-show)
-      totalPending: thisMonthApps.filter(a => a.status !== AppointmentStatus.DONE && a.status !== AppointmentStatus.NO_SHOW).length,
+      // Unique cases that are not fully completed.
+      totalPending: thisMonthApps.filter(
+        app => !isCaseComplete(app)
+      ).length,
     };
   }, [appointments, selectedAnalyticsMonth]);
 
@@ -1078,10 +1080,6 @@ notReviewYet: monthlyApps.filter(
 
 }).length,
 
-    notObtainable: monthlyApps.filter(
-      isNotObtainable
-    ).length,
-
     others: monthlyApps.filter(
       app => hasFinding(app, 'Others')
     ).length,
@@ -1194,40 +1192,64 @@ selectedAnalyticsMonth.getFullYear();
   const yearlyStats = useMemo(() => {
     const currentYear = new Date().getFullYear();
 
+    // Practice Summary = KK Lintang service workload for the current year.
+    // Department is only a referring/source breakdown.
     const thisYearApps = appointments.filter(app => {
       if (!app || !app.date) return false;
+
       const appDate = new Date(app.date);
-      return appDate.getFullYear() === currentYear && app.status !== AppointmentStatus.NO_SHOW;
+
+      return (
+        appDate.getFullYear() === currentYear &&
+        app.status !== AppointmentStatus.NO_SHOW
+      );
     });
 
+    const isFundusComplete = (app: Appointment) => {
+      const rightDone =
+        !!app.rightEyePhoto ||
+        app.rightEyeImageStatus === "Not Obtainable";
+
+      const leftDone =
+        !!app.leftEyePhoto ||
+        app.leftEyeImageStatus === "Not Obtainable";
+
+      return rightDone && leftDone;
+    };
+
+    const isPendingReview = (app: Appointment) =>
+      isFundusComplete(app) && !isReviewCompleted(app);
+
+    const reviewPendingOPD = thisYearApps.filter(
+      app =>
+        app.department === 'OPD KKL' &&
+        isPendingReview(app)
+    ).length;
+
+    const reviewPendingPBOA = thisYearApps.filter(
+      app =>
+        app.department === 'PBOA' &&
+        isPendingReview(app)
+    ).length;
+
     return {
-      opd:
-  thisYearApps.filter(
-    a => a.department === 'OPD KKL'
-  ).length,
+      opd: thisYearApps.filter(
+        app => app.department === 'OPD KKL'
+      ).length,
 
-pboa:
-  thisYearApps.filter(
-    a => a.department === 'PBOA'
-  ).length,
+      pboa: thisYearApps.filter(
+        app => app.department === 'PBOA'
+      ).length,
 
-reviewPendingOPD:
-  thisYearApps.filter(
-    a =>
-      a.department === 'OPD KKL' &&
-      (a.rightEyePhoto || a.leftEyePhoto) &&
-      !(a.rightEyeReview && a.leftEyeReview)
-  ).length,
+      reviewPendingOPD,
+      reviewPendingPBOA,
 
-reviewPendingPBOA:
-  thisYearApps.filter(
-    a =>
-      a.department === 'PBOA' &&
-      (a.rightEyePhoto || a.leftEyePhoto) &&
-      !(a.rightEyeReview && a.leftEyeReview)
-  ).length,
+      // Unique current-year cases awaiting clinical review.
+      reviewPending: thisYearApps.filter(
+        isPendingReview
+      ).length,
+
       total: thisYearApps.length,
-      reviewPending: thisYearApps.filter(a => (a.rightEyePhoto || a.leftEyePhoto) && !(a.rightEyeReview && a.leftEyeReview)).length,
       year: currentYear
     };
   }, [appointments]);
@@ -1268,7 +1290,10 @@ const patientHistory = currentPatient
 
  // Search & Filter State
 const [searchQuery, setSearchQuery] = useState('');
-const [filterDate, setFilterDate] = useState('');
+
+const [filterDateFrom, setFilterDateFrom] = useState('');
+const [filterDateTo, setFilterDateTo] = useState('');
+
 const [filterStatus, setFilterStatus] = useState<AppointmentStatus | 'All' | 'Active'>('Active');
 const [filterReview, setFilterReview] = useState<'All' | 'Pending' | 'Abnormal' | 'Normal'>('All');
 const [filterDepartment, setFilterDepartment] =
@@ -2494,11 +2519,20 @@ const sortedAndFilteredAppointments = useMemo(() => {
         icNumber.includes(searchQuery);
 
       // =========================
-      // DATE FILTER
+      // DATE RANGE FILTER
       // =========================
 
+      const matchesDateFrom =
+        !filterDateFrom ||
+        app.date >= filterDateFrom;
+
+      const matchesDateTo =
+        !filterDateTo ||
+        app.date <= filterDateTo;
+
       const matchesDate =
-        !filterDate || app.date === filterDate;
+        matchesDateFrom &&
+        matchesDateTo;
 
       // =========================
       // ACTIVE QUEUE
@@ -2580,7 +2614,8 @@ const sortedAndFilteredAppointments = useMemo(() => {
   appointments,
   currentUser,
   searchQuery,
-  filterDate,
+  filterDateFrom,
+  filterDateTo,
   filterStatus,
   filterReview,
   filterDepartment
@@ -3039,42 +3074,90 @@ const tomorrowTCA = useMemo(() => {
     )}
 
     {(() => {
+  // ============================================
+  // THIS WEEK = CURRENT CALENDAR WEEK
+  // MONDAY → SUNDAY
+  // ============================================
 
-      const today = new Date();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-      const nextWeek = new Date();
+  // JavaScript:
+  // Sunday = 0
+  // Monday = 1
+  // Tuesday = 2
+  // ...
+  // Saturday = 6
+  const dayOfWeek = today.getDay();
 
-      nextWeek.setDate(
-        today.getDate() + 7
-      );
+  // Calculate how many days back to Monday
+  const daysFromMonday =
+    dayOfWeek === 0
+      ? 6
+      : dayOfWeek - 1;
 
-      const currentDate =
-        new Date(date);
+  // Monday of current week
+  const weekStart = new Date(today);
 
-      return (
-        currentDate > today &&
-        currentDate <= nextWeek
-      );
+  weekStart.setDate(
+    today.getDate() - daysFromMonday
+  );
 
-    })() &&
+  weekStart.setHours(0, 0, 0, 0);
 
-    date !== (() => {
+  // Sunday of current week
+  const weekEnd = new Date(weekStart);
 
-      const tomorrow = new Date();
+  weekEnd.setDate(
+    weekStart.getDate() + 6
+  );
 
-      tomorrow.setDate(
-        tomorrow.getDate() + 1
-      );
+  weekEnd.setHours(
+    23,
+    59,
+    59,
+    999
+  );
 
-      return tomorrow.toLocaleDateString('en-CA');
+  // Appointment date
+  const currentDate = new Date(date);
 
-    })() && (
+  currentDate.setHours(
+    0,
+    0,
+    0,
+    0
+  );
 
-      <span className="bg-sky-100 text-sky-700 border border-sky-300 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wide whitespace-nowrap">
-        📅 THIS WEEK
-      </span>
+  // Tomorrow
+  const tomorrow = new Date(today);
 
-    )}
+  tomorrow.setDate(
+    today.getDate() + 1
+  );
+
+  tomorrow.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  // Show THIS WEEK only when:
+  // Monday <= appointment <= Sunday
+  // AND appointment is NOT tomorrow
+  return (
+    currentDate >= weekStart &&
+    currentDate <= weekEnd &&
+    currentDate.getTime() !== tomorrow.getTime()
+  );
+})() && (
+
+  <span className="bg-sky-100 text-sky-700 border border-sky-300 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wide whitespace-nowrap">
+    📅 THIS WEEK
+  </span>
+
+)}
 
   </div>
 
@@ -3902,15 +3985,36 @@ year:'numeric'
             
             <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
 
-              <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
-                <Calendar size={16} className="text-slate-400" />
-                <input 
-                  type="date" 
-                  className="bg-transparent border-none outline-none text-xs font-medium"
-                  value={filterDate}
-                  onChange={e => setFilterDate(e.target.value)}
-                />
-              </div>
+{/* DATE RANGE FILTER */}
+<div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+
+  <Calendar size={16} className="text-slate-400 shrink-0" />
+
+  <input
+    type="date"
+    aria-label="Start date"
+    title="Start date"
+    className="bg-transparent border-none outline-none text-xs font-medium w-[120px]"
+    value={filterDateFrom}
+    max={filterDateTo || undefined}
+    onChange={e => setFilterDateFrom(e.target.value)}
+  />
+
+  <span className="text-black-500 font-bold">
+    →
+  </span>
+
+  <input
+    type="date"
+    aria-label="End date"
+    title="End date"
+    className="bg-transparent border-none outline-none text-xs font-medium w-[120px]"
+    value={filterDateTo}
+    min={filterDateFrom || undefined}
+    onChange={e => setFilterDateTo(e.target.value)}
+  />
+
+</div>
 
               <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
                 <Filter size={16} className="text-slate-400" />
@@ -3959,13 +4063,28 @@ year:'numeric'
   </div>
 )}
               
-              {(searchQuery || filterDate || filterStatus !== 'Active' || filterReview !== 'All') && (
-                <button 
-                  onClick={() => { setSearchQuery(''); setFilterDate(''); setFilterStatus('Active'); setFilterReview('All'); setFilterDepartment('All'); }}
-                  className="text-xs text-blue-600 font-bold hover:underline px-2"
-                >
-                  Clear Filters
-                </button>
+              {(
+  searchQuery ||
+  filterDateFrom ||
+  filterDateTo ||
+  filterStatus !== 'Active' ||
+  filterReview !== 'All'
+) && (
+
+  <button
+    onClick={() => {
+      setSearchQuery('');
+      setFilterDateFrom('');
+      setFilterDateTo('');
+      setFilterStatus('Active');
+      setFilterReview('All');
+      setFilterDepartment('All');
+    }}
+    
+  className="text-xs text-blue-600 font-bold hover:underline px-2"
+  >
+    Clear Filters
+  </button>
               )}
             </div>
           </div>
@@ -4220,7 +4339,7 @@ year:'numeric'
   {app.department}
 </span>
                           </div>
-                          <span className="text-[9px] md:text-[10px] font-mono text-slate-400 mt-1">
+                          <span className="text-[9px] md:text-[11px] font-normal text-slate-500 mt-1">
   IC: {app.icNumber}
 </span>
 
@@ -5910,130 +6029,231 @@ setSelectedReviewSummary(app);
 <div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
 <div className="flex-1 flex items-center justify-center p-2 md:p-4 overflow-y-auto lg:overflow-hidden relative">
 
-{/* 🤖 AI Panel */}
-
+{/* 🤖 AI PANEL */}
 <div className="absolute top-5 left-1/2 -translate-x-1/2 z-30 w-[330px]">
 
-  <div className="rounded-2xl border border-slate-700 bg-slate-900/80 backdrop-blur-md shadow-2xl px-4 py-3 flex flex-col items-center">
-
-    <p className="text-[9px] uppercase tracking-[0.3em] text-slate-400 text-center font-bold">
-      AI ASSISTED REVIEW
-    </p>
-    <p className="mt-1 text-center text-[9px] text-slate-500">
-  Powered by OpenEye-FM
-</p>
-
-    <button
-  onClick={analyzeWithAI}
-  disabled={isAnalyzing}
-  className="mt-3 w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 py-2.5 text-white font-bold transition-all disabled:opacity-60">
-
-  {isAnalyzing ? "Analyzing..." : currentAIResult ? "Re-analyze" : "Analyze Fundus"}
-
-</button>
-
-    <div className="mt-3 flex justify-center">
-
-  <span className="text-[10px] font-bold text-blue-300">
-
-    {selectedPhotoApp?.eye === "right"
-      ? "RIGHT EYE (RE)"
-      : "LEFT EYE (LE)"}
-
-  </span>
-
-</div>
-
-{currentAIResult && (
-
-  showAIResult ? (
-
-    <>
-
-      <div className="mt-4 border-t border-white/10 pt-4">
-
-        <p className="text-[10px] uppercase tracking-[0.25em] text-slate-500">
-          AI SUGGESTIONS
-        </p>
-
-        <div className="mt-3 space-y-2">
-  {currentAIResult.predictions.map((prediction: any, index: number) => (
-    <div
-  key={`${prediction.label}-${index}`}
-  className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden"
->
-      <button
-  type="button"
-  onClick={() =>
-    setExpandedPrediction(
-      expandedPrediction === index ? null : index
-    )
-  }
-  className="w-full p-3 flex items-center justify-between hover:bg-white/5 transition-all"
->
-
-        <div>
-          <p className={`font-bold ${getPredictionColor(prediction.label)}`}>
-            {prediction.label}
-          </p>
-
-          <p className="text-xs text-slate-400">
-            {prediction.confidence}%
-          </p>
-        </div>
-
-      </button>
-      {expandedPrediction === index && (
-
-<div className="px-3 pb-3 border-t border-white/10">
-
-  <p className="mt-3 text-xs text-slate-400 uppercase tracking-widest">
-    Description
-  </p>
-
-  <p className="mt-2 text-sm text-slate-300 leading-6">
-    {prediction.description}
-  </p>
-
-  <button
-    type="button"
-    onClick={() => applyAISuggestion(prediction)}
-    className="mt-4 w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 py-2 text-white font-bold transition-all"
+  <motion.div
+    initial={false}
+    animate={{
+      height: isAIPanelOpen ? "auto" : 44,
+    }}
+    transition={{
+      duration: 0.25,
+      ease: "easeInOut",
+    }}
+    className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/90 backdrop-blur-md shadow-2xl"
   >
-    Apply AI Suggestion
-  </button>
 
-</div>
-
-)}
-    </div>
-  ))}
-</div>
-</div>
-      <button
-        type="button"
-        onClick={() => setShowAIResult(false)}
-        className="mt-2 w-full rounded-xl border border-slate-700 py-2 text-sm text-slate-300 hover:bg-slate-800 transition-all"
-      >
-        ▲ Hide Result
-      </button>
-
-    </>
-
-  ) : (
-
+    {/* AI HEADER / COLLAPSE BUTTON */}
     <button
       type="button"
-      onClick={() => setShowAIResult(true)}
-      className="mt-4 w-full rounded-xl border border-indigo-500 py-2 text-sm text-indigo-300 hover:bg-indigo-600/10 transition-all"
+      onClick={() =>
+        setIsAIPanelOpen(prev => !prev)
+      }
+      className="w-full h-11 px-4 flex items-center justify-between hover:bg-white/5 transition-all"
     >
-      ▼ Show Result
+
+      <div className="flex-1 text-center">
+
+        <p className="text-[9px] uppercase tracking-[0.3em] text-slate-400 font-bold">
+          AI ASSISTED REVIEW
+        </p>
+
+        {isAIPanelOpen && (
+          <p className="mt-0.5 text-[8px] text-slate-500">
+            Powered by OpenEye-FM
+          </p>
+        )}
+
+      </div>
+
+      <span className="text-slate-400 text-xs">
+        {isAIPanelOpen ? "▲" : "▼"}
+      </span>
+
     </button>
 
-  )
 
-)}
-  </div>
+    {/* AI PANEL CONTENT */}
+    <AnimatePresence initial={false}>
+
+      {isAIPanelOpen && (
+
+        <motion.div
+          initial={{
+            opacity: 0,
+            height: 0,
+          }}
+          animate={{
+            opacity: 1,
+            height: "auto",
+          }}
+          exit={{
+            opacity: 0,
+            height: 0,
+          }}
+          transition={{
+            duration: 0.2,
+          }}
+          className="px-4 pb-4"
+        >
+
+          {/* ANALYZE BUTTON */}
+          <button
+            onClick={analyzeWithAI}
+            disabled={isAnalyzing}
+            className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 py-2.5 text-white font-bold transition-all disabled:opacity-60"
+          >
+
+            {isAnalyzing
+              ? "Analyzing..."
+              : currentAIResult
+                ? "Re-analyze"
+                : "Analyze Fundus"}
+
+          </button>
+
+
+          {/* SELECTED EYE */}
+          <div className="mt-3 flex justify-center">
+
+            <span className="text-[10px] font-bold text-blue-300">
+
+              {selectedPhotoApp?.eye === "right"
+                ? "RIGHT EYE (RE)"
+                : "LEFT EYE (LE)"}
+
+            </span>
+
+          </div>
+
+
+          {/* AI RESULT */}
+          {currentAIResult && (
+
+            showAIResult ? (
+
+              <>
+                <div className="mt-4 border-t border-white/10 pt-4">
+
+                  <p className="text-[10px] uppercase tracking-[0.25em] text-slate-500">
+                    AI SUGGESTIONS
+                  </p>
+
+                  <div className="mt-3 space-y-2">
+
+                    {currentAIResult.predictions.map(
+                      (prediction: any, index: number) => (
+
+                        <div
+                          key={`${prediction.label}-${index}`}
+                          className="rounded-lg border border-slate-700 bg-slate-800/50 overflow-hidden"
+                        >
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedPrediction(
+                                expandedPrediction === index
+                                  ? null
+                                  : index
+                              )
+                            }
+                            className="w-full p-3 flex items-center justify-between hover:bg-white/5 transition-all"
+                          >
+
+                            <div>
+
+                              <p
+                                className={`font-bold ${getPredictionColor(
+                                  prediction.label
+                                )}`}
+                              >
+                                {prediction.label}
+                              </p>
+
+                              <p className="text-xs text-slate-400">
+                                {prediction.confidence}%
+                              </p>
+
+                            </div>
+
+                          </button>
+
+
+                          {expandedPrediction === index && (
+
+                            <div className="px-3 pb-3 border-t border-white/10">
+
+                              <p className="mt-3 text-xs text-slate-400 uppercase tracking-widest">
+                                Description
+                              </p>
+
+                              <p className="mt-2 text-sm text-slate-300 leading-6">
+                                {prediction.description}
+                              </p>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  applyAISuggestion(prediction)
+                                }
+                                className="mt-4 w-full rounded-xl bg-emerald-600 hover:bg-emerald-700 py-2 text-white font-bold transition-all"
+                              >
+                                Apply AI Suggestion
+                              </button>
+
+                            </div>
+
+                          )}
+
+                        </div>
+
+                      )
+                    )}
+
+                  </div>
+
+                </div>
+
+
+                {/* HIDE RESULT */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowAIResult(false)
+                  }
+                  className="mt-2 w-full rounded-xl border border-slate-700 py-2 text-sm text-slate-300 hover:bg-slate-800 transition-all"
+                >
+                  ▲ Hide Result
+                </button>
+
+              </>
+
+            ) : (
+
+              /* SHOW RESULT */
+              <button
+                type="button"
+                onClick={() =>
+                  setShowAIResult(true)
+                }
+                className="mt-4 w-full rounded-xl border border-indigo-500 py-2 text-sm text-indigo-300 hover:bg-indigo-600/10 transition-all"
+              >
+                ▼ Show Result
+              </button>
+
+            )
+
+          )}
+
+        </motion.div>
+
+      )}
+
+    </AnimatePresence>
+
+  </motion.div>
 
 </div>
 
@@ -7853,7 +8073,7 @@ const imageReason =
       Reten Findings
     </p>
 
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
 
       {/* MILD NPDR */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4">
