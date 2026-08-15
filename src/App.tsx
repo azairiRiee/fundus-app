@@ -61,7 +61,39 @@ import {
 
 import { analyzeFundus } from "./services/aiService";
 
-const APP_VERSION = "v3.6";
+const APP_VERSION = "v3.7";
+
+// =====================================================
+// DEPARTMENT MASTER LIST
+// Central list for all clinical departments.
+//
+// Add new departments here in the future instead of
+// hardcoding department names throughout the app.
+// =====================================================
+
+const DEPARTMENTS = [
+  {
+    id: 'OPD KKL',
+    label: 'OPD KKL',
+    shortName: 'OPD',
+  },
+  {
+    id: 'PBOA',
+    label: 'PBOA',
+    shortName: 'PBOA',
+  },
+  {
+    id: 'HSS',
+    label: 'HSS',
+    shortName: 'HSS',
+  },
+] as const;
+
+/**
+ * Department ID type generated automatically
+ * from the DEPARTMENTS master list above.
+ */
+type Department = typeof DEPARTMENTS[number]['id'];
 
 // --- Types & Constants ---
 
@@ -77,7 +109,8 @@ interface User {
 
   displayName: string;
 
-  department: 'OPD KKL' | 'PBOA';
+  //--- Department is controlled by the central department master list ---//
+  department: Department;
 
   canViewAllDepartments: boolean;
 
@@ -117,7 +150,10 @@ type ImageStatus =
   id: string;
   firestoreId?: string;
   patientName: string;
-  department: 'OPD KKL' | 'PBOA';
+
+  //--- Department is controlled by the central department master list ---//
+  department: Department;
+
   icNumber: string;
   phoneNumber: string;
   date: string;
@@ -276,7 +312,7 @@ export default function App() {
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   
   const [newStaffDepartment, setNewStaffDepartment] =
-  useState<'OPD KKL' | 'PBOA'>('OPD KKL');
+  useState<Department>('OPD KKL');
   const [newStaffMA, setNewStaffMA] =
   useState(false);
 
@@ -304,7 +340,7 @@ export default function App() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formIC, setFormIC] = useState('');
   const [formPhone, setFormPhone] = useState('');
-  const [formDepartment, setFormDepartment] = useState<'OPD KKL' | 'PBOA'>('OPD KKL');
+  const [formDepartment, setFormDepartment] = useState<Department>('OPD KKL');
   const [selectedDate, setSelectedDate] = useState('');
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
   const [deletingApp, setDeletingApp] = useState<Appointment | null>(null);
@@ -998,27 +1034,53 @@ const isNotObtainable = (app: Appointment) => {
     );
 
   };
+// =====================================================
+// DYNAMIC MONTHLY DEPARTMENT SUMMARY
+// Generates screening counts for every department
+// registered in the central DEPARTMENTS master list.
+//
+// Adding a new department automatically includes it
+// in the monthly summary.
+// =====================================================
 
+const monthlyDepartmentSummary =
+  DEPARTMENTS.reduce(
+    (stats, department) => {
 
-  return {
+      stats[department.id] =
+        monthlyApps.filter(
+          app => app.department === department.id
+        ).length;
 
-    // =========================
-    // SCREENING SUMMARY
-    // =========================
+      return stats;
 
-    opd: monthlyApps.filter(
-      app => app.department === 'OPD KKL'
-    ).length,
+    },
+    {} as Record<Department, number>
+  );
 
-    pboa: monthlyApps.filter(
-      app => app.department === 'PBOA'
-    ).length,
+return {
 
-    // HSS belum aktif
-    hss: 0,
+  //--- Dynamic department statistics for Monthly Reten ---//
+  monthlyDepartmentSummary,
 
-    total: monthlyApps.length,
+  // =========================
+  // SCREENING SUMMARY
+  // =========================
 
+  opd: monthlyApps.filter(
+    app => app.department === 'OPD KKL'
+  ).length,
+
+  pboa: monthlyApps.filter(
+    app => app.department === 'PBOA'
+  ).length,
+
+  //--- HSS count is calculated dynamically from monthly appointments ---//
+  hss: monthlyApps.filter(
+    app => app.department === 'HSS'
+  ).length,
+
+  total: monthlyApps.length,
 
     // =========================
     // OUTCOME SCREENING
@@ -1102,6 +1164,23 @@ notReviewYet: monthlyApps.filter(
 
 }, [appointments, selectedAnalyticsMonth]);
 
+// =====================================================
+// DEPARTMENT STATISTICS HELPER
+// Counts appointments dynamically by department.
+//
+// This allows new departments such as HSS to be included
+// without creating a separate hardcoded filter for each one.
+// =====================================================
+
+const getDepartmentCount = (
+  apps: Appointment[],
+  department: Department
+) => {
+  return apps.filter(
+    app => app.department === department
+  ).length;
+};
+
   const monthlyDepartmentStats = useMemo(() => {
 
   const currentMonth =
@@ -1124,7 +1203,70 @@ selectedAnalyticsMonth.getFullYear();
 
   });
 
+  // =====================================================
+// DYNAMIC MONTHLY DEPARTMENT STATISTICS
+// Calculates monthly statistics for every department
+// listed in the central DEPARTMENTS master list.
+//
+// Adding a new department will automatically include it
+// in these statistics without creating new hardcoded
+// OPD/PBOA variables.
+// =====================================================
+
+const departmentStats = DEPARTMENTS.reduce(
+  (stats, department) => {
+
+    const departmentApps = thisMonthApps.filter(
+      app => app.department === department.id
+    );
+
+    const fundusCount = departmentApps.filter(
+      app =>
+        !app.rightEyePhoto ||
+        !app.leftEyePhoto
+    ).length;
+
+    const reviewCount = departmentApps.filter(
+      app =>
+        (app.rightEyePhoto ||
+          app.leftEyePhoto) &&
+        (!app.rightEyeReview ||
+          !app.leftEyeReview)
+    ).length;
+
+    const incompleteCount = departmentApps.filter(
+      app =>
+        !(
+          app.rightEyePhoto &&
+          app.leftEyePhoto &&
+          app.rightEyeReview &&
+          app.leftEyeReview
+        )
+    ).length;
+
+    stats[department.id] = {
+      total: departmentApps.length,
+      fundus: fundusCount,
+      review: reviewCount,
+      incomplete: incompleteCount,
+    };
+
+    return stats;
+  },
+  {} as Record<
+    Department,
+    {
+      total: number;
+      fundus: number;
+      review: number;
+      incomplete: number;
+    }
+  >
+);
+
   return {
+    //--- Dynamic statistics for all departments ---//
+    departmentStats,
 
     totalOPD:
       thisMonthApps.filter(
@@ -1221,6 +1363,42 @@ selectedAnalyticsMonth.getFullYear();
     const isPendingReview = (app: Appointment) =>
       isFundusComplete(app) && !isReviewCompleted(app);
 
+    // =====================================================
+    // DYNAMIC YEARLY DEPARTMENT STATISTICS
+    // Calculates yearly workload and pending review counts
+    // for every department in the central department list.
+    //
+    // This allows new departments such as HSS to be included
+    // without creating separate hardcoded variables.
+    // =====================================================
+
+    const yearlyDepartmentStats = DEPARTMENTS.reduce(
+      (stats, department) => {
+
+        const departmentApps = thisYearApps.filter(
+          app => app.department === department.id
+        );
+
+        const pendingReview = departmentApps.filter(
+          isPendingReview
+        ).length;
+
+        stats[department.id] = {
+          total: departmentApps.length,
+          pendingReview,
+        };
+
+        return stats;
+      },
+      {} as Record<
+        Department,
+        {
+          total: number;
+          pendingReview: number;
+        }
+      >
+    );
+
     const reviewPendingOPD = thisYearApps.filter(
       app =>
         app.department === 'OPD KKL' &&
@@ -1234,6 +1412,9 @@ selectedAnalyticsMonth.getFullYear();
     ).length;
 
     return {
+      //--- Dynamic yearly statistics for all departments ---//
+      yearlyDepartmentStats,
+
       opd: thisYearApps.filter(
         app => app.department === 'OPD KKL'
       ).length,
@@ -1297,8 +1478,7 @@ const [filterDateTo, setFilterDateTo] = useState('');
 
 const [filterStatus, setFilterStatus] = useState<AppointmentStatus | 'All' | 'Active'>('Active');
 const [filterReview, setFilterReview] = useState<'All' | 'Pending' | 'Abnormal' | 'Normal'>('All');
-const [filterDepartment, setFilterDepartment] =
-  useState<'All' | 'OPD KKL' | 'PBOA'>('All');
+const [filterDepartment, setFilterDepartment] = useState<'All' | Department>('All');
 const [currentPage, setCurrentPage] = useState(1);
 
 const ITEMS_PER_PAGE = 5;
@@ -2692,23 +2872,44 @@ const paginatedAppointments =
       });
   }, [allTodayAppointments]);
 
+  // =====================================================
+  // DYNAMIC TODAY DEPARTMENT STATISTICS
+  // Counts today's appointments for every department
+  // registered in the central DEPARTMENTS master list.
+  //
+  // Adding a new department automatically includes it
+  // in today's statistics.
+  // =====================================================
+
   const todayDepartmentStats = useMemo(() => {
 
-  const todayApps = appointments.filter(
-    app => app && isToday(app.date)
-  );
+    const todayApps = appointments.filter(
+      app => app && isToday(app.date)
+    );
 
-  return {
-    opd: todayApps.filter(
-      app => app.department === 'OPD KKL'
-    ).length,
+    return DEPARTMENTS.reduce(
+      (stats, department) => {
 
-    pboa: todayApps.filter(
-      app => app.department === 'PBOA'
-    ).length
-  };
+        stats[department.id] =
+          todayApps.filter(
+            app => app.department === department.id
+          ).length;
 
-}, [appointments]);
+        return stats;
+
+      },
+      {} as Record<Department, number>
+    );
+
+  }, [appointments]);
+
+// =====================================================
+// DYNAMIC TCA SCHEDULE
+// Groups upcoming appointments by date and department.
+//
+// Every department from the central DEPARTMENTS list
+// is automatically included in the schedule statistics.
+// =====================================================
 
 const tcaSchedule = useMemo(() => {
 
@@ -2716,9 +2917,7 @@ const tcaSchedule = useMemo(() => {
 
   const grouped: Record<
     string,
-    {
-      opd: number;
-      pboa: number;
+    Record<Department, number> & {
       total: number;
     }
   > = {};
@@ -2733,31 +2932,23 @@ const tcaSchedule = useMemo(() => {
       if (!grouped[app.date]) {
 
         grouped[app.date] = {
-          opd: 0,
-          pboa: 0,
-          total: 0
+          total: 0,
+
+          ...DEPARTMENTS.reduce(
+            (stats, department) => {
+              stats[department.id] = 0;
+              return stats;
+            },
+            {} as Record<Department, number>
+          )
         };
 
       }
 
-      if (
-        app.department ===
-        'OPD KKL'
-      ) {
+      //--- Increment the count for this appointment's department ---//
+      grouped[app.date][app.department]++;
 
-        grouped[app.date].opd++;
-
-      }
-
-      if (
-        app.department ===
-        'PBOA'
-      ) {
-
-        grouped[app.date].pboa++;
-
-      }
-
+      //--- Keep the overall appointment total ---//
       grouped[app.date].total++;
 
     });
@@ -2771,6 +2962,15 @@ const tcaSchedule = useMemo(() => {
 
 }, [appointments]);
 
+// =====================================================
+// DYNAMIC TOMORROW TCA STATISTICS
+// Counts tomorrow's TCA appointments for every department
+// registered in the central DEPARTMENTS master list.
+//
+// The existing notification UI can continue using this
+// data while we gradually migrate it to dynamic departments.
+// =====================================================
+
 const tomorrowTCA = useMemo(() => {
 
   const tomorrow = new Date();
@@ -2782,23 +2982,38 @@ const tomorrowTCA = useMemo(() => {
   const tomorrowStr =
     tomorrow.toLocaleDateString('en-CA');
 
-  return {
+  return DEPARTMENTS.reduce(
+    (stats, department) => {
 
-    opd: appointments.filter(
-      app =>
-        app.date === tomorrowStr &&
-        app.department === 'OPD KKL'
-    ).length,
+      stats[department.id] =
+        appointments.filter(
+          app =>
+            app.date === tomorrowStr &&
+            app.department === department.id
+        ).length;
 
-    pboa: appointments.filter(
-      app =>
-        app.date === tomorrowStr &&
-        app.department === 'PBOA'
-    ).length
+      return stats;
 
-  };
+    },
+    {} as Record<Department, number>
+  );
 
 }, [appointments]);
+
+// =====================================================
+// TOMORROW TCA SUMMARY
+// Provides a simple total for all departments.
+//
+// This keeps the notification logic clean while the
+// department data itself remains fully dynamic.
+// =====================================================
+
+const tomorrowTCATotal = Object.values(
+  tomorrowTCA
+).reduce(
+  (total, count) => total + count,
+  0
+);
 
   // --- Views ---
 
@@ -3212,15 +3427,37 @@ const tomorrowTCA = useMemo(() => {
 
 </div>
 
-                    <div className="mt-2 space-y-1">
+<div className="mt-2 space-y-1">
 
-  <p className="text-xs font-semibold text-sky-600">
-    OPD KKL : {stats.opd} Patients
-  </p>
+  {/*--- Department TCA counts generated automatically ---*/}
+  {DEPARTMENTS.map((department) => {
 
-  <p className="text-xs font-semibold text-emerald-600">
-    PBOA : {stats.pboa} Patients
-  </p>
+    const count =
+      stats[department.id] ?? 0;
+
+    //--- Hide departments with no TCA appointments ---//
+    if (count === 0) {
+      return null;
+    }
+
+    const textClass =
+      department.id === 'OPD KKL'
+        ? 'text-sky-600'
+        : department.id === 'PBOA'
+          ? 'text-emerald-600'
+          : department.id === 'HSS'
+            ? 'text-violet-600'
+            : 'text-slate-600'
+
+    return (
+      <p
+        key={department.id}
+        className={`text-xs font-semibold ${textClass}`}
+      >
+        {department.label} : {count} Patients
+      </p>
+    );
+  })}
 
   <div className="border-t border-slate-200 pt-1 mt-1">
 
@@ -3417,26 +3654,50 @@ const tomorrowTCA = useMemo(() => {
       <Activity size={20} />
     </div>
 
-    {/* OPD + PBOA */}
+    {/*--- Department totals generated from the central department list ---*/}
     <div className="flex flex-col items-center gap-2">
 
-      <div className="text-center">
-        <p className="text-[9px] font-black text-sky-600 uppercase">
-          OPD
-        </p>
-        <p className="text-lg font-black text-sky-600 leading-none">
-          {yearlyStats.opd}
-        </p>
-      </div>
+      {DEPARTMENTS.map((department) => {
 
-      <div className="text-center">
-        <p className="text-[9px] font-black text-emerald-600 uppercase">
-          PBOA
-        </p>
-        <p className="text-lg font-black text-emerald-600 leading-none">
-          {yearlyStats.pboa}
-        </p>
-      </div>
+        const isOPD = department.id === 'OPD KKL';
+        const isPBOA = department.id === 'PBOA';
+
+        const count =
+          yearlyStats.yearlyDepartmentStats[
+            department.id
+          ]?.total ?? 0;
+
+        return (
+          <div
+            key={department.id}
+            className="text-center"
+          >
+            <p
+              className={`text-[9px] font-black uppercase ${
+                isOPD
+                  ? 'text-sky-600'
+                  : isPBOA
+                    ? 'text-emerald-600'
+                    : 'text-slate-500'
+              }`}
+            >
+              {department.shortName}
+            </p>
+
+            <p
+              className={`text-lg font-black leading-none ${
+                isOPD
+                  ? 'text-sky-600'
+                  : isPBOA
+                    ? 'text-emerald-600'
+                    : 'text-slate-500'
+              }`}
+            >
+              {count}
+            </p>
+          </div>
+        );
+      })}
 
     </div>
 
@@ -3466,26 +3727,50 @@ const tomorrowTCA = useMemo(() => {
       <Search size={20} />
     </div>
 
-    {/* OPD + PBOA */}
+    {/*--- Pending review counts generated from the central department list ---*/}
     <div className="flex flex-col items-center gap-2">
 
-      <div className="text-center">
-        <p className="text-[9px] font-black text-sky-600 uppercase">
-          OPD
-        </p>
-        <p className="text-lg font-black text-sky-600 leading-none">
-          {yearlyStats.reviewPendingOPD}
-        </p>
-      </div>
+      {DEPARTMENTS.map((department) => {
 
-      <div className="text-center">
-        <p className="text-[9px] font-black text-emerald-600 uppercase">
-          PBOA
-        </p>
-        <p className="text-lg font-black text-emerald-600 leading-none">
-          {yearlyStats.reviewPendingPBOA}
-        </p>
-      </div>
+        const isOPD = department.id === 'OPD KKL';
+        const isPBOA = department.id === 'PBOA';
+
+        const count =
+          yearlyStats.yearlyDepartmentStats[
+            department.id
+          ]?.pendingReview ?? 0;
+
+        return (
+          <div
+            key={department.id}
+            className="text-center"
+          >
+            <p
+              className={`text-[9px] font-black uppercase ${
+                isOPD
+                  ? 'text-sky-600'
+                  : isPBOA
+                    ? 'text-emerald-600'
+                    : 'text-slate-500'
+              }`}
+            >
+              {department.shortName}
+            </p>
+
+            <p
+              className={`text-lg font-black leading-none ${
+                isOPD
+                  ? 'text-sky-600'
+                  : isPBOA
+                    ? 'text-emerald-600'
+                    : 'text-slate-500'
+              }`}
+            >
+              {count}
+            </p>
+          </div>
+        );
+      })}
 
     </div>
 
@@ -3636,39 +3921,83 @@ year:'numeric'
                   {todayAppointments.length} Active
                 </span>
               </div>
-              <div className="flex flex-wrap items-center gap-2 ml-2">
 
-  <span className="bg-sky-100 text-sky-700 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter border border-sky-200">
-    OPD KKL: {todayDepartmentStats.opd}
-  </span>
+<div className="flex flex-wrap items-center gap-2 ml-2">
 
-  <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter border border-emerald-200">
-    PBOA: {todayDepartmentStats.pboa}
-  </span>
+  {/*--- Today's department badges generated automatically ---*/}
+  {DEPARTMENTS.map((department) => {
 
-  {(tomorrowTCA.opd > 0 || tomorrowTCA.pboa > 0) && (
+    const count =
+      todayDepartmentStats[department.id] ?? 0;
+
+    //--- Department badge colours ---//
+const badgeClass =
+  department.id === 'OPD KKL'
+    ? 'bg-sky-100 text-sky-700 border-sky-200'
+    : department.id === 'PBOA'
+      ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+      : department.id === 'HSS'
+        ? 'bg-violet-100 text-violet-700 border-violet-200'
+        : 'bg-slate-100 text-slate-600 border-slate-200';
+
+    return (
+      <span
+        key={department.id}
+        className={`${badgeClass} px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter border`}
+      >
+        {department.shortName}: {count}
+      </span>
+    );
+  })}
+
+  {/*--- Show TCA notification when any department has TCA tomorrow ---*/}
+  {tomorrowTCATotal > 0 && (
 
     <div className="md:hidden flex items-center gap-1 bg-amber-50 border border-amber-200 px-2 py-1 rounded-lg">
 
-      <span>🔔</span>
+    <span>🔔</span>
 
-      <div className="w-5 h-5 rounded-full bg-sky-500 text-white flex items-center justify-center text-[10px] font-black">
-        O
-      </div>
+    {/*--- Tomorrow's TCA counts generated from all departments ---*/}
+    {DEPARTMENTS.map((department) => {
 
-      <span className="text-xs font-black">
-        {tomorrowTCA.opd}
-      </span>
+      const count =
+        tomorrowTCA[department.id] ?? 0;
 
-      <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-black">
-        P
-      </div>
+      //--- Hide departments with no TCA tomorrow ---//
+      if (count === 0) {
+        return null;
+      }
 
-      <span className="text-xs font-black">
-        {tomorrowTCA.pboa}
-      </span>
+      const badgeClass =
+        department.id === 'OPD KKL'
+          ? 'bg-sky-500'
+          : department.id === 'PBOA'
+            ? 'bg-emerald-500'
+            : department.id === 'HSS'
+              ? 'bg-violet-500'
+              : 'bg-slate-500';
 
-    </div>
+      return (
+        <div
+          key={department.id}
+          className="flex items-center gap-1"
+        >
+
+          <div
+            className={`w-5 h-5 rounded-full ${badgeClass} text-white flex items-center justify-center text-[10px] font-black`}
+          >
+            {department.shortName.charAt(0)}
+          </div>
+
+          <span className="text-xs font-black">
+            {count}
+          </span>
+
+        </div>
+      );
+    })}
+
+  </div>
 
   )}
 
@@ -3677,44 +4006,65 @@ year:'numeric'
             </div>
             <div className="flex flex-wrap items-center gap-2">
 
-  {(tomorrowTCA.opd > 0 ||
-    tomorrowTCA.pboa > 0) && (
+  {/*--- Show TCA notification when any department has TCA tomorrow ---*/}
+  {tomorrowTCATotal > 0 && (
 
-    <div className="hidden md:flex items-center gap-2 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
+  <div className="hidden md:flex items-center gap-2 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
 
-      <span className="text-amber-600">
-        🔔
-      </span>
+    <span className="text-amber-600">
+      🔔
+    </span>
 
-      <span className="hidden md:inline text-xs font-bold text-slate-700">
-        Tomorrow's TCA
-      </span>
+    <span className="hidden md:inline text-xs font-bold text-slate-700">
+      Tomorrow's TCA
+    </span>
 
-      <div className="flex items-center gap-1">
+    {/*--- Tomorrow's TCA counts generated from all departments ---*/}
+    <div className="flex items-center gap-2">
 
-  <div className="w-5 h-5 rounded-full bg-sky-500 text-white flex items-center justify-center text-[10px] font-black">
-    O
-  </div>
+      {DEPARTMENTS.map((department) => {
 
-  <span className="text-xs font-black text-slate-700">
-    {tomorrowTCA.opd}
-  </span>
+        const count =
+          tomorrowTCA[department.id] ?? 0;
 
-</div>
+        //--- Hide departments with no TCA tomorrow ---//
+        if (count === 0) {
+          return null;
+        }
 
-<div className="flex items-center gap-1">
+        const badgeClass =
+          department.id === 'OPD KKL'
+            ? 'bg-sky-500'
+            : department.id === 'PBOA'
+              ? 'bg-emerald-500'
+              : department.id === 'HSS'
+                ? 'bg-violet-500'
+                : 'bg-slate-500';
 
-  <div className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-black">
-    P
-  </div>
+        return (
+          <div
+            key={department.id}
+            className="flex items-center gap-1"
+          >
 
-  <span className="text-xs font-black text-slate-700">
-    {tomorrowTCA.pboa}
-  </span>
+            <div
+              className={`w-5 h-5 rounded-full ${badgeClass} text-white flex items-center justify-center text-[10px] font-black`}
+            >
+              {department.shortName.charAt(0)}
+            </div>
 
-</div>
+            <span className="text-xs font-black text-slate-700">
+              {count}
+            </span>
+
+          </div>
+        );
+
+      })}
 
     </div>
+
+  </div>
 
   )}
 
@@ -3819,10 +4169,17 @@ year:'numeric'
       className={`text-[8px] px-2 py-[1px] rounded-full font-black border uppercase ${
         app.department === 'OPD KKL'
           ? 'bg-sky-50 text-sky-700 border-sky-200'
-          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+          : app.department === 'PBOA'
+            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            : 'bg-violet-50 text-violet-700 border-violet-200'
       }`}
     >
-      {app.department === 'OPD KKL' ? 'OPD' : 'PBOA'}
+      {/*--- Department badge label from the central department master list ---*/}
+      {
+        DEPARTMENTS.find(
+          department => department.id === app.department
+        )?.shortName || app.department
+      }
     </span>
 
     <span className="text-lg font-black text-blue-600 uppercase tracking-tight leading-none">
@@ -4122,14 +4479,27 @@ year:'numeric'
       className="bg-transparent border-none outline-none text-xs font-medium appearance-none cursor-pointer"
       value={filterDepartment}
       onChange={(e) =>
+        //--- Support "All" or any department from the master list ---//
         setFilterDepartment(
-          e.target.value as 'All' | 'OPD KKL' | 'PBOA'
+          e.target.value === 'All'
+            ? 'All'
+            : e.target.value as Department
         )
       }
     >
-      <option value="All">All Departments</option>
-      <option value="OPD KKL">OPD KKL</option>
-      <option value="PBOA">PBOA</option>
+      {/*--- Department filter options generated from the master list ---*/}
+      <option value="All">
+        All Departments
+      </option>
+
+      {DEPARTMENTS.map((department) => (
+        <option
+          key={department.id}
+          value={department.id}
+        >
+          {department.label}
+        </option>
+      ))}
     </select>
   </div>
 )}
@@ -4400,13 +4770,16 @@ year:'numeric'
                             {app.otherDisease && (
                               <span className="text-[8px] bg-slate-50 text-slate-600 px-1 py-[1px] rounded font-bold border border-slate-100 uppercase">{app.otherDisease}</span>
                             )}
-                            <span
+<span
   className={`text-[8px] px-2 py-[1px] rounded font-black border uppercase ${
     app.department === 'OPD KKL'
       ? 'bg-sky-50 text-sky-700 border-sky-200'
-      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      : app.department === 'PBOA'
+        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+        : 'bg-violet-50 text-violet-700 border-violet-200'
   }`}
 >
+  {/*--- Department badge colour is assigned by department ---*/}
   {app.department}
 </span>
                           </div>
@@ -5063,37 +5436,37 @@ setSelectedReviewSummary(app);
         Department
       </label>
 
-      <select
-        value={
-          editingUser
-            ? editingUser.department
-            : newStaffDepartment
-        }
-        onChange={(e) => {
+<select
+  value={
+    editingUser
+      ? editingUser.department
+      : newStaffDepartment
+  }
+  onChange={(e) => {
 
-          const value =
-            e.target.value as
-              | 'OPD KKL'
-              | 'PBOA';
+    const value =
+      e.target.value as Department;
 
-          editingUser
-            ? setEditingUser({
-                ...editingUser,
-                department: value
-              })
-            : setNewStaffDepartment(value);
+    editingUser
+      ? setEditingUser({
+          ...editingUser,
+          department: value
+        })
+      : setNewStaffDepartment(value);
 
-        }}
-        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
-      >
-        <option value="OPD KKL">
-          OPD KKL
-        </option>
-
-        <option value="PBOA">
-          PBOA
-        </option>
-      </select>
+  }}
+  className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
+>
+  {/*--- Department options generated from the department master list ---*/}
+  {DEPARTMENTS.map((department) => (
+    <option
+      key={department.id}
+      value={department.id}
+    >
+      {department.label}
+    </option>
+  ))}
+</select>
     </div>
 
     <div className="space-y-1">
@@ -5209,8 +5582,10 @@ setSelectedReviewSummary(app);
   <span
     className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
       u.department === 'OPD KKL'
-        ? 'bg-sky-100 text-sky-700'
-        : 'bg-emerald-100 text-emerald-700'
+      ? 'bg-sky-100 text-sky-700'
+      : u.department === 'PBOA'
+        ? 'bg-emerald-100 text-emerald-700'
+        : 'bg-violet-100 text-violet-700'
     }`}
   >
     {u.department}
@@ -5579,10 +5954,9 @@ setSelectedReviewSummary(app);
   <select
     value={formDepartment}
     onChange={(e) =>
+      //--- Use the central Department type ---//
       setFormDepartment(
-        e.target.value as
-          | 'OPD KKL'
-          | 'PBOA'
+        e.target.value as Department
       )
     }
     disabled={
@@ -5591,13 +5965,15 @@ setSelectedReviewSummary(app);
 }
     className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
   >
-    <option value="OPD KKL">
-      OPD KKL
-    </option>
-
-    <option value="PBOA">
-      PBOA
-    </option>
+    {/*--- Department options generated from the central department list ---*/}
+{DEPARTMENTS.map((department) => (
+  <option
+    key={department.id}
+    value={department.id}
+  >
+    {department.label}
+  </option>
+))}
   </select>
 </div>
                     </div>
@@ -8000,50 +8376,51 @@ const imageReason =
 
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
 
-      {/* OPD KKL */}
-      <div className="bg-sky-50 border border-sky-100 rounded-2xl p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-sky-600">
-          OPD KKL
-        </p>
+      {/*--- Department screening cards generated from the master department list ---*/}
+      {DEPARTMENTS.map((department) => {
 
-        <p className="text-3xl font-black text-slate-800 mt-1">
-          {monthlyRetenStats.opd}
-        </p>
+        const count =
+          monthlyRetenStats.monthlyDepartmentSummary[
+            department.id
+          ] ?? 0;
 
-        <p className="text-[10px] font-bold text-slate-400 uppercase">
-          Cases
-        </p>
-      </div>
+        const cardClass =
+          department.id === 'OPD KKL'
+            ? 'bg-sky-50 border-sky-100'
+            : department.id === 'PBOA'
+              ? 'bg-emerald-50 border-emerald-100'
+              : 'bg-violet-50 border-violet-100';
 
-      {/* PBOA */}
-      <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">
-          PBOA
-        </p>
+        const textClass =
+          department.id === 'OPD KKL'
+            ? 'text-sky-600'
+            : department.id === 'PBOA'
+              ? 'text-emerald-600'
+              : 'text-violet-600';
 
-        <p className="text-3xl font-black text-slate-800 mt-1">
-          {monthlyRetenStats.pboa}
-        </p>
+        return (
+          <div
+            key={department.id}
+            className={`${cardClass} border rounded-2xl p-4`}
+          >
 
-        <p className="text-[10px] font-bold text-slate-400 uppercase">
-          Cases
-        </p>
-      </div>
+            <p
+              className={`text-[10px] font-black uppercase tracking-widest ${textClass}`}
+            >
+              {department.label}
+            </p>
 
-      {/* HSS */}
-      <div className="bg-violet-50 border border-violet-100 rounded-2xl p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-violet-600">
-          HSS
-        </p>
+            <p className="text-3xl font-black text-slate-800 mt-1">
+              {count}
+            </p>
 
-        <p className="text-3xl font-black text-slate-800 mt-1">
-          0
-        </p>
+            <p className="text-[10px] font-bold text-slate-400 uppercase">
+              Cases
+            </p>
 
-        <p className="text-[10px] font-bold text-slate-400 uppercase">
-          Coming Soon
-        </p>
-      </div>
+          </div>
+        );
+      })}
 
       {/* TOTAL */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
