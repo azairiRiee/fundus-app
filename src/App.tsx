@@ -4565,7 +4565,11 @@ const badgeClass =
     
     app.department === 'OPD KKL'
       ? 'border-l-sky-500'
-      : 'border-l-emerald-500'
+      : app.department === 'PBOA'
+        ? 'border-l-emerald-500'
+        : app.department === 'HSS'
+          ? 'border-l-violet-500'
+          : 'border-l-slate-500'
 
   } ${
         app.status === AppointmentStatus.DONE
