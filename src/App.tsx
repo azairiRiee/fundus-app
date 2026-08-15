@@ -2922,11 +2922,32 @@ const tcaSchedule = useMemo(() => {
     }
   > = {};
 
+  //--- TCA Schedule shows upcoming appointments from tomorrow onwards ---//
   appointments
     .filter(
-      app =>
-        new Date(app.date) >= today
+      app => {
+        const appointmentDate = new Date(app.date);
+
+        return appointmentDate > today;
+      }
     )
+
+  //--- TCA Schedule excludes today's appointments ---//
+  const tomorrow = new Date();
+
+  tomorrow.setHours(0, 0, 0, 0);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  appointments
+    .filter(
+      app => {
+        const appointmentDate = new Date(app.date);
+        appointmentDate.setHours(0, 0, 0, 0);
+
+        return appointmentDate >= tomorrow;
+      }
+    )
+    
     .forEach(app => {
 
       if (!grouped[app.date]) {
