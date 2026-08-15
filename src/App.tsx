@@ -266,6 +266,7 @@ export default function App() {
   const [tempUserId, setTempUserId] = useState('');
   const [tempPassword, setTempPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showStaffForm, setShowStaffForm] = useState(false);
   
   const [showAdminConsole, setShowAdminConsole] = useState(false);
@@ -1619,50 +1620,71 @@ useEffect(() => {
 
 };
 
-const addStaffMember = (e: React.FormEvent) => {
-
+const addStaffMember = async (e: React.FormEvent) => {
   e.preventDefault();
 
   if (
     !newStaffId.trim() ||
     !newStaffPass.trim() ||
     !newStaffName.trim()
-  ) return;
+  ) {
+    return;
+  }
 
   const id = newStaffId.trim().toUpperCase();
 
-  if (users.some(u => u.id === id)) {
-
+  // Check duplicate ID — case insensitive
+  if (
+    users.some(
+      u => u.id.trim().toLowerCase() === id.toLowerCase()
+    )
+  ) {
     alert('User ID already exists');
-
     return;
-
   }
 
   const newUser: User = {
-  id,
-  password: newStaffPass,
-  displayName: newStaffName.trim(),
-  role: UserRole.STAFF,
+    id,
+    password: newStaffPass,
+    displayName: newStaffName.trim(),
+    role: UserRole.STAFF,
+    department: newStaffDepartment,
+    canViewAllDepartments: newStaffMA,
+    createdAt: Date.now()
+  };
 
-  department: newStaffDepartment,
+  try {
+    // Save to Firestore first
+    await addDoc(
+      collection(db, "users"),
+      newUser
+    );
 
-  canViewAllDepartments: newStaffMA,
+    // Only log after successful creation
+    addActivityLog(
+      'Created Staff Account',
+      `${newUser.displayName} (${newUser.id})`
+    );
 
-  createdAt: Date.now()
-};
+    // Reset form
+    setNewStaffId('');
+    setNewStaffName('');
+    setNewStaffPass('');
 
-  addDoc(
-    collection(db, "users"),
-    newUser
-  );
+    // Reset department & access
+    setNewStaffDepartment('OPD KKL');
+    setNewStaffMA(false);
 
-  addActivityLog('Created Staff Account', `${newUser.displayName} (${newUser.id})`);
+  } catch (error) {
+    console.error(
+      'Failed to create staff account',
+      error
+    );
 
-  setNewStaffId('');
-  setNewStaffName('');
-  setNewStaffPass('');
-
+    alert(
+      'Failed to create staff account. Please try again.'
+    );
+  }
 };
   
 const updateStaffMember = (e: React.FormEvent) => {
@@ -2851,38 +2873,65 @@ const tomorrowTCA = useMemo(() => {
                 {loginError}
               </motion.div>
             )}
-            
-            <div className="space-y-1.5">
-              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Staff User ID</label>
-              <div className="relative">
-                <UserIcon size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
-                <input 
-                  autoFocus
-                  type="text" 
-                  autoComplete="off"
-                  required
-                  className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium"
-                  placeholder="ID or Username"
-                  value={tempUserId}
-                  onChange={e => setTempUserId(e.target.value)}
-                />
-              </div>
-            </div>
 
-            <div className="space-y-1.5">
-              <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Password</label>
-              <div className="relative">
-                <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
-                <input 
-                  type="password" 
-                  autoComplete="new-password"
-                  required
-                  className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium text-slate-800"
-                  placeholder="••••••"
-                  value={tempPassword}
-                  onChange={e => setTempPassword(e.target.value)}
-                />
-              </div>
+{/* User ID Field Login Pages */}
+<div className="space-y-1.5">
+  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Staff User ID</label>
+    <div className="relative">
+      <UserIcon size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" />
+      <input 
+        autoFocus
+        type="text" 
+        autoComplete="off"
+        required
+        className="w-full pl-12 pr-4 py-4 rounded-xl border border-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium"
+        placeholder="ID or Username"
+        value={tempUserId}
+        onChange={e => setTempUserId(e.target.value)}
+        />
+    </div>
+</div>
+
+{/* Password Field Login Pages */}
+<div className="space-y-1.5">
+  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Password</label>
+    <div className="relative">
+
+  <Lock
+    size={18}
+    className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300"
+  />
+
+  <input
+    type={showLoginPassword ? "text" : "password"}
+    autoComplete="current-password"
+    required
+    className="w-full pl-12 pr-12 py-4 rounded-xl border border-slate-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none text-sm font-medium text-slate-800"
+    placeholder="••••••"
+    value={tempPassword}
+    onChange={e => setTempPassword(e.target.value)}
+  />
+
+  <button
+    type="button"
+    onClick={() =>
+      setShowLoginPassword(prev => !prev)
+    }
+    className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer transition-all"
+    aria-label={
+      showLoginPassword
+        ? "Hide password"
+        : "Show password"
+    }
+  >
+    {showLoginPassword ? (
+      <EyeOff size={18} />
+    ) : (
+      <Eye size={18} />
+    )}
+  </button>
+
+</div>
             </div>
 
             <button 
@@ -3671,7 +3720,9 @@ year:'numeric'
 
   <button
     onClick={() => setShowTCASchedule(true)}
-    className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-sm transition-all"
+    className="bg-white border border-slate-200 
+                hover:bg-green-200 hover:text-green-700 hover:border-green-300 
+                text-slate-700 px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-sm transition-all"
   >
     <Calendar size={18} />
     TCA Schedule
@@ -3972,12 +4023,14 @@ year:'numeric'
         <section className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
           {/* Controls */}
           <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex flex-col xl:flex-row gap-4 xl:items-center">
+            
+            {/* SEARCH BAR */}
             <div className="relative w-full sm:flex-1">
               <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input 
                 type="text" 
                 placeholder="Search Patient or IC..." 
-                className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full pl-10 pr-4 py-2 bg-white border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
               />
@@ -3986,7 +4039,7 @@ year:'numeric'
             <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2">
 
 {/* DATE RANGE FILTER */}
-<div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+<div className="flex items-center gap-2 bg-white border border-blue-500 rounded-lg px-3 py-1.5">
 
   <Calendar size={16} className="text-orange-500 shrink-0" />
 
@@ -3994,11 +4047,13 @@ year:'numeric'
   type="date"
   aria-label="Start date"
   title="Start date"
+  
   className={`bg-transparent border-none outline-none text-xs w-[120px] ${
-    filterDateFrom
-      ? "text-slate-800 font-bold"
-      : "text-slate-400 font-medium"
-  }`}
+  filterDateFrom
+    ? "text-slate-800 font-bold"
+    : "text-slate-400 font-medium"
+} [&::-webkit-calendar-picker-indicator]:cursor-pointer`}
+
   value={filterDateFrom}
   max={filterDateTo || undefined}
   onChange={e => setFilterDateFrom(e.target.value)}
@@ -4012,11 +4067,13 @@ year:'numeric'
   type="date"
   aria-label="End date"
   title="End date"
+
   className={`bg-transparent border-none outline-none text-xs w-[120px] ${
-    filterDateTo
-      ? "text-slate-800 font-bold"
-      : "text-slate-400 font-medium"
-  }`}
+  filterDateTo
+    ? "text-slate-800 font-bold"
+    : "text-slate-400 font-medium"
+} [&::-webkit-calendar-picker-indicator]:cursor-pointer`}
+
   value={filterDateTo}
   min={filterDateFrom || undefined}
   onChange={e => setFilterDateTo(e.target.value)}
@@ -4024,10 +4081,12 @@ year:'numeric'
 
 </div>
 
-              <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+              {/* STATUS FILTER */}
+
+              <div className="flex items-center gap-2 bg-white border border-blue-500 rounded-lg px-3 py-1.5">
                 <Filter size={16} className="text-slate-400" />
                 <select 
-                  className="bg-transparent border-none outline-none text-xs font-medium appearance-none"
+                  className="bg-transparent border-none outline-none text-xs font-medium appearance-none cursor-pointer"
                   value={filterStatus}
                   onChange={e => setFilterStatus(e.target.value as any)}
                 >
@@ -4036,7 +4095,9 @@ year:'numeric'
                 </select>
               </div>
 
-              <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+              {/* REVIEW FILTER */}
+
+              <div className="flex items-center gap-2 bg-white border border-blue-500 rounded-lg px-3 py-1.5">
   <ShieldCheck size={16} className="text-blue-500" />
   <select
     className="bg-transparent border-none outline-none text-xs font-medium appearance-none cursor-pointer"
@@ -4050,9 +4111,11 @@ year:'numeric'
   </select>
 </div>
 
+{/* DEPARTMENT FILTER */}
+
 {(currentUser?.role === UserRole.ADMIN ||
   currentUser?.canViewAllDepartments) && (
-  <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+  <div className="flex items-center gap-2 bg-white border border-blue-500 rounded-lg px-3 py-1.5">
     <Users size={16} className="text-emerald-500" />
 
     <select
@@ -4862,7 +4925,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl flex flex-col max-h-[70vh] md:max-h-[80vh]"
+              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl flex flex-col max-h-[70vh] md:max-h-[80vh] overflow-hidden"
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <div className="flex items-center gap-3">
@@ -4950,7 +5013,7 @@ setSelectedReviewSummary(app);
       </label>
 
       <input
-        type="text"
+        type="password"
         required
         className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
         value={editingUser ? editingUser.password : newStaffPass}
