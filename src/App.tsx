@@ -6882,7 +6882,9 @@ side === "right"
               <div className="w-full md:w-96 flex flex-col p-8 border-l border-slate-100 bg-slate-50" key={selectedPhotoApp?.app?.id}>
                 <div className="flex justify-between items-start mb-6">
                   <div>
-                    <h2 className="text-2xl font-bold text-slate-800 tracking-tight">{selectedPhotoApp?.app?.patientName}</h2>
+                    <h2 className="text-base sm:text-lg lg:text-2xl font-bold text-slate-800 tracking-tight">
+  {selectedPhotoApp?.app?.patientName}
+</h2>
                     <p className="text-sm text-slate-500 uppercase mt-1">IC: {selectedPhotoApp?.app?.icNumber}</p>
                     
                   </div>
@@ -6948,7 +6950,7 @@ side === "right"
                       }
                     }}
                   >
-                    <div className="space-y-4 flex-1 overflow-y-auto pr-2 pb-6 min-h-0">
+                    <div className="flex-1 min-h-0 overflow-y-auto pr-2 space-y-6 summary-scrollbar">
                       {/* Eye Selection Tabs */}
                       <div className="flex gap-2 p-1 bg-slate-200 rounded-2xl sticky top-0 z-20">
                         {(['right', 'left'] as const).map(eye => (
@@ -6990,7 +6992,7 @@ const imageReason =
                               </label>
                             </div>
                             
-                            <div className="space-y-6 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm min-h-[650px]">
+                            <div className="space-y-6 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm min-h-0">
                               
                               {/* Status Selection */}
                               <div className="space-y-3">
@@ -7048,7 +7050,7 @@ const imageReason =
                                             }}
                                             className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                                           />
-                                          <span className="text-sm font-bold text-slate-700">{type}</span>
+                                          <span className="text-xs sm:text-sm font-bold text-slate-700">{type}</span>
                                         </label>
 
                                         {/* NPDR Severity */}
@@ -7122,7 +7124,7 @@ const imageReason =
                           </div>
                         );
                       })}
-                    </div>
+                    
 
                     {patientHistory.length > 0 && (
   <div className="mt-6 border-t border-slate-100 pt-4">
@@ -7211,6 +7213,7 @@ const imageReason =
     />
   </div>
 )}
+</div>
                     <div className="pt-6 mt-auto shrink-0">
                       <button 
   type="submit"
@@ -7489,7 +7492,7 @@ const imageReason =
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[95vh] lg:max-h-[90vh] overflow-y-auto flex flex-col lg:flex-row"
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[95vh] lg:h-[90vh] overflow-y-auto flex flex-col lg:flex-row"
       >
 
         <div className="flex flex-col lg:flex-row w-full">
@@ -7651,7 +7654,7 @@ const imageReason =
 </div>
 
   {/* RIGHT SIDEBAR */}
-  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 flex flex-col h-full overflow-hidden">
+  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 flex flex-col h-full min-h-0 overflow-hidden">
 
     <div className="flex items-center justify-between mb-6">
 
@@ -7704,7 +7707,7 @@ const imageReason =
       </button>
 
     </div>
-<div className="flex flex-col flex-1 min-h-0 gap-6">
+<div className="flex-1 min-h-0 overflow-y-auto pr-2 space-y-6 summary-scrollbar">
 
   {/* REVIEWED BY */}
 <div className="bg-white rounded-2xl border border-slate-200 p-4">
@@ -7746,12 +7749,12 @@ const imageReason =
 )}
 
 {/* FINDINGS */}
-<div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col flex-1 min-h-0 overflow-hidden">
+<div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col">
   <p className="text-[11px] font-black uppercase tracking-widest text-slate-400 mb-4">
     Findings
   </p>
 
-  <div className="flex-1 overflow-y-auto space-y-4 pr-2 min-h-0">
+  <div className="space-y-4 pr-2">
 
     {/* RIGHT EYE */}
     <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4">
@@ -8018,7 +8021,7 @@ const imageReason =
 
   {showPatientHistory && patientHistory.length > 0 && (
 
-    <div className="border-t border-slate-200 p-3 space-y-2 max-h-56 overflow-y-auto">
+    <div className="border-t border-slate-200 p-3 space-y-2">
 
       {patientHistory.map(history => (
 
@@ -8055,25 +8058,22 @@ const imageReason =
 
 </div>
 )}
-
+</div>
 {/* EDIT REVIEW BUTTON */}
 <button
   onClick={() => {
-
     setSelectedReviewSummary(null);
-
     setSelectedPhotoApp({
       app: selectedReviewSummary,
       eye: 'right'
     });
-
   }}
-  className="mt-auto shrink-0 w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
+  className="shrink-0 w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
 >
   Edit Review
 </button>
 
-</div>
+
   </div>
 
 </div>

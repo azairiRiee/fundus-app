@@ -23,3 +23,22 @@ button:not(:disabled),
 a {
   cursor: pointer;
 }
+
+/*--- Visible scrollbar for summary panel ---*/
+.summary-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.summary-scrollbar::-webkit-scrollbar-track {
+  background: #e2e8f0;
+  border-radius: 999px;
+}
+
+.summary-scrollbar::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 999px;
+}
+
+.summary-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
