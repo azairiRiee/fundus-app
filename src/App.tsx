@@ -37,7 +37,12 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
-  UserX
+  UserX,
+  Building2,
+  Network,
+  Settings2,
+  Database,
+  Shield
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -56,63 +61,130 @@ import {
   query,
   orderBy,
   limit,
-  getDocs
+  getDocs,
+  setDoc,
+  where
 } from 'firebase/firestore';
 
 import { analyzeFundus } from "./services/aiService";
 
-const APP_VERSION = "v3.7";
+const APP_VERSION = "v4.0.0-beta.1";
 
 // =====================================================
-// DEPARTMENT MASTER LIST
-// Central list for all clinical departments.
+// CLINIC / FACILITY MASTER
+// Every facility is a standalone SINAR environment.
 //
-// Add new departments here in the future instead of
-// hardcoding department names throughout the app.
+// IMPORTANT:
+// - PBOA, HSS and OPD are no longer treated as departments.
+// - Clinic identity controls the operational UI/data scope.
+// - `isFundusProvider` controls whether the clinic performs fundus
+//   screening itself or selects another clinic as its fundus provider.
+// - These defaults are only the migration fallback. Super Admin can
+//   add new clinics through the app; new clinics are stored in Firestore.
 // =====================================================
 
-const DEPARTMENTS = [
+interface Clinic {
+  id: string;
+  name: string;
+  shortName: string;
+  active: boolean;
+  isFundusProvider: boolean;
+}
+
+const DEFAULT_CLINICS: Clinic[] = [
   {
-    id: 'OPD KKL',
-    label: 'OPD KKL',
-    shortName: 'OPD',
+    id: 'LINTANG',
+    name: 'Klinik Kesihatan Lintang',
+    shortName: 'KK Lintang',
+    active: true,
+    isFundusProvider: true,
   },
   {
-    id: 'PBOA',
-    label: 'PBOA',
-    shortName: 'PBOA',
+    id: 'PDG_RENGAS',
+    name: 'Klinik Kesihatan Padang Rengas',
+    shortName: 'KK Padang Rengas',
+    active: true,
+    isFundusProvider: true,
   },
   {
     id: 'HSS',
-    label: 'HSS',
+    name: 'Hospital Sungai Siput',
     shortName: 'HSS',
+    active: true,
+    isFundusProvider: false,
   },
-] as const;
+  {
+    id: 'PBOA',
+    name: 'Pasukan Bergerak Orang Asli',
+    shortName: 'PBOA',
+    active: true,
+    isFundusProvider: false,
+  },
+];
 
-/**
- * Department ID type generated automatically
- * from the DEPARTMENTS master list above.
- */
-type Department = typeof DEPARTMENTS[number]['id'];
-
-// --- Types & Constants ---
-
+//--- User access roles ---//
 enum UserRole {
+  SUPER_ADMIN = 'SUPER_ADMIN',
   ADMIN = 'ADMIN',
   STAFF = 'STAFF'
 }
+
+//---Legacy department type is retained only so old Firestore records remain readable during migration---//
+type Department = string;
+
+//---Map the old PBOA/HSS department labels to their new standalone clinic identities---//
+const inferClinicIdFromLegacy = (clinicId?: string | null, legacyDepartment?: string | null) => {
+  if (legacyDepartment === 'PBOA') return 'PBOA';
+  if (legacyDepartment === 'HSS') return 'HSS';
+  if (legacyDepartment === 'OPD KKL') return 'LINTANG';
+  return clinicId || 'LINTANG';
+};
+
+//--- Resolve the patient's referring/source clinic for dashboard breakdowns. ---//
+// New records use referringClinicId; legacy records fall back to department.
+const getReferringClinicId = (app: Partial<Appointment>) => {
+  if (app.referringClinicId) return app.referringClinicId;
+  if (app.department === 'PBOA') return 'PBOA';
+  if (app.department === 'HSS') return 'HSS';
+  if (app.department === 'OPD KKL') return 'LINTANG';
+  return app.clinicId || 'LINTANG';
+};
+
+//--- Keep the familiar OPD label for KK Lintang's own source cases. ---//
+// Other referring clinics use their current clinic short name.
+const getSourceDisplayName = (clinic: Clinic) =>
+  clinic.id === 'LINTANG' ? 'OPD' : clinic.shortName;
+
+//---Convert old appointment records into the new standalone-clinic context without deleting legacy fields---//
+const normalizeAppointmentClinic = (data: Partial<Appointment>) => ({
+  ...data,
+  clinicId: inferClinicIdFromLegacy(data.clinicId, data.department),
+});
+
+//---Convert old user records into standalone clinic identities during the read phase---//
+const normalizeUserClinic = (data: Partial<User>) => ({
+  ...data,
+  clinicId: inferClinicIdFromLegacy(data.clinicId, data.department),
+});
+
+const getClinicById = (clinics: Clinic[], clinicId?: string | null) =>
+  clinics.find(clinic => clinic.id === clinicId) || null;
+
+const getFundusProviderClinics = (clinics: Clinic[]) =>
+  clinics.filter(clinic => clinic.active && clinic.isFundusProvider);
 
 interface User {
   id: string;
   password?: string;
   role: UserRole;
 
+  //---Clinic identity: every non-super-admin account belongs to one clinic---//
+  clinicId: string | null;
+
   displayName: string;
 
-  //--- Department is controlled by the central department master list ---//
-  department: Department;
-
-  canViewAllDepartments: boolean;
+  //--- Legacy department field retained temporarily for backward compatibility only ---//
+  department?: string;
 
   createdAt: number;
 }
@@ -149,10 +221,20 @@ type ImageStatus =
   interface Appointment {
   id: string;
   firestoreId?: string;
+
+  //---Clinic tenant owning this clinical record---//
+  clinicId: string;
+
   patientName: string;
 
-  //--- Department is controlled by the central department master list ---//
-  department: Department;
+  //--- Legacy department field retained temporarily for backward compatibility only ---//
+  department?: string;
+
+  //--- Source/referring facility. This replaces the old department-as-facility concept. ---//
+  referringClinicId?: string;
+
+  //--- Facility where the fundus examination is actually performed. ---//
+  fundusProviderClinicId?: string;
 
   icNumber: string;
   phoneNumber: string;
@@ -226,6 +308,8 @@ type ImageStatus =
 }
 
 interface ActivityLog {
+  //---Clinic identity is attached to audit events for future tenant isolation---//
+  clinicId?: string | null;
   action: string;
   patient: string;
   by: string;
@@ -289,7 +373,8 @@ export default function App() {
     const saved = sessionStorage.getItem('clinic_current_user');
     if (!saved) return null;
     try {
-      return JSON.parse(saved);
+      const parsedUser = JSON.parse(saved) as User;
+      return normalizeUserClinic(parsedUser) as User;
     } catch (e) {
       console.error("Failed to parse current user", e);
       return null;
@@ -297,6 +382,41 @@ export default function App() {
   });
   
   const [users, setUsers] = useState<User[]>([]);
+
+  //---Clinic master is loaded from Firestore; defaults keep the existing app usable during migration---//
+  const [clinics, setClinics] = useState<Clinic[]>(DEFAULT_CLINICS);
+
+  //---Super Admin can open a management context without changing another user's clinic identity---//
+  const [superAdminClinicContext, setSuperAdminClinicContext] = useState<string | null>(null);
+
+  const currentClinic = getClinicById(
+    clinics,
+    currentUser?.clinicId
+  );
+
+  const fundusProviderClinics = useMemo(
+    () => getFundusProviderClinics(clinics),
+    [clinics]
+  );
+
+  //---Standalone clinic summary groups replace the old department-based dashboard groups---//
+  const availableDepartments = useMemo(() => {
+    const scopedClinics =
+      currentUser?.role === UserRole.SUPER_ADMIN
+        ? (superAdminClinicContext
+            ? clinics.filter(c => c.id === superAdminClinicContext)
+            : clinics.filter(c => c.active))
+        : clinics.filter(c => c.id === (currentUser?.clinicId || 'LINTANG') && c.active);
+
+    return scopedClinics.map(clinic => ({
+      id: clinic.id,
+      clinicId: clinic.id,
+      label: clinic.name,
+      shortName: clinic.shortName,
+    }));
+  }, [clinics, currentUser?.clinicId, currentUser?.role, superAdminClinicContext]);
+
+  const defaultDepartment = currentUser?.department || '';
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authMessage, setAuthMessage] = useState('');
   const [tempUserId, setTempUserId] = useState('');
@@ -309,12 +429,19 @@ export default function App() {
   const [newStaffId, setNewStaffId] = useState('');
   const [newStaffName, setNewStaffName] = useState('');
   const [newStaffPass, setNewStaffPass] = useState('');
+  const [showStaffPassword, setShowStaffPassword] = useState(false);
+  const [newStaffRole, setNewStaffRole] = useState<UserRole>(UserRole.STAFF);
+  const [newStaffClinicId, setNewStaffClinicId] = useState('LINTANG');
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
   
-  const [newStaffDepartment, setNewStaffDepartment] =
-  useState<Department>('OPD KKL');
-  const [newStaffMA, setNewStaffMA] =
-  useState(false);
+
+  //---Super Admin clinic-management form---//
+  const [showSuperAdminConsole, setShowSuperAdminConsole] = useState(false);
+  const [showClinicManager, setShowClinicManager] = useState(false);
+  const [newClinicId, setNewClinicId] = useState('');
+  const [newClinicName, setNewClinicName] = useState('');
+  const [newClinicShortName, setNewClinicShortName] = useState('');
+  const [newClinicIsFundusProvider, setNewClinicIsFundusProvider] = useState(false);
 
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
@@ -340,9 +467,30 @@ export default function App() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formIC, setFormIC] = useState('');
   const [formPhone, setFormPhone] = useState('');
-  const [formDepartment, setFormDepartment] = useState<Department>('OPD KKL');
-  const [selectedDate, setSelectedDate] = useState('');
+  //---Legacy formDepartment state is retained only for old appointment records; new UI uses clinic/referral fields---//
+  const [formDepartment, setFormDepartment] = useState<Department>('');
+  const [formReferringClinicId, setFormReferringClinicId] = useState('');
+  const [formFundusProviderClinicId, setFormFundusProviderClinicId] = useState('');
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
+
+  //---Default fundus provider follows the current clinic configuration---//
+  useEffect(() => {
+    if (!isFormOpen || editingAppointment) return;
+
+    if (currentClinic?.isFundusProvider) {
+      setFormReferringClinicId(currentClinic.id);
+      setFormFundusProviderClinicId(currentClinic.id);
+      return;
+    }
+
+    const defaultProvider =
+      fundusProviderClinics.find(clinic => clinic.id === 'LINTANG') ||
+      fundusProviderClinics[0];
+
+    setFormReferringClinicId(currentClinic?.id || '');
+    setFormFundusProviderClinicId(defaultProvider?.id || '');
+  }, [isFormOpen, editingAppointment, currentClinic?.id, currentClinic?.isFundusProvider, fundusProviderClinics]);
+  const [selectedDate, setSelectedDate] = useState('');
   const [deletingApp, setDeletingApp] = useState<Appointment | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [uploadingImageId, setUploadingImageId] = useState<string | null>(null);
@@ -630,25 +778,38 @@ const isCurrentMonth =
   setIsFormOpen(true);
 };
 
-  // Sync IC and Phone state when opening form
+  // Sync form context when opening the appointment form
   useEffect(() => {
     if (isFormOpen && editingAppointment) {
       setFormIC(editingAppointment.icNumber);
       setFormPhone(editingAppointment.phoneNumber);
-      setFormDepartment(editingAppointment.department || 'OPD KKL'
-);
+      setFormReferringClinicId(
+        editingAppointment.referringClinicId ||
+        editingAppointment.clinicId ||
+        currentUser?.clinicId ||
+        'LINTANG'
+      );
+      setFormFundusProviderClinicId(
+        editingAppointment.fundusProviderClinicId ||
+        (getClinicById(clinics, editingAppointment.clinicId)?.isFundusProvider
+          ? editingAppointment.clinicId
+          : fundusProviderClinics.find(clinic => clinic.id === 'LINTANG')?.id || fundusProviderClinics[0]?.id || '')
+      );
     } else if (isFormOpen) {
-
-  // Jangan reset kalau datang daripada Existing Patient
- setFormDepartment(
-  existingPatient?.department ||
-  currentUser?.department ||
-  'OPD KKL'
-);
-
-  setSelectedDate(todayStr);
-}
-  }, [isFormOpen, editingAppointment, currentUser, existingPatient]);
+      //---New appointment: referral/provider defaults are driven by clinic configuration---//
+      setFormReferringClinicId(currentUser?.clinicId || 'LINTANG');
+      if (currentClinic?.isFundusProvider) {
+        setFormFundusProviderClinicId(currentClinic.id);
+      } else {
+        setFormFundusProviderClinicId(
+          fundusProviderClinics.find(clinic => clinic.id === 'LINTANG')?.id ||
+          fundusProviderClinics[0]?.id ||
+          ''
+        );
+      }
+      setSelectedDate(todayStr);
+    }
+  }, [isFormOpen, editingAppointment, currentUser?.clinicId, currentClinic?.id, currentClinic?.isFundusProvider, clinics, fundusProviderClinics]);
 
   useEffect(() => {
     if (selectedPhotoApp) {
@@ -728,6 +889,7 @@ const isReviewCompleted = (app: Appointment) => {
 
   const addActivityLog = (action: string, patient: string = 'System', byOverride?: string) => {
     const logEntry: ActivityLog = {
+      clinicId: currentUser?.clinicId || 'LINTANG',
       action,
       patient,
       by: byOverride || getUserDisplayName(currentUser?.id || 'SYSTEM'),
@@ -770,6 +932,82 @@ const isReviewCompleted = (app: Appointment) => {
   );
 
 });
+  };
+
+  /* =====================================================
+      DELETE CLINIC HANDLER
+      Safe delete for Super Admin.
+      - Only empty clinics can be permanently deleted.
+      - Clinics with users or appointments are protected.
+     ===================================================== */
+  const handleDeleteClinic = async (clinic: Clinic) => {
+    if (currentUser?.role !== UserRole.SUPER_ADMIN) {
+      alert('Only Super Admin can delete a clinic.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete clinic "${clinic.name}" (${clinic.id})?\n\n` +
+      `This is only allowed if the clinic has no users ` +
+      `and no appointment records linked to it.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      //--- Check linked users before deleting ---//
+      const usersSnapshot = await getDocs(
+        query(
+          collection(db, 'users'),
+          where('clinicId', '==', clinic.id),
+          limit(1)
+        )
+      );
+
+      if (!usersSnapshot.empty) {
+        alert(
+          `Cannot delete ${clinic.name}.\n\n` +
+          `There are still user account(s) linked to this clinic.\n` +
+          `Remove or reassign those users first.`
+        );
+        return;
+      }
+
+      //--- Check linked appointments before deleting ---//
+      const appointmentsSnapshot = await getDocs(
+        query(
+          collection(db, 'appointments'),
+          where('clinicId', '==', clinic.id),
+          limit(1)
+        )
+      );
+
+      if (!appointmentsSnapshot.empty) {
+        alert(
+          `Cannot delete ${clinic.name}.\n\n` +
+          `There are still appointment records linked to this clinic.\n` +
+          `The clinic is kept to protect historical clinical data.`
+        );
+        return;
+      }
+
+      //--- Delete the clinic document ---//
+      await deleteDoc(doc(db, 'clinics', clinic.id));
+
+      //--- Firestore listener refreshes the clinic list automatically ---//
+      addActivityLog(
+        'Deleted Clinic',
+        `${clinic.name} (${clinic.id})`,
+        currentUser.displayName
+      );
+
+      alert(`${clinic.name} has been deleted.`);
+    } catch (error) {
+      console.error('Failed to delete clinic', error);
+      alert(
+        'Failed to delete clinic. Please check Firestore permissions/indexes and try again.'
+      );
+    }
   };
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -832,14 +1070,82 @@ const isReviewCompleted = (app: Appointment) => {
 
 }, [selectedPhotoApp]);
   
+  // =========================================================
+  // LEGACY FUNDUS PROVIDER COMPATIBILITY
+  // Old records were created before fundusProviderClinicId existed.
+  // Historically, HSS/PBOA/OPD KKL referrals were performed at KK Lintang.
+  // Keep those records visible to Lintang until data migration is completed.
+  // New records MUST use fundusProviderClinicId.
+  // =========================================================
+  const isLegacyLintangProviderRecord = (app: Appointment) => {
+    if (!app) return false;
+    if ((app.fundusProviderClinicId || '').trim()) return false;
+
+    const legacyClinicId = (app.clinicId || '').trim();
+    const legacyDepartment = (app.department || '').trim();
+    const legacyReferringClinicId = (app.referringClinicId || '').trim();
+
+    return (
+      legacyClinicId === 'LINTANG' ||
+      legacyClinicId === 'PBOA' ||
+      legacyClinicId === 'HSS' ||
+      legacyDepartment === 'OPD KKL' ||
+      legacyDepartment === 'PBOA' ||
+      legacyDepartment === 'HSS' ||
+      legacyReferringClinicId === 'PBOA' ||
+      legacyReferringClinicId === 'HSS'
+    );
+  };
+
   // Calculate Monthly Stats
   // KK Lintang workload: include ALL referring/source departments; exclude No Show only.
   // Pending Fundus and Pending Review are intentionally non-overlapping.
+  //---Clinic-scoped appointment view for UI/statistics---//
+  // Legacy records without clinicId are treated as LINTANG during migration.
+  const visibleAppointments = useMemo(() => {
+    const activeClinicId = currentUser?.clinicId || 'LINTANG';
+
+    return appointments.filter(app => {
+      if (currentUser?.role === UserRole.SUPER_ADMIN) return true;
+      return (app.clinicId || 'LINTANG') === activeClinicId;
+    });
+  }, [appointments, currentUser?.clinicId, currentUser?.role]);
+
+  // =========================================================
+  // FUNDUS PROVIDER WORKLOAD
+  // Provider clinics must count every patient whose fundus service
+  // is performed by the current clinic, including HSS/PBOA referrals.
+  // Non-provider clinics continue to see their own operational cases.
+  // =========================================================
+  const isCurrentClinicFundusProvider = !!currentClinic?.isFundusProvider;
+
+  const providerWorkloadAppointments = useMemo(() => {
+    if (!currentUser) return [];
+
+    if (currentUser.role === UserRole.SUPER_ADMIN) {
+      return appointments;
+    }
+
+    const activeClinicId = currentUser.clinicId || 'LINTANG';
+
+    return appointments.filter(app => {
+      const ownClinic = (app.clinicId || 'LINTANG') === activeClinicId;
+      const fundusHere = (app.fundusProviderClinicId || '') === activeClinicId;
+      const legacyFundusHere =
+        activeClinicId === 'LINTANG' &&
+        isLegacyLintangProviderRecord(app);
+
+      return isCurrentClinicFundusProvider
+        ? ownClinic || fundusHere || legacyFundusHere
+        : ownClinic;
+    });
+  }, [appointments, currentUser, isCurrentClinicFundusProvider]);
+
   const monthlyStats = useMemo(() => {
     const currentMonth = selectedAnalyticsMonth.getMonth();
     const currentYear = selectedAnalyticsMonth.getFullYear();
 
-    const thisMonthApps = appointments.filter(app => {
+    const thisMonthApps = providerWorkloadAppointments.filter(app => {
       if (!app || !app.date) return false;
 
       const appDate = new Date(app.date);
@@ -887,7 +1193,7 @@ const isReviewCompleted = (app: Appointment) => {
         app => !isCaseComplete(app)
       ).length,
     };
-  }, [appointments, selectedAnalyticsMonth]);
+  }, [providerWorkloadAppointments, selectedAnalyticsMonth]);
 
 // ===== MONTHLY RETEN KK LINTANG =====
 const monthlyRetenStats = useMemo(() => {
@@ -897,7 +1203,7 @@ const monthlyRetenStats = useMemo(() => {
 
   // Semua appointment dalam bulan yang dipilih
   // No Show tidak dikira sebagai screening
-  const monthlyApps = appointments.filter(app => {
+  const monthlyApps = providerWorkloadAppointments.filter(app => {
 
     if (!app || !app.date) return false;
 
@@ -1037,25 +1343,30 @@ const isNotObtainable = (app: Appointment) => {
 // =====================================================
 // DYNAMIC MONTHLY DEPARTMENT SUMMARY
 // Generates screening counts for every department
-// registered in the central DEPARTMENTS master list.
+// registered in the clinic-aware department master list.
 //
 // Adding a new department automatically includes it
 // in the monthly summary.
 // =====================================================
 
 const monthlyDepartmentSummary =
-  DEPARTMENTS.reduce(
-    (stats, department) => {
-
-      stats[department.id] =
-        monthlyApps.filter(
-          app => app.department === department.id
+  clinics.reduce(
+    (stats, clinic) => {
+      if (isCurrentClinicFundusProvider) {
+        //--- Provider clinic: breakdown by referring/source clinic. ---//
+        stats[clinic.id] = monthlyApps.filter(
+          app => getReferringClinicId(app) === clinic.id
         ).length;
+      } else {
+        //--- Non-provider clinic: only its own operational workload. ---//
+        stats[clinic.id] = monthlyApps.filter(
+          app => (app.clinicId || 'LINTANG') === clinic.id
+        ).length;
+      }
 
       return stats;
-
     },
-    {} as Record<Department, number>
+    {} as Record<string, number>
   );
 
 return {
@@ -1162,7 +1473,7 @@ notReviewYet: monthlyApps.filter(
 
   };
 
-}, [appointments, selectedAnalyticsMonth]);
+}, [visibleAppointments, selectedAnalyticsMonth]);
 
 // =====================================================
 // DEPARTMENT STATISTICS HELPER
@@ -1189,7 +1500,7 @@ selectedAnalyticsMonth.getMonth();
 const currentYear =
 selectedAnalyticsMonth.getFullYear();
 
-  const thisMonthApps = appointments.filter(app => {
+  const thisMonthApps = visibleAppointments.filter(app => {
 
     if (!app || !app.date) return false;
 
@@ -1206,18 +1517,18 @@ selectedAnalyticsMonth.getFullYear();
   // =====================================================
 // DYNAMIC MONTHLY DEPARTMENT STATISTICS
 // Calculates monthly statistics for every department
-// listed in the central DEPARTMENTS master list.
+// listed in the clinic-aware department master list.
 //
 // Adding a new department will automatically include it
 // in these statistics without creating new hardcoded
 // OPD/PBOA variables.
 // =====================================================
 
-const departmentStats = DEPARTMENTS.reduce(
+const departmentStats = availableDepartments.reduce(
   (stats, department) => {
 
     const departmentApps = thisMonthApps.filter(
-      app => app.department === department.id
+      app => (app.clinicId || 'LINTANG') === department.id
     );
 
     const fundusCount = departmentApps.filter(
@@ -1330,14 +1641,66 @@ const departmentStats = DEPARTMENTS.reduce(
 
   };
 
-}, [appointments, selectedAnalyticsMonth]);
+}, [visibleAppointments, selectedAnalyticsMonth]);
+
+  // =====================================================
+  // SUPER ADMIN MONTHLY CLINIC SUMMARY
+  // Shows the current selected month across every active clinic.
+  // Provider clinics count fundus work performed by that clinic,
+  // including referrals from HSS/PBOA/other source clinics.
+  // Non-provider clinics count their own operational records.
+  // =====================================================
+  const superAdminMonthlyClinicStats = useMemo(() => {
+    const month = selectedAnalyticsMonth.getMonth();
+    const year = selectedAnalyticsMonth.getFullYear();
+
+    const isFundusComplete = (app: Appointment) => {
+      const rightDone = !!app.rightEyePhoto || app.rightEyeImageStatus === 'Not Obtainable';
+      const leftDone = !!app.leftEyePhoto || app.leftEyeImageStatus === 'Not Obtainable';
+      return rightDone && leftDone;
+    };
+
+    return clinics
+      .filter(clinic => clinic.active)
+      .map(clinic => {
+        const clinicApps = appointments.filter(app => {
+          if (!app?.date || app.status === AppointmentStatus.NO_SHOW) return false;
+          const d = new Date(app.date);
+          if (d.getMonth() !== month || d.getFullYear() !== year) return false;
+
+          if (clinic.isFundusProvider) {
+            const providerMatch = (app.fundusProviderClinicId || '').trim() === clinic.id;
+            const legacyLintangMatch = clinic.id === 'LINTANG' && isLegacyLintangProviderRecord(app);
+            return providerMatch || legacyLintangMatch;
+          }
+
+          return (app.clinicId || 'LINTANG') === clinic.id;
+        });
+
+        const pendingFundus = clinicApps.filter(app => !isFundusComplete(app)).length;
+        const pendingReview = clinicApps.filter(
+          app => isFundusComplete(app) && !isReviewCompleted(app)
+        ).length;
+        const completed = clinicApps.filter(
+          app => isFundusComplete(app) && isReviewCompleted(app)
+        ).length;
+
+        return {
+          clinic,
+          total: clinicApps.length,
+          pendingFundus,
+          pendingReview,
+          completed,
+        };
+      });
+  }, [appointments, clinics, selectedAnalyticsMonth]);
 
   const yearlyStats = useMemo(() => {
     const currentYear = new Date().getFullYear();
 
     // Practice Summary = KK Lintang service workload for the current year.
     // Department is only a referring/source breakdown.
-    const thisYearApps = appointments.filter(app => {
+    const thisYearApps = providerWorkloadAppointments.filter(app => {
       if (!app || !app.date) return false;
 
       const appDate = new Date(app.date);
@@ -1364,39 +1727,27 @@ const departmentStats = DEPARTMENTS.reduce(
       isFundusComplete(app) && !isReviewCompleted(app);
 
     // =====================================================
-    // DYNAMIC YEARLY DEPARTMENT STATISTICS
-    // Calculates yearly workload and pending review counts
-    // for every department in the central department list.
-    //
-    // This allows new departments such as HSS to be included
-    // without creating separate hardcoded variables.
+    // PROVIDER SOURCE-CLINIC BREAKDOWN
+    // Provider clinics count every case performed here, but the
+    // small breakdown shows where those patients came from.
+    // This restores the old dashboard behaviour without treating
+    // HSS/PBOA as the operational clinicId.
     // =====================================================
 
-    const yearlyDepartmentStats = DEPARTMENTS.reduce(
-      (stats, department) => {
-
-        const departmentApps = thisYearApps.filter(
-          app => app.department === department.id
+    const sourceClinicStats = clinics.reduce(
+      (stats, clinic) => {
+        const sourceApps = thisYearApps.filter(
+          app => getReferringClinicId(app) === clinic.id
         );
 
-        const pendingReview = departmentApps.filter(
-          isPendingReview
-        ).length;
-
-        stats[department.id] = {
-          total: departmentApps.length,
-          pendingReview,
+        stats[clinic.id] = {
+          total: sourceApps.length,
+          pendingReview: sourceApps.filter(isPendingReview).length,
         };
 
         return stats;
       },
-      {} as Record<
-        Department,
-        {
-          total: number;
-          pendingReview: number;
-        }
-      >
+      {} as Record<string, { total: number; pendingReview: number }>
     );
 
     const reviewPendingOPD = thisYearApps.filter(
@@ -1412,19 +1763,14 @@ const departmentStats = DEPARTMENTS.reduce(
     ).length;
 
     return {
-      //--- Dynamic yearly statistics for all departments ---//
-      yearlyDepartmentStats,
+      //--- Provider dashboard breakdown by referring/source clinic ---//
+      sourceClinicStats,
 
-      opd: thisYearApps.filter(
-        app => app.department === 'OPD KKL'
-      ).length,
+      opd: sourceClinicStats['LINTANG']?.total ?? 0,
+      pboa: sourceClinicStats['PBOA']?.total ?? 0,
 
-      pboa: thisYearApps.filter(
-        app => app.department === 'PBOA'
-      ).length,
-
-      reviewPendingOPD,
-      reviewPendingPBOA,
+      reviewPendingOPD: sourceClinicStats['LINTANG']?.pendingReview ?? 0,
+      reviewPendingPBOA: sourceClinicStats['PBOA']?.pendingReview ?? 0,
 
       // Unique current-year cases awaiting clinical review.
       reviewPending: thisYearApps.filter(
@@ -1434,7 +1780,7 @@ const departmentStats = DEPARTMENTS.reduce(
       total: thisYearApps.length,
       year: currentYear
     };
-  }, [appointments]);
+  }, [providerWorkloadAppointments, clinics]);
 
   const isAppointmentComplete = (app: Appointment) => {
   if (!app) return false;
@@ -1531,15 +1877,58 @@ useEffect(() => {
     }
   }
 
+  // Realtime Clinic Master Sync
+  const unsubscribeClinics = onSnapshot(
+    collection(db, "clinics"),
+    (snapshot) => {
+      if (snapshot.empty) {
+        setClinics(DEFAULT_CLINICS);
+        return;
+      }
+
+      const firestoreClinics = snapshot.docs
+        .map(docSnapshot => ({
+          id: docSnapshot.id,
+          ...(docSnapshot.data() as Partial<Clinic>),
+        }))
+        .filter(clinic => clinic.id && clinic.name) as Clinic[];
+
+      //---Merge Firestore configuration over migration defaults---//
+      const merged = DEFAULT_CLINICS.map(defaultClinic =>
+        firestoreClinics.find(clinic => clinic.id === defaultClinic.id) || defaultClinic
+      );
+
+      firestoreClinics.forEach(clinic => {
+        if (!merged.some(existing => existing.id === clinic.id)) {
+          merged.push({
+            ...clinic,
+            shortName: clinic.shortName || clinic.name,
+            active: clinic.active ?? true,
+            isFundusProvider: clinic.isFundusProvider ?? false,
+          });
+        }
+      });
+
+      setClinics(merged);
+    },
+    (error) => {
+      console.warn("Clinic master sync unavailable; using migration defaults.", error);
+      setClinics(DEFAULT_CLINICS);
+    }
+  );
+
   // Realtime Firestore Sync
 const unsubscribe = onSnapshot(
   collection(db, "appointments"),
   (snapshot) => {
 
-    const firestoreApps = snapshot.docs.map(docSnapshot => ({
-  firestoreId: docSnapshot.id,
-  ...docSnapshot.data()
-})) as Appointment[];
+    const firestoreApps = snapshot.docs.map(docSnapshot => {
+  const data = docSnapshot.data() as Partial<Appointment>;
+  return {
+    firestoreId: docSnapshot.id,
+    ...normalizeAppointmentClinic(data),
+  };
+}) as Appointment[];
 
     if (firestoreApps.length > 0) {
       setAppointments(firestoreApps);
@@ -1554,10 +1943,13 @@ const unsubscribeUsers = onSnapshot(
   collection(db, "users"),
   (snapshot) => {
 
-    let firestoreUsers = snapshot.docs.map(doc => ({
-      firestoreId: doc.id,
-      ...doc.data()
-    })) as User[];
+    let firestoreUsers = snapshot.docs.map(doc => {
+      const data = doc.data() as Partial<User>;
+      return {
+        firestoreId: doc.id,
+        ...normalizeUserClinic(data),
+      };
+    }) as User[];
 
     setUsers(firestoreUsers);
 
@@ -1574,7 +1966,8 @@ const unsubscribeActivityLogs = onSnapshot(
   (snapshot) => {
 
     const firestoreActivityLogs = snapshot.docs.map(docSnapshot => ({
-      ...docSnapshot.data()
+      ...docSnapshot.data(),
+      clinicId: (docSnapshot.data() as Partial<ActivityLog>).clinicId ?? 'LINTANG',
     })) as ActivityLog[];
 
     setActivityLogs(firestoreActivityLogs);
@@ -1583,6 +1976,7 @@ const unsubscribeActivityLogs = onSnapshot(
 );
 
 return () => {
+  unsubscribeClinics();
   unsubscribe();
   unsubscribeUsers();
   unsubscribeActivityLogs();
@@ -1621,7 +2015,7 @@ return () => {
 
   }
 
-}, [appointments]);
+}, [visibleAppointments]);
 
 
 // Sync Activity Logs with localStorage
@@ -1756,7 +2150,12 @@ useEffect(() => {
 
     if (user) {
 
-      setCurrentUser(user);
+      const normalizedUser: User = {
+        ...user,
+        clinicId: user.clinicId ?? 'LINTANG',
+      };
+
+      setCurrentUser(normalizedUser);
       addActivityLog('Logged In', `${user.displayName} (${user.id})`, user.displayName);
 
     } else {
@@ -1827,9 +2226,10 @@ const addStaffMember = async (e: React.FormEvent) => {
     id,
     password: newStaffPass,
     displayName: newStaffName.trim(),
-    role: UserRole.STAFF,
-    department: newStaffDepartment,
-    canViewAllDepartments: newStaffMA,
+    role: currentUser?.role === UserRole.SUPER_ADMIN ? newStaffRole : UserRole.STAFF,
+    clinicId: currentUser?.role === UserRole.SUPER_ADMIN
+      ? (newStaffRole === UserRole.SUPER_ADMIN ? null : newStaffClinicId)
+      : (currentUser?.clinicId ?? 'LINTANG'),
     createdAt: Date.now()
   };
 
@@ -1850,10 +2250,9 @@ const addStaffMember = async (e: React.FormEvent) => {
     setNewStaffId('');
     setNewStaffName('');
     setNewStaffPass('');
-
-    // Reset department & access
-    setNewStaffDepartment('OPD KKL');
-    setNewStaffMA(false);
+    setShowStaffPassword(false);
+    setNewStaffRole(UserRole.STAFF);
+    setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
 
   } catch (error) {
     console.error(
@@ -1867,7 +2266,7 @@ const addStaffMember = async (e: React.FormEvent) => {
   }
 };
   
-const updateStaffMember = (e: React.FormEvent) => {
+const updateStaffMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
     
@@ -2311,7 +2710,7 @@ isEdited:
     const month = selectedAnalyticsMonth.getMonth();
 const year = selectedAnalyticsMonth.getFullYear();
 
-const monthlyAppointments = appointments.filter(app => {
+const monthlyAppointments = visibleAppointments.filter(app => {
   if (!app || !app.date) return false;
 
   const d = new Date(app.date);
@@ -2367,38 +2766,7 @@ link.setAttribute(
 ) => {
 
   try {
-// ===== PBOA RULES =====
-if (!editingAppointment && formDepartment === 'PBOA') {
-
-  const selectedDate = new Date(data.date || '');
-
-  // Friday only
-  if (selectedDate.getDay() !== 5) {
-
-    alert(
-      'PBOA appointments can only be scheduled on Fridays.'
-    );
-
-    return;
-  }
-
-  // Check slot count
-  const pboaCount = appointments.filter(
-    app =>
-      app.department === 'PBOA' &&
-      app.date === data.date
-  ).length;
-
-  if (pboaCount >= PBOA_LIMIT) {
-
-    alert(
-      `PBOA slot is full for ${data.date}. Please select the next available Friday.`
-    );
-
-    return;
-  }
-
-}
+//---Standalone clinics no longer use department-specific scheduling rules---//
     if (editingAppointment) {
 
       if (!editingAppointment.firestoreId) return;
@@ -2411,7 +2779,10 @@ if (!editingAppointment && formDepartment === 'PBOA') {
   ),
   {
     ...data,
-    department: formDepartment
+    //---Preserve the owning clinic; referral/provider are separate relationships---//
+    clinicId: editingAppointment.clinicId ?? currentUser?.clinicId ?? 'LINTANG',
+    referringClinicId: formReferringClinicId || editingAppointment.referringClinicId || currentUser?.clinicId || 'LINTANG',
+    fundusProviderClinicId: formFundusProviderClinicId || editingAppointment.fundusProviderClinicId || currentClinic?.id || ''
   }
 );
 
@@ -2425,6 +2796,13 @@ if (!editingAppointment && formDepartment === 'PBOA') {
           .toString(36)
           .substr(2, 9),
 
+        //---Clinic tenant is stamped onto every new clinical record---//
+        clinicId: currentUser?.clinicId || 'LINTANG',
+
+        //---Referral/provider relationship for standalone clinic architecture---//
+        referringClinicId: formReferringClinicId || currentUser?.clinicId || 'LINTANG',
+        fundusProviderClinicId: formFundusProviderClinicId || currentClinic?.id || '',
+
         patientName:
           data.patientName || '',
 
@@ -2434,8 +2812,7 @@ if (!editingAppointment && formDepartment === 'PBOA') {
         phoneNumber:
           data.phoneNumber || '',
 
-        department: formDepartment,
-
+        //---No department is assigned in the standalone-clinic model---//
         date:
           data.date || '',
 
@@ -2694,18 +3071,29 @@ const sortedAndFilteredAppointments = useMemo(() => {
       // DEPARTMENT ACCESS
       // =========================
 
-      // ADMIN nampak semua
-      if (currentUser?.role === UserRole.ADMIN) {
+      //---SUPER ADMIN boleh akses semua clinic---//
+      if (currentUser?.role === UserRole.SUPER_ADMIN) {
         return true;
       }
 
-      // MA nampak semua
-      if (currentUser?.canViewAllDepartments) {
-        return true;
-      }
+      //---User boleh melihat rekod yang dimiliki clinic sendiri---//
+      const activeClinicId = currentUser?.clinicId || 'LINTANG';
+      const isOwnClinicRecord = (app.clinicId || 'LINTANG') === activeClinicId;
 
-      // Staff biasa ikut department
-      return app.department === currentUser?.department;
+      //---Jika clinic ini ialah fundus provider, ia juga perlu melihat
+      //   appointment dari clinic lain yang dirujuk untuk dibuat di sini.---//
+      const isFundusProviderRecord =
+        (app.fundusProviderClinicId || '') === activeClinicId;
+
+      //---Legacy HSS/PBOA/OPD records were historically performed at Lintang.---//
+      const isLegacyProviderRecord =
+        activeClinicId === 'LINTANG' &&
+        isLegacyLintangProviderRecord(app);
+
+      //---Contoh: PBOA -> KK Lintang.
+      //   Rekod kekal milik PBOA, tetapi KK Lintang tetap nampak
+      //   kerana Lintang ialah fundus provider.---//
+      return isOwnClinicRecord || isFundusProviderRecord || isLegacyProviderRecord;
     })
 
     .filter(app => {
@@ -2776,20 +3164,11 @@ const sortedAndFilteredAppointments = useMemo(() => {
         (filterReview === 'Normal' &&
           isNormal);
 
-      // =========================
-      // DEPARTMENT FILTER
-      // =========================
-
-      const matchesDepartment =
-        filterDepartment === 'All' ||
-        app.department === filterDepartment;
-
       return (
         matchesSearch &&
         matchesDate &&
         matchesActiveQueue &&
-        matchesReview &&
-        matchesDepartment
+        matchesReview
       );
     })
 
@@ -2839,18 +3218,22 @@ const paginatedAppointments =
   return appointments
 
     .filter(app => {
+      if (currentUser?.role === UserRole.SUPER_ADMIN) return true;
 
-      if (currentUser?.role === UserRole.ADMIN)
-        return true;
+      //---Clinic sendiri sentiasa boleh melihat rekodnya---//
+      const activeClinicId = currentUser?.clinicId || 'LINTANG';
+      const isOwnClinicRecord = (app.clinicId || 'LINTANG') === activeClinicId;
 
-      if (currentUser?.canViewAllDepartments)
-        return true;
+      //---Fundus provider juga perlu melihat referral dari clinic lain
+      //   apabila fundusProviderClinicId menunjuk kepada clinic ini.---//
+      const isFundusProviderRecord =
+        (app.fundusProviderClinicId || '') === activeClinicId;
 
-      return (
-        app.department ===
-        currentUser?.department
-      );
+      const isLegacyProviderRecord =
+        activeClinicId === 'LINTANG' &&
+        isLegacyLintangProviderRecord(app);
 
+      return isOwnClinicRecord || isFundusProviderRecord || isLegacyProviderRecord;
     })
 
     .filter(app =>
@@ -2875,7 +3258,7 @@ const paginatedAppointments =
   // =====================================================
   // DYNAMIC TODAY DEPARTMENT STATISTICS
   // Counts today's appointments for every department
-  // registered in the central DEPARTMENTS master list.
+  // registered in the clinic-aware department master list.
   //
   // Adding a new department automatically includes it
   // in today's statistics.
@@ -2883,16 +3266,16 @@ const paginatedAppointments =
 
   const todayDepartmentStats = useMemo(() => {
 
-    const todayApps = appointments.filter(
+    const todayApps = visibleAppointments.filter(
       app => app && isToday(app.date)
     );
 
-    return DEPARTMENTS.reduce(
+    return availableDepartments.reduce(
       (stats, department) => {
 
         stats[department.id] =
           todayApps.filter(
-            app => app.department === department.id
+            app => (app.clinicId || 'LINTANG') === department.id
           ).length;
 
         return stats;
@@ -2901,92 +3284,72 @@ const paginatedAppointments =
       {} as Record<Department, number>
     );
 
-  }, [appointments]);
+  }, [visibleAppointments]);
 
 // =====================================================
-// DYNAMIC TCA SCHEDULE
-// Groups upcoming appointments by date and department.
-//
-// Every department from the central DEPARTMENTS list
-// is automatically included in the schedule statistics.
+// TCA SCHEDULE
+// Provider clinics see all upcoming appointments that they will perform,
+// including patients referred from HSS/PBOA/other clinics.
+// Non-provider clinics see their own upcoming appointments.
+// The schedule is grouped by appointment date and source clinic.
 // =====================================================
 
 const tcaSchedule = useMemo(() => {
 
-  const today = new Date();
-
   const grouped: Record<
     string,
-    Record<Department, number> & {
-      total: number;
-    }
+    Record<string, number> & { total: number }
   > = {};
 
-  //--- TCA Schedule shows upcoming appointments from tomorrow onwards ---//
-  appointments
-    .filter(
-      app => {
-        const appointmentDate = new Date(app.date);
+  //--- Use provider workload so a fundus provider receives referrals here. ---//
+  const tcaAppointments = providerWorkloadAppointments.filter(app => {
+    if (!app?.date) return false;
 
-        return appointmentDate > today;
-      }
-    )
+    const appointmentDate = new Date(app.date);
+    if (Number.isNaN(appointmentDate.getTime())) return false;
 
-  //--- TCA Schedule excludes today's appointments ---//
-  const tomorrow = new Date();
+    //--- TCA schedule starts from tomorrow; today's cases stay in Today Queue. ---//
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    appointmentDate.setHours(0, 0, 0, 0);
 
-  tomorrow.setHours(0, 0, 0, 0);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+    return appointmentDate >= today;
+  });
 
-  appointments
-    .filter(
-      app => {
-        const appointmentDate = new Date(app.date);
-        appointmentDate.setHours(0, 0, 0, 0);
+  tcaAppointments.forEach(app => {
+    const appointmentDate = new Date(app.date);
+    appointmentDate.setHours(0, 0, 0, 0);
 
-        return appointmentDate >= tomorrow;
-      }
-    )
-    
-    .forEach(app => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-      if (!grouped[app.date]) {
+    //--- Do not show today's appointments in TCA. ---//
+    if (appointmentDate <= today) return;
 
-        grouped[app.date] = {
-          total: 0,
+    const dateKey = app.date;
+    const sourceClinicId = isCurrentClinicFundusProvider
+      ? getReferringClinicId(app)
+      : (app.clinicId || 'LINTANG');
 
-          ...DEPARTMENTS.reduce(
-            (stats, department) => {
-              stats[department.id] = 0;
-              return stats;
-            },
-            {} as Record<Department, number>
-          )
-        };
+    if (!grouped[dateKey]) {
+      grouped[dateKey] = { total: 0 };
+    }
 
-      }
+    grouped[dateKey][sourceClinicId] =
+      (grouped[dateKey][sourceClinicId] || 0) + 1;
 
-      //--- Increment the count for this appointment's department ---//
-      grouped[app.date][app.department]++;
+    grouped[dateKey].total++;
+  });
 
-      //--- Keep the overall appointment total ---//
-      grouped[app.date].total++;
+  return Object.entries(grouped).sort(
+    ([a], [b]) => new Date(a).getTime() - new Date(b).getTime()
+  );
 
-    });
-
-  return Object.entries(grouped)
-    .sort(
-      ([a], [b]) =>
-        new Date(a).getTime() -
-        new Date(b).getTime()
-    );
-
-}, [appointments]);
+}, [providerWorkloadAppointments, isCurrentClinicFundusProvider]);
 
 // =====================================================
 // DYNAMIC TOMORROW TCA STATISTICS
-// Counts tomorrow's TCA appointments for every department
-// registered in the central DEPARTMENTS master list.
+// Counts tomorrow's TCA appointments for each standalone clinic.
 //
 // The existing notification UI can continue using this
 // data while we gradually migrate it to dynamic departments.
@@ -3003,14 +3366,14 @@ const tomorrowTCA = useMemo(() => {
   const tomorrowStr =
     tomorrow.toLocaleDateString('en-CA');
 
-  return DEPARTMENTS.reduce(
+  return availableDepartments.reduce(
     (stats, department) => {
 
       stats[department.id] =
-        appointments.filter(
+        visibleAppointments.filter(
           app =>
             app.date === tomorrowStr &&
-            app.department === department.id
+            (app.clinicId || 'LINTANG') === department.id
         ).length;
 
       return stats;
@@ -3019,7 +3382,7 @@ const tomorrowTCA = useMemo(() => {
     {} as Record<Department, number>
   );
 
-}, [appointments]);
+}, [visibleAppointments]);
 
 // =====================================================
 // TOMORROW TCA SUMMARY
@@ -3035,6 +3398,13 @@ const tomorrowTCATotal = Object.values(
   (total, count) => total + count,
   0
 );
+
+  //--- Activity logs follow the same clinic context as the operational UI; Super Admin sees all ---//
+  const visibleActivityLogs = useMemo(() => {
+    if (currentUser?.role === UserRole.SUPER_ADMIN) return activityLogs;
+    const activeClinicId = currentUser?.clinicId || 'LINTANG';
+    return activityLogs.filter(log => (log.clinicId || 'LINTANG') === activeClinicId);
+  }, [activityLogs, currentUser?.clinicId, currentUser?.role]);
 
   // --- Views ---
 
@@ -3089,13 +3459,15 @@ const tomorrowTCATotal = Object.values(
             <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-white shadow-xl mb-6 ring-1 ring-slate-100">
               <img 
                 src={clinicLogo} 
-                alt="Klinik Kesihatan Lintang Logo"
+                alt={`${currentClinic?.name || 'Klinik Kesihatan Lintang'} Logo`}
                 className="w-full h-full object-cover"
                 
               />
             </div>
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight text-center">Klinik Kesihatan Lintang</h1>
-            <p className="text-blue-600 font-bold text-[10px] uppercase tracking-[0.2em] mt-1">Fundus Screening System</p>
+            {/*---SINAR platform identity: clinic is display context, not the product identity---*/}
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight text-center">SINAR</h1>
+            <p className="text-slate-600 font-bold text-[11px] tracking-wide mt-1">Sistem Interpretasi &amp; Nota Awal Retinopati</p>
+            <p className="text-blue-600 font-black text-[10px] uppercase tracking-[0.2em] mt-1">Fundus Screening Platform</p>
           </div>
           
           <form onSubmit={handleLogin} className="space-y-5">
@@ -3450,32 +3822,29 @@ const tomorrowTCATotal = Object.values(
 
 <div className="mt-2 space-y-1">
 
-  {/*--- Department TCA counts generated automatically ---*/}
-  {DEPARTMENTS.map((department) => {
+  {/*--- TCA counts by referring/source clinic ---*/}
+  {clinics.map((clinic) => {
 
-    const count =
-      stats[department.id] ?? 0;
+    const count = stats[clinic.id] ?? 0;
 
-    //--- Hide departments with no TCA appointments ---//
-    if (count === 0) {
-      return null;
-    }
+    //--- Hide clinics with no TCA appointments ---//
+    if (count === 0) return null;
 
     const textClass =
-      department.id === 'OPD KKL'
+      clinic.id === 'LINTANG'
         ? 'text-sky-600'
-        : department.id === 'PBOA'
+        : clinic.id === 'PBOA'
           ? 'text-emerald-600'
-          : department.id === 'HSS'
+          : clinic.id === 'HSS'
             ? 'text-violet-600'
-            : 'text-slate-600'
+            : 'text-slate-600';
 
     return (
       <p
-        key={department.id}
+        key={clinic.id}
         className={`text-xs font-semibold ${textClass}`}
       >
-        {department.label} : {count} Patients
+        {getSourceDisplayName(clinic)} : {count} Patients
       </p>
     );
   })}
@@ -3544,14 +3913,18 @@ const tomorrowTCATotal = Object.values(
             <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-slate-100 shadow-sm bg-white shrink-0">
               <img 
                 src={clinicLogo} 
-                alt="Klinik Kesihatan Lintang Logo"
+                alt={`${currentClinic?.name || 'Klinik Kesihatan Lintang'} Logo`}
                 className="w-full h-full object-cover"
               
               />
             </div>
-            <div className="flex flex-col">
-              <span className="font-black text-base md:text-lg leading-none tracking-tighter text-slate-900">Klinik Kesihatan Lintang</span>
-              <span className="text-[10px] font-bold text-blue-600 uppercase tracking-widest mt-0.5">Fundus Clinic</span>
+            <div className="flex flex-col min-w-0">
+              {/*---One SINAR identity across every clinic; clinic name is the active tenant context---*/}
+              <span className="font-black text-base md:text-lg leading-none tracking-tight text-slate-900">SINAR</span>
+              <span className="text-[9px] md:text-[10px] font-black text-blue-600 uppercase tracking-widest mt-1">Sistem Interpretasi &amp; Nota Awal Retinopati</span>
+              <span className="text-[11px] md:text-xs font-bold text-slate-700 mt-0.5 truncate">
+                {currentUser.role === UserRole.SUPER_ADMIN ? 'Multi-Clinic Administration' : (currentClinic?.name || 'Klinik Kesihatan Lintang')}
+              </span>
             </div>
           </div>
           
@@ -3629,9 +4002,13 @@ const tomorrowTCATotal = Object.values(
             <div className="flex flex-col items-end mr-1 md:mr-2">
               <span className="text-sm font-semibold text-slate-700">{currentUser.displayName}</span>
               <span className="text-[11px] font-black text-emerald-600 uppercase tracking-widest">
-  {currentUser.department}
-</span>
-              <span className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">{currentUser.role} Account ({currentUser.id})</span>
+                {currentUser.role === UserRole.SUPER_ADMIN ? 'MULTI-CLINIC ADMIN' : (currentClinic?.shortName || 'Clinic')}
+              </span>
+              <span className="text-[9px] text-slate-400 uppercase tracking-widest font-bold max-w-[240px] truncate">
+                {currentUser.role === UserRole.SUPER_ADMIN
+                  ? `SUPER ADMIN • ${currentUser.id}`
+                  : `${currentClinic?.shortName || 'KK Lintang'} • ${currentUser.role} • ${currentUser.id}`}
+              </span>
             </div>
             <button 
               onClick={handleLogout}
@@ -3644,6 +4021,127 @@ const tomorrowTCATotal = Object.values(
         </div>
       </header>
 
+      {/* =====================================================
+          SUPER ADMIN HOME DASHBOARD
+          Super Admin does not enter a clinic dashboard.
+          The landing page is the PKD multi-clinic console.
+         ===================================================== */}
+      {currentUser.role === UserRole.SUPER_ADMIN && (
+        <main className="flex-1 max-w-7xl mx-auto px-4 py-8 w-full space-y-8">
+          {/*--- Console Header ---*/}
+          <section className="bg-white border border-violet-100 rounded-3xl p-5 md:p-7 shadow-sm">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-violet-600 text-white flex items-center justify-center shadow-lg">
+                    <Shield size={22} />
+                  </div>
+                  <div>
+                    <h1 className="text-xl md:text-2xl font-black text-slate-900">SINAR Super Admin Console</h1>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Multi-Clinic Administration</p>
+                  </div>
+                </div>
+              </div>
+              <div className="text-left md:text-right">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Active Clinics</p>
+                <p className="text-3xl font-black text-violet-600">{clinics.filter(c => c.active).length}</p>
+              </div>
+            </div>
+          </section>
+
+          {/*--- Console Action Tiles ---*/}
+          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <button onClick={() => setShowClinicManager(true)} className="group text-left p-5 rounded-2xl border border-blue-100 bg-blue-50 hover:bg-blue-100 transition-all">
+              <Building2 className="text-blue-600 mb-4" size={25} />
+              <p className="font-black text-slate-900">Clinic Management</p>
+              <p className="text-xs text-slate-500 mt-1">Add, activate and configure standalone clinics.</p>
+            </button>
+            <button onClick={() => setShowAdminConsole(true)} className="text-left p-5 rounded-2xl border border-violet-100 bg-violet-50 hover:bg-violet-100 transition-all">
+              <Users className="text-violet-600 mb-4" size={25} />
+              <p className="font-black text-slate-900">User Management</p>
+              <p className="text-xs text-slate-500 mt-1">Create and manage admins and staff by clinic.</p>
+            </button>
+            <button className="text-left p-5 rounded-2xl border border-emerald-100 bg-emerald-50 hover:bg-emerald-100 transition-all">
+              <Network className="text-emerald-600 mb-4" size={25} />
+              <p className="font-black text-slate-900">Fundus Network</p>
+              <p className="text-xs text-slate-500 mt-1">Configure fundus provider clinics and referral routing.</p>
+            </button>
+            <button className="text-left p-5 rounded-2xl border border-cyan-100 bg-cyan-50 hover:bg-cyan-100 transition-all">
+              <Database className="text-cyan-600 mb-4" size={25} />
+              <p className="font-black text-slate-900">Data &amp; Migration</p>
+              <p className="text-xs text-slate-500 mt-1">Review legacy records and migration status.</p>
+            </button>
+            <button onClick={() => setShowActivityLogs(true)} className="text-left p-5 rounded-2xl border border-amber-100 bg-amber-50 hover:bg-amber-100 transition-all">
+              <Activity className="text-amber-600 mb-4" size={25} />
+              <p className="font-black text-slate-900">Global Activity Logs</p>
+              <p className="text-xs text-slate-500 mt-1">Audit activity across all facilities.</p>
+            </button>
+            <button className="text-left p-5 rounded-2xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all">
+              <Settings2 className="text-slate-600 mb-4" size={25} />
+              <p className="font-black text-slate-900">System Configuration</p>
+              <p className="text-xs text-slate-500 mt-1">Global SINAR settings and future modules.</p>
+            </button>
+          </section>
+
+          {/*--- Monthly Summary By Clinic ---*/}
+          <section className="bg-white border border-slate-200 rounded-3xl p-5 md:p-7 shadow-sm">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-lg md:text-xl font-black text-slate-900">Monthly Summary by Clinic</h2>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Fundus workload across PKD clinics</p>
+              </div>
+              <div className="flex items-center gap-2 self-start md:self-auto">
+                <button onClick={() => changeAnalyticsMonth(-1)} className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50">
+                  <ChevronLeft size={17} />
+                </button>
+                <span className="min-w-[145px] text-center text-sm font-black text-slate-700">
+                  {selectedAnalyticsMonth.toLocaleString('en-US', { month: 'long', year: 'numeric' })}
+                </span>
+                <button disabled={isCurrentMonth} onClick={() => changeAnalyticsMonth(1)} className={`p-2 rounded-xl border border-slate-200 ${isCurrentMonth ? 'opacity-30 cursor-not-allowed' : 'hover:bg-slate-50'}`}>
+                  <ChevronRight size={17} />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {superAdminMonthlyClinicStats.map(({ clinic, total, pendingFundus, pendingReview, completed }) => (
+                <div key={clinic.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-black text-slate-900 truncate">{clinic.name}</p>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">{clinic.id}</p>
+                    </div>
+                    <span className={`shrink-0 px-2 py-1 rounded-lg text-[8px] font-black uppercase ${clinic.isFundusProvider ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
+                      {clinic.isFundusProvider ? 'Fundus Provider' : 'Referral Clinic'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-2 mt-5">
+                    <div className="text-center rounded-xl bg-white border border-slate-100 p-2">
+                      <p className="text-[8px] font-black text-slate-400 uppercase">Total</p>
+                      <p className="text-2xl font-black text-slate-900">{total}</p>
+                    </div>
+                    <div className="text-center rounded-xl bg-white border border-blue-100 p-2">
+                      <p className="text-[8px] font-black text-blue-500 uppercase">Fundus</p>
+                      <p className="text-2xl font-black text-blue-600">{pendingFundus}</p>
+                    </div>
+                    <div className="text-center rounded-xl bg-white border border-indigo-100 p-2">
+                      <p className="text-[8px] font-black text-indigo-500 uppercase">Review</p>
+                      <p className="text-2xl font-black text-indigo-600">{pendingReview}</p>
+                    </div>
+                    <div className="text-center rounded-xl bg-white border border-emerald-100 p-2">
+                      <p className="text-[8px] font-black text-emerald-500 uppercase">Done</p>
+                      <p className="text-2xl font-black text-emerald-600">{completed}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </main>
+      )}
+
+      {currentUser.role !== UserRole.SUPER_ADMIN && (
       <main className="flex-1 max-w-7xl mx-auto px-4 py-8 w-full space-y-8">
         
         {/* Monthly Stats Dashboard */}
@@ -3675,53 +4173,6 @@ const tomorrowTCATotal = Object.values(
       <Activity size={20} />
     </div>
 
-    {/*--- Department totals generated from the central department list ---*/}
-    <div className="flex flex-col items-center gap-2">
-
-      {DEPARTMENTS.map((department) => {
-
-        const isOPD = department.id === 'OPD KKL';
-        const isPBOA = department.id === 'PBOA';
-
-        const count =
-          yearlyStats.yearlyDepartmentStats[
-            department.id
-          ]?.total ?? 0;
-
-        return (
-          <div
-            key={department.id}
-            className="text-center"
-          >
-            <p
-              className={`text-[9px] font-black uppercase ${
-                isOPD
-                  ? 'text-sky-600'
-                  : isPBOA
-                    ? 'text-emerald-600'
-                    : 'text-slate-500'
-              }`}
-            >
-              {department.shortName}
-            </p>
-
-            <p
-              className={`text-lg font-black leading-none ${
-                isOPD
-                  ? 'text-sky-600'
-                  : isPBOA
-                    ? 'text-emerald-600'
-                    : 'text-slate-500'
-              }`}
-            >
-              {count}
-            </p>
-          </div>
-        );
-      })}
-
-    </div>
-
     {/* Divider */}
     <div className="h-16 w-px bg-slate-300" />
 
@@ -3746,53 +4197,6 @@ const tomorrowTCATotal = Object.values(
     {/* Icon */}
     <div className="w-10 h-10 rounded-xl bg-violet-600 text-white flex items-center justify-center shadow-lg shadow-violet-100">
       <Search size={20} />
-    </div>
-
-    {/*--- Pending review counts generated from the central department list ---*/}
-    <div className="flex flex-col items-center gap-2">
-
-      {DEPARTMENTS.map((department) => {
-
-        const isOPD = department.id === 'OPD KKL';
-        const isPBOA = department.id === 'PBOA';
-
-        const count =
-          yearlyStats.yearlyDepartmentStats[
-            department.id
-          ]?.pendingReview ?? 0;
-
-        return (
-          <div
-            key={department.id}
-            className="text-center"
-          >
-            <p
-              className={`text-[9px] font-black uppercase ${
-                isOPD
-                  ? 'text-sky-600'
-                  : isPBOA
-                    ? 'text-emerald-600'
-                    : 'text-slate-500'
-              }`}
-            >
-              {department.shortName}
-            </p>
-
-            <p
-              className={`text-lg font-black leading-none ${
-                isOPD
-                  ? 'text-sky-600'
-                  : isPBOA
-                    ? 'text-emerald-600'
-                    : 'text-slate-500'
-              }`}
-            >
-              {count}
-            </p>
-          </div>
-        );
-      })}
-
     </div>
 
     {/* Divider */}
@@ -3852,7 +4256,7 @@ year:'numeric'
 
 </div>
 
-  {currentUser?.role === UserRole.ADMIN && (
+  {(currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN) && (
 
   <button
     onClick={exportToCSV}
@@ -3946,7 +4350,7 @@ year:'numeric'
 <div className="flex flex-wrap items-center gap-2 ml-2">
 
   {/*--- Today's department badges generated automatically ---*/}
-  {DEPARTMENTS.map((department) => {
+  {availableDepartments.map((department) => {
 
     const count =
       todayDepartmentStats[department.id] ?? 0;
@@ -3979,7 +4383,7 @@ const badgeClass =
     <span>🔔</span>
 
     {/*--- Tomorrow's TCA counts generated from all departments ---*/}
-    {DEPARTMENTS.map((department) => {
+    {availableDepartments.map((department) => {
 
       const count =
         tomorrowTCA[department.id] ?? 0;
@@ -4043,7 +4447,7 @@ const badgeClass =
     {/*--- Tomorrow's TCA counts generated from all departments ---*/}
     <div className="flex items-center gap-2">
 
-      {DEPARTMENTS.map((department) => {
+      {availableDepartments.map((department) => {
 
         const count =
           tomorrowTCA[department.id] ?? 0;
@@ -4186,21 +4590,8 @@ const badgeClass =
 
   <div className="flex flex-wrap items-center gap-2">
 
-    <span
-      className={`text-[8px] px-2 py-[1px] rounded-full font-black border uppercase ${
-        app.department === 'OPD KKL'
-          ? 'bg-sky-50 text-sky-700 border-sky-200'
-          : app.department === 'PBOA'
-            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-            : 'bg-violet-50 text-violet-700 border-violet-200'
-      }`}
-    >
-      {/*--- Department badge label from the central department master list ---*/}
-      {
-        DEPARTMENTS.find(
-          department => department.id === app.department
-        )?.shortName || app.department
-      }
+    <span className="text-[8px] px-2 py-[1px] rounded-full font-black border uppercase bg-blue-50 text-blue-700 border-blue-200">
+      {getClinicById(clinics, app.clinicId)?.shortName || 'Clinic'}
     </span>
 
     <span className="text-lg font-black text-blue-600 uppercase tracking-tight leading-none">
@@ -4489,42 +4880,7 @@ const badgeClass =
   </select>
 </div>
 
-{/* DEPARTMENT FILTER */}
-
-{(currentUser?.role === UserRole.ADMIN ||
-  currentUser?.canViewAllDepartments) && (
-  <div className="flex items-center gap-2 bg-white border border-blue-500 rounded-lg px-3 py-1.5">
-    <Users size={16} className="text-emerald-500" />
-
-    <select
-      className="bg-transparent border-none outline-none text-xs font-medium appearance-none cursor-pointer"
-      value={filterDepartment}
-      onChange={(e) =>
-        //--- Support "All" or any department from the master list ---//
-        setFilterDepartment(
-          e.target.value === 'All'
-            ? 'All'
-            : e.target.value as Department
-        )
-      }
-    >
-      {/*--- Department filter options generated from the master list ---*/}
-      <option value="All">
-        All Departments
-      </option>
-
-      {DEPARTMENTS.map((department) => (
-        <option
-          key={department.id}
-          value={department.id}
-        >
-          {department.label}
-        </option>
-      ))}
-    </select>
-  </div>
-)}
-              
+{/*---Department filter removed: clinic identity is now the operational scope---*/}
               {(
   searchQuery ||
   filterDateFrom ||
@@ -4570,7 +4926,7 @@ const badgeClass =
                 <AnimatePresence>
                   {paginatedAppointments.map((app) => {
                     // Calculate queue number for that specific day
-                    const sameDayApps = appointments
+                    const sameDayApps = visibleAppointments
                       .filter(a => a && a.date === app.date)
                       .sort((a, b) => (Number(a?.createdAt) || 0) - (Number(b?.createdAt) || 0));
                     const dailyQueueIndex = sameDayApps.findIndex(a => a && a.id === app.id);
@@ -4795,17 +5151,8 @@ const badgeClass =
                             {app.otherDisease && (
                               <span className="text-[8px] bg-slate-50 text-slate-600 px-1 py-[1px] rounded font-bold border border-slate-100 uppercase">{app.otherDisease}</span>
                             )}
-<span
-  className={`text-[8px] px-2 py-[1px] rounded font-black border uppercase ${
-    app.department === 'OPD KKL'
-      ? 'bg-sky-50 text-sky-700 border-sky-200'
-      : app.department === 'PBOA'
-        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-        : 'bg-violet-50 text-violet-700 border-violet-200'
-  }`}
->
-  {/*--- Department badge colour is assigned by department ---*/}
-  {app.department}
+<span className="text-[8px] px-2 py-[1px] rounded font-black border uppercase bg-blue-50 text-blue-700 border-blue-200">
+  {getClinicById(clinics, app.clinicId)?.shortName || 'Clinic'}
 </span>
                           </div>
                           <span className="text-[9px] md:text-[11px] font-normal text-slate-500 mt-1">
@@ -5130,7 +5477,7 @@ setSelectedReviewSummary(app);
       <div className="flex flex-col items-center gap-2">
 
         {/* ADMIN ONLY */}
-        {currentUser?.role === UserRole.ADMIN && (
+        {(currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN) && (
           <div className="flex items-center gap-2">
 
             <button
@@ -5165,7 +5512,8 @@ setSelectedReviewSummary(app);
             setExistingPatient(app);
             setFormIC(app.icNumber);
             setFormPhone(app.phoneNumber);
-            setFormDepartment(app.department || 'OPD KKL');
+            setFormReferringClinicId(app.referringClinicId || app.clinicId || currentUser?.clinicId || 'LINTANG');
+            setFormFundusProviderClinicId(app.fundusProviderClinicId || currentClinic?.id || fundusProviderClinics[0]?.id || '');
             setSelectedDate(todayStr);
             setIsFormOpen(true);
           }}
@@ -5298,7 +5646,7 @@ setSelectedReviewSummary(app);
         <div className="text-center py-3 flex flex-col">
   
   <span className="text-[10px] text-slate-500 font-bold tracking-widest uppercase">
-    Fundus Klinik Kesihatan Lintang • {APP_VERSION}
+    Fundus {currentClinic?.name || 'Klinik Kesihatan Lintang'} • {APP_VERSION}
   </span>
 
   <span className="text-[9px] text-slate-400 font-semibold tracking-wide mt-1">
@@ -5307,6 +5655,173 @@ setSelectedReviewSummary(app);
 
 </div>
       </main>
+      )}
+
+      {/* =====================================================
+          SUPER ADMIN CONSOLE
+          Box-based navigation for cross-clinic administration.
+          Clinic Management is functional in this phase; other
+          modules are placeholders for the next migration steps.
+         ===================================================== */}
+      <AnimatePresence>
+        {showSuperAdminConsole && currentUser.role === UserRole.SUPER_ADMIN && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSuperAdminConsole(false)}
+              className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 20 }}
+              className="relative w-full max-w-4xl bg-white rounded-[28px] shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-violet-600 text-white flex items-center justify-center shadow-lg">
+                    <Shield size={22} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black text-slate-900">SINAR Super Admin</h2>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Multi-Clinic Administration</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowSuperAdminConsole(false)} className="p-2 rounded-xl hover:bg-slate-200 text-slate-400">
+                  <XCircle size={24} />
+                </button>
+              </div>
+
+              <div className="p-6 md:p-8">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <button onClick={() => setShowClinicManager(true)} className="group text-left p-5 rounded-2xl border border-blue-100 bg-blue-50 hover:bg-blue-100 transition-all">
+                    <Building2 className="text-blue-600 mb-4" size={25} />
+                    <p className="font-black text-slate-900">Clinic Management</p>
+                    <p className="text-xs text-slate-500 mt-1">Add, activate and configure standalone clinics.</p>
+                  </button>
+                  <button onClick={() => setShowAdminConsole(true)} className="text-left p-5 rounded-2xl border border-violet-100 bg-violet-50 hover:bg-violet-100 transition-all">
+                    <Users className="text-violet-600 mb-4" size={25} />
+                    <p className="font-black text-slate-900">User Management</p>
+                    <p className="text-xs text-slate-500 mt-1">Manage admins and staff across clinics.</p>
+                  </button>
+                  <button className="text-left p-5 rounded-2xl border border-emerald-100 bg-emerald-50 hover:bg-emerald-100 transition-all">
+                    <Network className="text-emerald-600 mb-4" size={25} />
+                    <p className="font-black text-slate-900">Fundus Network</p>
+                    <p className="text-xs text-slate-500 mt-1">Configure which clinics provide fundus services.</p>
+                  </button>
+                  <button className="text-left p-5 rounded-2xl border border-cyan-100 bg-cyan-50 hover:bg-cyan-100 transition-all">
+                    <Database className="text-cyan-600 mb-4" size={25} />
+                    <p className="font-black text-slate-900">Data &amp; Migration</p>
+                    <p className="text-xs text-slate-500 mt-1">Monitor migration and clinic data structure.</p>
+                  </button>
+                  <button className="text-left p-5 rounded-2xl border border-amber-100 bg-amber-50 hover:bg-amber-100 transition-all">
+                    <Activity className="text-amber-600 mb-4" size={25} />
+                    <p className="font-black text-slate-900">Global Activity Logs</p>
+                    <p className="text-xs text-slate-500 mt-1">Audit activity across all facilities.</p>
+                  </button>
+                  <button className="text-left p-5 rounded-2xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all">
+                    <Settings2 className="text-slate-600 mb-4" size={25} />
+                    <p className="font-black text-slate-900">System Configuration</p>
+                    <p className="text-xs text-slate-500 mt-1">Global SINAR settings and future modules.</p>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =====================================================
+          CLINIC MANAGEMENT
+          Super Admin can add new clinics without editing code.
+         ===================================================== */}
+      <AnimatePresence>
+        {showClinicManager && currentUser.role === UserRole.SUPER_ADMIN && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowClinicManager(false)} className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-4xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[88vh] flex flex-col">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+                <div>
+                  <h2 className="text-xl font-black text-slate-900">Clinic Management</h2>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Dynamic clinic master</p>
+                </div>
+                <button onClick={() => setShowClinicManager(false)} className="p-2 rounded-xl hover:bg-slate-200 text-slate-400"><XCircle size={24} /></button>
+              </div>
+
+              <div className="p-6 overflow-y-auto space-y-6">
+                <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  const id = newClinicId.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+                  if (!id || !newClinicName.trim()) return;
+                  if (clinics.some(c => c.id === id)) { alert('Clinic ID already exists.'); return; }
+                  const clinic: Clinic = {
+                    id,
+                    name: newClinicName.trim(),
+                    shortName: newClinicShortName.trim() || newClinicName.trim(),
+                    active: true,
+                    isFundusProvider: newClinicIsFundusProvider,
+                  };
+                  try {
+                    await setDoc(doc(db, 'clinics', clinic.id), clinic);
+                    addActivityLog('Created Clinic', `${clinic.name} (${clinic.id})`, currentUser.displayName);
+                    setNewClinicId('');
+                    setNewClinicName('');
+                    setNewClinicShortName('');
+                    setNewClinicIsFundusProvider(false);
+                  } catch (error) {
+                    console.error('Failed to create clinic', error);
+                    alert('Failed to create clinic. Please try again.');
+                  }
+                }} className="p-5 rounded-2xl border border-blue-100 bg-blue-50/50">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Plus size={16} className="text-blue-600" />
+                    <p className="text-xs font-black text-slate-800 uppercase tracking-widest">Add New Clinic</p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <input required value={newClinicId} onChange={e => setNewClinicId(e.target.value)} placeholder="CLINIC_ID" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input required value={newClinicName} onChange={e => setNewClinicName(e.target.value)} placeholder="Clinic name" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                    <input value={newClinicShortName} onChange={e => setNewClinicShortName(e.target.value)} placeholder="Short name" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                    <button type="submit" className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-widest">Add Clinic</button>
+                  </div>
+                  <label className="flex items-center gap-2 mt-3 text-xs font-bold text-slate-600 cursor-pointer">
+                    <input type="checkbox" checked={newClinicIsFundusProvider} onChange={e => setNewClinicIsFundusProvider(e.target.checked)} />
+                    This clinic provides fundus screening
+                  </label>
+                </form>
+
+                <div className="space-y-3">
+                  {clinics.map(clinic => (
+                    <div key={clinic.id} className="p-4 rounded-2xl border border-slate-200 bg-white flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-black text-slate-900">{clinic.name}</p>
+                          <span className="text-[9px] font-black px-2 py-0.5 rounded bg-slate-100 text-slate-500 uppercase">{clinic.id}</span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">{clinic.shortName}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase ${clinic.active ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{clinic.active ? 'Active' : 'Inactive'}</span>
+                        <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase ${clinic.isFundusProvider ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>{clinic.isFundusProvider ? 'Fundus Provider' : 'Referral Clinic'}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteClinic(clinic)}
+                          className="ml-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 hover:border-rose-300 transition-all text-[9px] font-black uppercase"
+                          title={`Delete ${clinic.name}`}
+                        >
+                          <Trash2 size={13} />
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Staff Management Console */}
       <AnimatePresence>
@@ -5331,8 +5846,8 @@ setSelectedReviewSummary(app);
                     <Users size={20} className="text-white" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-black text-slate-800 leading-none">Clinical Staff Management</h2>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Authorized Admin Console</p>
+                    <h2 className="text-lg font-black text-slate-800 leading-none">{currentUser?.role === UserRole.SUPER_ADMIN ? 'User Management' : 'Clinical Staff Management'}</h2>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Multi-Clinic User Administration' : 'Authorized Admin Console'}</p>
                   </div>
                 </div>
                 <button 
@@ -5345,6 +5860,9 @@ setSelectedReviewSummary(app);
   setNewStaffId('');
   setNewStaffName('');
   setNewStaffPass('');
+  setShowStaffPassword(false);
+  setNewStaffRole(UserRole.STAFF);
+  setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
 
 }}
                   className="p-2 hover:bg-slate-200 rounded-xl transition-colors text-slate-400"
@@ -5364,7 +5882,7 @@ setSelectedReviewSummary(app);
   >
     <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
       {editingUser ? <Edit2 size={14} className="text-blue-500" /> : <UserPlus size={14} className="text-blue-500" />}
-      {editingUser ? `Editing Account: ${editingUser.id}` : 'Register New Clinical Staff'}
+      {editingUser ? `Editing Account: ${editingUser.id}` : (currentUser?.role === UserRole.SUPER_ADMIN ? 'Register New Clinic User' : 'Register New Clinical Staff')}
     </h3>
 
     {!editingUser && (
@@ -5410,20 +5928,30 @@ setSelectedReviewSummary(app);
         Password
       </label>
 
-      <input
-        type="password"
-        required
-        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
-        value={editingUser ? editingUser.password : newStaffPass}
-        onChange={e =>
-          editingUser
-            ? setEditingUser({
-                ...editingUser,
-                password: e.target.value
-              })
-            : setNewStaffPass(e.target.value)
-        }
-      />
+      <div className="relative">
+        <input
+          type={showStaffPassword ? "text" : "password"}
+          required
+          className="w-full px-4 pr-11 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
+          value={editingUser ? (editingUser.password || '') : newStaffPass}
+          onChange={e =>
+            editingUser
+              ? setEditingUser({
+                  ...editingUser,
+                  password: e.target.value
+                })
+              : setNewStaffPass(e.target.value)
+          }
+        />
+        <button
+          type="button"
+          onClick={() => setShowStaffPassword(prev => !prev)}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+          aria-label={showStaffPassword ? "Hide password" : "Show password"}
+        >
+          {showStaffPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+        </button>
+      </div>
     </div>
 
     <div className="space-y-1">
@@ -5458,83 +5986,59 @@ setSelectedReviewSummary(app);
 
     <div className="space-y-1">
       <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
-        Department
+        Clinic
       </label>
-
-<select
-  value={
-    editingUser
-      ? editingUser.department
-      : newStaffDepartment
-  }
-  onChange={(e) => {
-
-    const value =
-      e.target.value as Department;
-
-    editingUser
-      ? setEditingUser({
-          ...editingUser,
-          department: value
-        })
-      : setNewStaffDepartment(value);
-
-  }}
-  className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
->
-  {/*--- Department options generated from the department master list ---*/}
-  {DEPARTMENTS.map((department) => (
-    <option
-      key={department.id}
-      value={department.id}
-    >
-      {department.label}
-    </option>
-  ))}
-</select>
+      {currentUser?.role === UserRole.SUPER_ADMIN ? (
+        <select
+          value={editingUser ? (editingUser.clinicId || '') : newStaffClinicId}
+          onChange={e =>
+            editingUser
+              ? setEditingUser({ ...editingUser, clinicId: e.target.value || null })
+              : setNewStaffClinicId(e.target.value)
+          }
+          disabled={editingUser?.role === UserRole.SUPER_ADMIN}
+          className="w-full px-4 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500"
+        >
+          <option value="">No clinic (Super Admin)</option>
+          {clinics.filter(clinic => clinic.active).map(clinic => (
+            <option key={clinic.id} value={clinic.id}>{clinic.name}</option>
+          ))}
+        </select>
+      ) : (
+        <div className="w-full px-4 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold text-slate-700">
+          {currentClinic?.name || 'Klinik Kesihatan Lintang'}
+        </div>
+      )}
+      <p className="text-[9px] text-slate-400 ml-1 mt-1">
+        {currentUser?.role === UserRole.SUPER_ADMIN ? 'Assign this account to a clinic.' : 'Account is automatically assigned to this clinic.'}
+      </p>
     </div>
 
     <div className="space-y-1">
       <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
-        Access Level
+        Role
       </label>
-
-      <label className="flex items-center gap-3 px-4 py-3 rounded-xl border border-blue-200 bg-white cursor-pointer hover:bg-blue-50 transition h-[46px]">
-
-        <input
-          type="checkbox"
-          checked={
+      {currentUser?.role === UserRole.SUPER_ADMIN ? (
+        <select
+          value={editingUser ? editingUser.role : newStaffRole}
+          onChange={e =>
             editingUser
-              ? editingUser.canViewAllDepartments
-              : newStaffMA
+              ? setEditingUser({ ...editingUser, role: e.target.value as UserRole, clinicId: e.target.value === UserRole.SUPER_ADMIN ? null : (editingUser.clinicId || newStaffClinicId || 'LINTANG') })
+              : setNewStaffRole(e.target.value as UserRole)
           }
-          onChange={(e) => {
-
-            editingUser
-              ? setEditingUser({
-                  ...editingUser,
-                  canViewAllDepartments:
-                    e.target.checked
-                })
-              : setNewStaffMA(
-                  e.target.checked
-                );
-
-          }}
-          className="w-4 h-4"
-        />
-
-        <div className="flex flex-col">
-          <span className="text-xs font-bold text-slate-700">
-            MA Access
-          </span>
-
-          <span className="text-[10px] text-slate-400">
-            Can view all departments
-          </span>
+          className="w-full px-4 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value={UserRole.STAFF}>STAFF</option>
+          <option value={UserRole.ADMIN}>ADMIN</option>
+        </select>
+      ) : (
+        <div className="w-full px-4 py-2.5 rounded-xl border border-blue-200 bg-slate-50 text-sm font-bold text-slate-700">
+          STAFF
         </div>
-
-      </label>
+      )}
+      <p className="text-[9px] text-slate-400 ml-1 mt-1">
+        Super Admin can create ADMIN or STAFF accounts for each clinic.
+      </p>
     </div>
 
   </div>
@@ -5574,9 +6078,9 @@ setSelectedReviewSummary(app);
 
 {/* Existing Staff List */}
 <section className="flex flex-col max-h-[420px]">
-                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Current System Users ({users.length})</h3>
+                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Current System Users' : 'Current Clinic Users'} ({users.filter(u => currentUser?.role === UserRole.SUPER_ADMIN ? true : u.clinicId === currentUser?.clinicId).length})</h3>
                   <div className="space-y-2 overflow-y-auto overscroll-contain pr-2 h-full">
-                    {users.map(u => (
+                    {users.filter(u => currentUser?.role === UserRole.SUPER_ADMIN || u.clinicId === currentUser?.clinicId).map(u => (
                       <div key={u.id} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:border-slate-200 transition-all group">
                         <div className="flex items-center gap-4">
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${u.role === UserRole.ADMIN ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
@@ -5603,25 +6107,11 @@ setSelectedReviewSummary(app);
     {u.role}
   </span>
 
-  {/* Department Badge */}
-  <span
-    className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
-      u.department === 'OPD KKL'
-      ? 'bg-sky-100 text-sky-700'
-      : u.department === 'PBOA'
-        ? 'bg-emerald-100 text-emerald-700'
-        : 'bg-violet-100 text-violet-700'
-    }`}
-  >
-    {u.department}
+  {/* Clinic Badge */}
+  <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
+    {getClinicById(clinics, u.clinicId)?.shortName || u.clinicId || 'Clinic'}
   </span>
 
-  {/* MA Badge */}
-  {u.canViewAllDepartments && (
-    <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-amber-100 text-amber-700">
-      ALL ACCESS
-    </span>
-  )}
 
 </div>
                             <div className="flex items-center gap-3 mt-1">
@@ -5744,9 +6234,16 @@ setSelectedReviewSummary(app);
         </div>
 
         <div>
-          <p className="text-xs text-slate-500">Department</p>
-          <p>{duplicatePatient.department}</p>
+          <p className="text-xs text-slate-500">Clinic</p>
+          <p>{getClinicById(clinics, duplicatePatient.clinicId)?.name || 'Klinik Kesihatan Lintang'}</p>
         </div>
+
+        {duplicatePatient.fundusProviderClinicId && (
+          <div>
+            <p className="text-xs text-slate-500">Fundus Provider</p>
+            <p>{getClinicById(clinics, duplicatePatient.fundusProviderClinicId)?.name || duplicatePatient.fundusProviderClinicId}</p>
+          </div>
+        )}
 
         <div>
           <p className="text-xs text-slate-500">Status</p>
@@ -5950,57 +6447,107 @@ setSelectedReviewSummary(app);
 />
                   </div>
 
+                  {/* =========================================================
+                      PATIENT IDENTIFICATION
+                      IC Number + Phone Number
+                     ========================================================= */}
                   <div className="grid grid-cols-2 gap-4">
+                    {/*--- IC NUMBER ---*/}
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">IC Number</label>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        IC Number
+                      </label>
                       <input
-  name="icNumber"
-  type="text"
-  value={formIC}
-  readOnly
-  className="w-full px-4 py-2 border border-slate-200 rounded-lg bg-slate-100 text-slate-600 cursor-not-allowed"
-/>
+                        name="icNumber"
+                        type="text"
+                        value={formIC}
+                        readOnly
+                        className="w-full px-4 py-2 border border-slate-200 rounded-lg bg-slate-100 text-slate-600 cursor-not-allowed"
+                      />
                     </div>
+
+                    {/*--- PHONE NUMBER ---*/}
                     <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Phone Number</label>
-                      <input 
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Phone Number
+                      </label>
+                      <input
                         name="phoneNumber"
                         required
-                        type="tel" 
+                        type="tel"
                         value={formPhone}
                         onChange={handlePhoneChange}
                         className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none uppercase"
                       />
-                      <div className="space-y-1">
-  <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
-    Department
-  </label>
+                    </div>
+                  </div>
 
-  <select
-    value={formDepartment}
-    onChange={(e) =>
-      //--- Use the central Department type ---//
-      setFormDepartment(
-        e.target.value as Department
-      )
-    }
-    disabled={
-  currentUser?.role !== UserRole.ADMIN &&
-  !currentUser?.canViewAllDepartments
-}
-    className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
-  >
-    {/*--- Department options generated from the central department list ---*/}
-{DEPARTMENTS.map((department) => (
-  <option
-    key={department.id}
-    value={department.id}
-  >
-    {department.label}
-  </option>
-))}
-  </select>
-</div>
+                  {/* =========================================================
+                      REFERRAL / FUNDUS ROUTING
+                      Source clinic and fundus provider are separate fields.
+                     ========================================================= */}
+                  <div className="grid grid-cols-2 gap-4">
+                    {/*--- ASAL / KLINIK PERUJUK ---*/}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Asal / Klinik Perujuk
+                      </label>
+
+                      <select
+                        value={formReferringClinicId}
+                        onChange={e => setFormReferringClinicId(e.target.value)}
+                        required
+                        className="w-full px-4 py-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
+                      >
+                        <option value="">Pilih asal klinik</option>
+
+                        {clinics
+                          .filter(clinic => clinic.active)
+                          .map(clinic => (
+                            <option key={clinic.id} value={clinic.id}>
+                              {clinic.name}
+                            </option>
+                          ))}
+                      </select>
+
+                      <p className="text-[9px] text-slate-400 mt-1">
+                        Menunjukkan patient berasal atau dirujuk dari fasiliti mana.
+                      </p>
+                    </div>
+
+                    {/*--- KLINIK RUJUKAN FUNDUS ---*/}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Klinik Rujukan Fundus
+                      </label>
+
+                      {currentClinic?.isFundusProvider ? (
+                        <div className="w-full px-4 py-2.5 rounded-xl border border-emerald-200 bg-emerald-50 text-sm font-bold text-emerald-700">
+                          {currentClinic.name}
+                          <span className="text-[10px] font-black uppercase ml-2">
+                            (Fundus Provider)
+                          </span>
+                        </div>
+                      ) : (
+                        <select
+                          value={formFundusProviderClinicId}
+                          onChange={e => setFormFundusProviderClinicId(e.target.value)}
+                          required
+                          className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium bg-white"
+                        >
+                          <option value="">Pilih klinik fundus</option>
+
+                          {fundusProviderClinics.map(clinic => (
+                            <option key={clinic.id} value={clinic.id}>
+                              {clinic.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                      <p className="text-[9px] text-slate-400 mt-1">
+                        Fasiliti yang menjalankan pemeriksaan fundus untuk patient ini.
+                      </p>
                     </div>
                   </div>
 
@@ -6066,22 +6613,11 @@ setSelectedReviewSummary(app);
   onChange={(e) => {
     const value = e.target.value;
 
-    if (formDepartment === 'PBOA') {
-
-      const selectedDateObj = new Date(value);
-
-      if (selectedDateObj.getDay() !== 5) {
-
-        setShowPboaWarning(true);
-        return;
-      }
-    }
-
     setSelectedDate(value);
   }}
 />
 
-  {formDepartment === 'PBOA' && selectedDate && (() => {
+  {false && selectedDate && (() => {
 
   const selectedDateObj = new Date(selectedDate);
 
@@ -8331,7 +8867,7 @@ const imageReason =
       </h2>
 
       <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mt-1">
-        Reten Saringan Fundus Kamera — Klinik Kesihatan Lintang
+        Reten Saringan Fundus Kamera — {currentClinic?.name || 'Klinik Kesihatan Lintang'}
       </p>
     </div>
 
@@ -8399,56 +8935,10 @@ const imageReason =
       Screening Summary
     </p>
 
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
 
-      {/*--- Department screening cards generated from the master department list ---*/}
-      {DEPARTMENTS.map((department) => {
-
-        const count =
-          monthlyRetenStats.monthlyDepartmentSummary[
-            department.id
-          ] ?? 0;
-
-        const cardClass =
-          department.id === 'OPD KKL'
-            ? 'bg-sky-50 border-sky-100'
-            : department.id === 'PBOA'
-              ? 'bg-emerald-50 border-emerald-100'
-              : 'bg-violet-50 border-violet-100';
-
-        const textClass =
-          department.id === 'OPD KKL'
-            ? 'text-sky-600'
-            : department.id === 'PBOA'
-              ? 'text-emerald-600'
-              : 'text-violet-600';
-
-        return (
-          <div
-            key={department.id}
-            className={`${cardClass} border rounded-2xl p-4`}
-          >
-
-            <p
-              className={`text-[10px] font-black uppercase tracking-widest ${textClass}`}
-            >
-              {department.label}
-            </p>
-
-            <p className="text-3xl font-black text-slate-800 mt-1">
-              {count}
-            </p>
-
-            <p className="text-[10px] font-bold text-slate-400 uppercase">
-              Cases
-            </p>
-
-          </div>
-        );
-      })}
-
-      {/* TOTAL */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      {/*--- Total monthly provider workload. Referrals performed by this clinic are included. ---*/}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:col-span-1">
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
           Total
         </p>
@@ -8696,7 +9186,7 @@ const imageReason =
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
 
-          {activityLogs.length === 0 ? (
+          {visibleActivityLogs.length === 0 ? (
 
             <div className="text-center text-slate-400 text-sm py-10 font-bold">
               No activity logs available.
@@ -8704,7 +9194,7 @@ const imageReason =
 
           ) : (
 
-            activityLogs.map((log, index) => (
+            visibleActivityLogs.map((log, index) => (
 
               <div
                 key={index}
