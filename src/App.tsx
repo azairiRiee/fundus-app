@@ -48,6 +48,8 @@ import { motion, AnimatePresence } from 'motion/react';
 
 import clinicLogo from './assets/logo.png';
 import fundusBg from './assets/fundus-bg.png';
+import roundLogo from './assets/logo2.png';
+import textLogo from './assets/logo3.png';
 
 import { db } from './firebase';
 
@@ -63,7 +65,8 @@ import {
   limit,
   getDocs,
   setDoc,
-  where
+  where,
+  writeBatch
 } from 'firebase/firestore';
 
 import { analyzeFundus } from "./services/aiService";
@@ -89,6 +92,8 @@ interface Clinic {
   shortName: string;
   active: boolean;
   isFundusProvider: boolean;
+  //--- Multiple fundus providers allowed for referral routing ---//
+  fundusProviderClinicIds?: string[];
 }
 
 const DEFAULT_CLINICS: Clinic[] = [
@@ -169,6 +174,96 @@ const normalizeUserClinic = (data: Partial<User>) => ({
 
 const getClinicById = (clinics: Clinic[], clinicId?: string | null) =>
   clinics.find(clinic => clinic.id === clinicId) || null;
+
+//--- SINAR clinic color system ---//
+// Own clinic / current environment = BLUE.
+// Referral clinic #1 = YELLOW.
+// Referral clinic #2 = PURPLE.
+// Referral clinic #3 = GREEN.
+// Referral clinic #4 = ORANGE.
+const REFERRAL_CLINIC_COLORS = [
+  {
+    badge: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+    border: 'border-l-yellow-500',
+  },
+  {
+    badge: 'bg-purple-50 text-purple-700 border-purple-200',
+    border: 'border-l-purple-500',
+  },
+  {
+    badge: 'bg-green-50 text-green-700 border-green-200',
+    border: 'border-l-green-500',
+  },
+  {
+    badge: 'bg-orange-50 text-orange-700 border-orange-200',
+    border: 'border-l-orange-500',
+  },
+];
+
+const getReferralClinicIndex = (
+  clinics: Clinic[],
+  clinicId?: string | null,
+  activeClinicId?: string | null
+) => {
+  if (!clinicId || clinicId === activeClinicId) return -1;
+
+  //--- Only active external clinics participate in referral color assignment ---//
+  const externalClinics = clinics.filter(
+    clinic => clinic.active && clinic.id !== activeClinicId
+  );
+
+  return externalClinics.findIndex(clinic => clinic.id === clinicId);
+};
+
+const getClinicBadgeClass = (
+  clinics: Clinic[],
+  clinicId?: string | null,
+  activeClinicId?: string | null
+) => {
+  //--- Own clinic is always blue ---//
+  if (clinicId && clinicId === activeClinicId) {
+    return 'bg-blue-50 text-blue-700 border-blue-200';
+  }
+
+  const referralIndex = getReferralClinicIndex(
+    clinics,
+    clinicId,
+    activeClinicId
+  );
+
+  return (
+    REFERRAL_CLINIC_COLORS[
+      referralIndex >= 0
+        ? referralIndex % REFERRAL_CLINIC_COLORS.length
+        : 0
+    ]?.badge || 'bg-slate-50 text-slate-600 border-slate-200'
+  );
+};
+
+const getClinicBorderClass = (
+  clinics: Clinic[],
+  clinicId?: string | null,
+  activeClinicId?: string | null
+) => {
+  //--- Own clinic is always blue ---//
+  if (clinicId && clinicId === activeClinicId) {
+    return 'border-l-blue-500';
+  }
+
+  const referralIndex = getReferralClinicIndex(
+    clinics,
+    clinicId,
+    activeClinicId
+  );
+
+  return (
+    REFERRAL_CLINIC_COLORS[
+      referralIndex >= 0
+        ? referralIndex % REFERRAL_CLINIC_COLORS.length
+        : 0
+    ]?.border || 'border-l-slate-400'
+  );
+};
 
 const getFundusProviderClinics = (clinics: Clinic[]) =>
   clinics.filter(clinic => clinic.active && clinic.isFundusProvider);
@@ -316,6 +411,18 @@ interface ActivityLog {
   timestamp: number;
 }
 
+interface MigrationStats {
+  appointmentsTotal: number;
+  appointmentsWithClinicId: number;
+  appointmentsNeedsClinicMigration: number;
+  appointmentsNeedsReferralMigration: number;
+  appointmentsMissingProvider: number;
+  missingProviderByLegacyDepartment: Record<string, number>;
+  usersTotal: number;
+  usersWithClinicId: number;
+  usersNeedsClinicMigration: number;
+}
+
 const STORAGE_KEY = 'fundus_appointments';
 const USERS_KEY = 'fundus_users';
 const ACTIVITY_LOGS_KEY = 'fundus_activity_logs';
@@ -443,6 +550,29 @@ export default function App() {
   const [newClinicShortName, setNewClinicShortName] = useState('');
   const [newClinicIsFundusProvider, setNewClinicIsFundusProvider] = useState(false);
 
+  //--- Super Admin Fundus Network ---//
+  const [showFundusNetwork, setShowFundusNetwork] = useState(false);
+  //--- Super Admin Data & Migration ---//
+  const [showDataMigration, setShowDataMigration] = useState(false);
+  const [migrationStats, setMigrationStats] = useState<MigrationStats | null>(null);
+  const [migrationScanning, setMigrationScanning] = useState(false);
+  const [migrationRunning, setMigrationRunning] = useState(false);
+  //---Selected historical provider for each legacy source clinic---//
+  const [migrationProviderByLegacyDepartment, setMigrationProviderByLegacyDepartment] = useState<Record<string, string>>({
+    'OPD KKL': 'LINTANG',
+    'PBOA': '',
+    'HSS': '',
+  });
+  const [migrationMessage, setMigrationMessage] = useState('');
+  //--- Each provider/routing action gets its own saving key ---//
+  const [fundusNetworkSaving, setFundusNetworkSaving] = useState<string | null>(null);
+
+  //--- Pending referral routing writes prevent stale realtime snapshots from undoing recent clicks ---//
+  const pendingFundusRoutingRef = useRef<Record<string, string[]>>({});
+
+  //--- Pending provider ON/OFF writes prevent realtime snapshots from undoing recent clicks ---//
+  const pendingFundusProviderRef = useRef<Record<string, boolean>>({});
+
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
   const [newPasswordInput, setNewPasswordInput] = useState('');
@@ -490,6 +620,37 @@ export default function App() {
     setFormReferringClinicId(currentClinic?.id || '');
     setFormFundusProviderClinicId(defaultProvider?.id || '');
   }, [isFormOpen, editingAppointment, currentClinic?.id, currentClinic?.isFundusProvider, fundusProviderClinics]);
+  //--- Keep the referring clinic inside the allowed source list for the current environment ---//
+  useEffect(() => {
+    if (!isFormOpen || !currentClinic) return;
+
+    if (!currentClinic.isFundusProvider) {
+      if (formReferringClinicId !== currentClinic.id) {
+        setFormReferringClinicId(currentClinic.id);
+      }
+      return;
+    }
+
+    //--- Provider environment: own clinic is always allowed; external clinics must route to this provider ---//
+    const allowedReferringClinicIds = clinics
+      .filter(clinic => {
+        if (!clinic.active) return false;
+        if (clinic.id === currentClinic.id) return true;
+        return (clinic.fundusProviderClinicIds || []).includes(currentClinic.id);
+      })
+      .map(clinic => clinic.id);
+
+    if (!allowedReferringClinicIds.includes(formReferringClinicId)) {
+      setFormReferringClinicId(currentClinic.id);
+    }
+  }, [
+    isFormOpen,
+    currentClinic?.id,
+    currentClinic?.isFundusProvider,
+    formReferringClinicId,
+    clinics
+  ]);
+
   const [selectedDate, setSelectedDate] = useState('');
   const [deletingApp, setDeletingApp] = useState<Appointment | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
@@ -811,6 +972,32 @@ const isCurrentMonth =
     }
   }, [isFormOpen, editingAppointment, currentUser?.clinicId, currentClinic?.id, currentClinic?.isFundusProvider, clinics, fundusProviderClinics]);
 
+  //--- Keep selected fundus provider valid against the current Fundus Network routing ---//
+  useEffect(() => {
+    if (!isFormOpen || !formReferringClinicId || currentClinic?.isFundusProvider) return;
+
+    const referringClinic = clinics.find(
+      clinic => clinic.id === formReferringClinicId
+    );
+
+    if (!referringClinic) {
+      setFormFundusProviderClinicId('');
+      return;
+    }
+
+    const allowedProviderIds = referringClinic.fundusProviderClinicIds || [];
+
+    if (!allowedProviderIds.includes(formFundusProviderClinicId)) {
+      setFormFundusProviderClinicId(allowedProviderIds[0] || '');
+    }
+  }, [
+    isFormOpen,
+    formReferringClinicId,
+    formFundusProviderClinicId,
+    currentClinic?.isFundusProvider,
+    clinics
+  ]);
+
   useEffect(() => {
     if (selectedPhotoApp) {
       // Only reset the review details if we are opening a DIFFERENT appointment
@@ -1007,6 +1194,269 @@ const isReviewCompleted = (app: Appointment) => {
       alert(
         'Failed to delete clinic. Please check Firestore permissions/indexes and try again.'
       );
+    }
+  };
+
+  // =====================================================
+  // DATA & MIGRATION
+  // Safe, idempotent migration of legacy clinic structure.
+  // Legacy `department` is preserved; migration only fills the
+  // new clinic/referral/provider fields where they are missing.
+  // =====================================================
+  const scanMigrationData = async () => {
+    if (currentUser?.role !== UserRole.SUPER_ADMIN) {
+      alert('Only Super Admin can access Data & Migration.');
+      return;
+    }
+
+    setMigrationScanning(true);
+    setMigrationMessage('Scanning Firestore data...');
+
+    try {
+      const [appointmentsSnapshot, usersSnapshot] = await Promise.all([
+        getDocs(collection(db, 'appointments')),
+        getDocs(collection(db, 'users')),
+      ]);
+
+      let appointmentsWithClinicId = 0;
+      let appointmentsNeedsClinicMigration = 0;
+      let appointmentsNeedsReferralMigration = 0;
+      let appointmentsMissingProvider = 0;
+      const missingProviderByLegacyDepartment: Record<string, number> = {};
+
+      appointmentsSnapshot.docs.forEach(snapshot => {
+        const data = snapshot.data() as Partial<Appointment>;
+        const inferredClinicId = inferClinicIdFromLegacy(data.clinicId, data.department);
+        const inferredReferralId = getReferringClinicId(data);
+
+        if (data.clinicId) appointmentsWithClinicId++;
+        if (!data.clinicId || data.clinicId !== inferredClinicId) {
+          appointmentsNeedsClinicMigration++;
+        }
+        if (!data.referringClinicId || data.referringClinicId !== inferredReferralId) {
+          appointmentsNeedsReferralMigration++;
+        }
+        if (!data.fundusProviderClinicId) {
+          appointmentsMissingProvider++;
+
+          //--- Preserve the legacy department label so Super Admin can review provider migration by source clinic ---//
+          const legacyDepartment = String(data.department || '').trim();
+          const breakdownKey = legacyDepartment || 'OTHER / UNKNOWN';
+          missingProviderByLegacyDepartment[breakdownKey] =
+            (missingProviderByLegacyDepartment[breakdownKey] || 0) + 1;
+        }
+      });
+
+      let usersWithClinicId = 0;
+      let usersNeedsClinicMigration = 0;
+
+      usersSnapshot.docs.forEach(snapshot => {
+        const data = snapshot.data() as Partial<User>;
+        const inferredClinicId = inferClinicIdFromLegacy(data.clinicId, data.department);
+
+        if (data.clinicId) usersWithClinicId++;
+        if (!data.clinicId || data.clinicId !== inferredClinicId) {
+          usersNeedsClinicMigration++;
+        }
+      });
+
+      const stats: MigrationStats = {
+        appointmentsTotal: appointmentsSnapshot.size,
+        appointmentsWithClinicId,
+        appointmentsNeedsClinicMigration,
+        appointmentsNeedsReferralMigration,
+        appointmentsMissingProvider,
+        missingProviderByLegacyDepartment,
+        usersTotal: usersSnapshot.size,
+        usersWithClinicId,
+        usersNeedsClinicMigration,
+      };
+
+      setMigrationStats(stats);
+      setMigrationMessage('Scan complete. No data was changed.');
+    } catch (error) {
+      console.error('Failed to scan migration data', error);
+      setMigrationMessage('Scan failed. Please check Firestore access.');
+    } finally {
+      setMigrationScanning(false);
+    }
+  };
+
+  const migrateClinicStructure = async () => {
+    if (currentUser?.role !== UserRole.SUPER_ADMIN) {
+      alert('Only Super Admin can run migration.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Run clinic structure migration?\n\n' +
+      'This will only fill clinicId and referringClinicId for legacy records.\n' +
+      'The old department field will NOT be deleted or changed.'
+    );
+
+    if (!confirmed) return;
+
+    setMigrationRunning(true);
+    setMigrationMessage('Migrating clinic and referral fields...');
+
+    try {
+      const [appointmentsSnapshot, usersSnapshot] = await Promise.all([
+        getDocs(collection(db, 'appointments')),
+        getDocs(collection(db, 'users')),
+      ]);
+
+      let batch = writeBatch(db);
+      let batchCount = 0;
+      let changedAppointments = 0;
+      let changedUsers = 0;
+
+      const commitIfNeeded = async () => {
+        if (batchCount === 0) return;
+        await batch.commit();
+        batch = writeBatch(db);
+        batchCount = 0;
+      };
+
+      for (const snapshot of appointmentsSnapshot.docs) {
+        const data = snapshot.data() as Partial<Appointment>;
+        const inferredClinicId = inferClinicIdFromLegacy(data.clinicId, data.department);
+        const inferredReferralId = getReferringClinicId(data);
+        const patch: Record<string, string> = {};
+
+        if (!data.clinicId || data.clinicId !== inferredClinicId) {
+          patch.clinicId = inferredClinicId;
+        }
+        if (!data.referringClinicId || data.referringClinicId !== inferredReferralId) {
+          patch.referringClinicId = inferredReferralId;
+        }
+
+        if (Object.keys(patch).length > 0) {
+          batch.update(snapshot.ref, patch);
+          batchCount++;
+          changedAppointments++;
+        }
+
+        if (batchCount >= 450) await commitIfNeeded();
+      }
+
+      for (const snapshot of usersSnapshot.docs) {
+        const data = snapshot.data() as Partial<User>;
+        const inferredClinicId = inferClinicIdFromLegacy(data.clinicId, data.department);
+        const patch: Record<string, string> = {};
+
+        if (!data.clinicId || data.clinicId !== inferredClinicId) {
+          patch.clinicId = inferredClinicId;
+        }
+
+        if (Object.keys(patch).length > 0) {
+          batch.update(snapshot.ref, patch);
+          batchCount++;
+          changedUsers++;
+        }
+
+        if (batchCount >= 450) await commitIfNeeded();
+      }
+
+      await commitIfNeeded();
+
+      addActivityLog(
+        'Migrated Clinic Structure',
+        `${changedAppointments} appointments / ${changedUsers} users`,
+        currentUser.displayName
+      );
+
+      setMigrationMessage(
+        `Migration complete: ${changedAppointments} appointment record(s) and ${changedUsers} user record(s) updated.`
+      );
+      await scanMigrationData();
+    } catch (error) {
+      console.error('Failed to migrate clinic structure', error);
+      setMigrationMessage('Migration failed. No further records were processed after the error.');
+    } finally {
+      setMigrationRunning(false);
+    }
+  };
+
+  const migrateMissingProvidersByLegacyDepartment = async (
+    legacyDepartment: string,
+    providerId: string
+  ) => {
+    if (currentUser?.role !== UserRole.SUPER_ADMIN) {
+      alert('Only Super Admin can run migration.');
+      return;
+    }
+
+    const normalizedDepartment = legacyDepartment.trim();
+    const providerClinic = clinics.find(clinic => clinic.id === providerId);
+
+    if (!providerClinic?.active || !providerClinic.isFundusProvider) {
+      alert('Please select an active Fundus Provider clinic first.');
+      return;
+    }
+
+    const pendingCount = migrationStats?.missingProviderByLegacyDepartment?.[normalizedDepartment] || 0;
+    if (pendingCount <= 0) {
+      alert(`No legacy ${normalizedDepartment} appointments are missing a fundus provider.`);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Assign ${providerClinic.name} as the fundus provider for ${pendingCount} legacy ${normalizedDepartment} appointment(s)?\n\n` +
+      'Existing provider assignments will NOT be changed.'
+    );
+
+    if (!confirmed) return;
+
+    setMigrationRunning(true);
+    setMigrationMessage(`Assigning ${providerClinic.shortName} to ${normalizedDepartment} legacy records...`);
+
+    try {
+      const appointmentsSnapshot = await getDocs(collection(db, 'appointments'));
+      let batch = writeBatch(db);
+      let batchCount = 0;
+      let changedAppointments = 0;
+
+      const commitIfNeeded = async () => {
+        if (batchCount === 0) return;
+        await batch.commit();
+        batch = writeBatch(db);
+        batchCount = 0;
+      };
+
+      for (const snapshot of appointmentsSnapshot.docs) {
+        const data = snapshot.data() as Partial<Appointment>;
+        const department = String(data.department || '').trim();
+
+        //---Only migrate the selected legacy source and never overwrite an existing provider---//
+        if (department !== normalizedDepartment) continue;
+        if (data.fundusProviderClinicId) continue;
+
+        batch.update(snapshot.ref, {
+          fundusProviderClinicId: providerClinic.id,
+        });
+        batchCount++;
+        changedAppointments++;
+
+        if (batchCount >= 450) await commitIfNeeded();
+      }
+
+      await commitIfNeeded();
+
+      addActivityLog(
+        'Migrated Missing Fundus Provider',
+        `${changedAppointments} ${normalizedDepartment} appointments → ${providerClinic.shortName}`,
+        currentUser.displayName
+      );
+
+      setMigrationMessage(
+        `Provider migration complete: ${changedAppointments} ${normalizedDepartment} appointment record(s) assigned to ${providerClinic.shortName}.`
+      );
+      await scanMigrationData();
+    } catch (error) {
+      console.error('Failed to migrate missing providers by legacy department', error);
+      setMigrationMessage('Provider migration failed.');
+    } finally {
+      setMigrationRunning(false);
     }
   };
 
@@ -1909,7 +2359,46 @@ useEffect(() => {
         }
       });
 
-      setClinics(merged);
+      //--- Preserve local routing changes until Firestore confirms the same value ---//
+      const mergedWithPendingChanges = merged.map(clinic => {
+        let nextClinic = clinic;
+
+        //--- Preserve pending provider ON/OFF state until Firestore confirms it ---//
+        const pendingProvider = pendingFundusProviderRef.current[clinic.id];
+        if (pendingProvider !== undefined) {
+          if (clinic.isFundusProvider === pendingProvider) {
+            delete pendingFundusProviderRef.current[clinic.id];
+          } else {
+            nextClinic = {
+              ...nextClinic,
+              isFundusProvider: pendingProvider,
+            };
+          }
+        }
+
+        //--- Preserve pending referral routing until Firestore confirms it ---//
+        const pendingRouting = pendingFundusRoutingRef.current[clinic.id];
+        if (pendingRouting) {
+          const serverProviders = [...(clinic.fundusProviderClinicIds || [])].sort();
+          const pendingProviders = [...pendingRouting].sort();
+
+          if (
+            serverProviders.length === pendingProviders.length &&
+            serverProviders.every((id, index) => id === pendingProviders[index])
+          ) {
+            delete pendingFundusRoutingRef.current[clinic.id];
+          } else {
+            nextClinic = {
+              ...nextClinic,
+              fundusProviderClinicIds: pendingRouting,
+            };
+          }
+        }
+
+        return nextClinic;
+      });
+
+      setClinics(mergedWithPendingChanges);
     },
     (error) => {
       console.warn("Clinic master sync unavailable; using migration defaults.", error);
@@ -2766,6 +3255,39 @@ link.setAttribute(
 ) => {
 
   try {
+    //--- Validate referral/provider routing against Fundus Network before saving ---//
+    const referringClinicId =
+      formReferringClinicId ||
+      editingAppointment?.referringClinicId ||
+      currentUser?.clinicId ||
+      'LINTANG';
+
+    const providerClinicId =
+      formFundusProviderClinicId ||
+      editingAppointment?.fundusProviderClinicId ||
+      currentClinic?.id ||
+      '';
+
+    const referringClinic = clinics.find(
+      clinic => clinic.id === referringClinicId
+    );
+
+    if (!referringClinic || !providerClinicId) {
+      alert('Sila pilih Klinik Perujuk dan Klinik Rujukan Fundus.');
+      return;
+    }
+
+    const validProvider =
+      referringClinic.id === providerClinicId &&
+      referringClinic.isFundusProvider
+        ? true
+        : (referringClinic.fundusProviderClinicIds || []).includes(providerClinicId);
+
+    if (!validProvider) {
+      alert('Klinik Rujukan Fundus tidak dibenarkan untuk klinik perujuk ini berdasarkan Fundus Network.');
+      return;
+    }
+
 //---Standalone clinics no longer use department-specific scheduling rules---//
     if (editingAppointment) {
 
@@ -2781,8 +3303,8 @@ link.setAttribute(
     ...data,
     //---Preserve the owning clinic; referral/provider are separate relationships---//
     clinicId: editingAppointment.clinicId ?? currentUser?.clinicId ?? 'LINTANG',
-    referringClinicId: formReferringClinicId || editingAppointment.referringClinicId || currentUser?.clinicId || 'LINTANG',
-    fundusProviderClinicId: formFundusProviderClinicId || editingAppointment.fundusProviderClinicId || currentClinic?.id || ''
+    referringClinicId,
+    fundusProviderClinicId: providerClinicId
   }
 );
 
@@ -2800,8 +3322,8 @@ link.setAttribute(
         clinicId: currentUser?.clinicId || 'LINTANG',
 
         //---Referral/provider relationship for standalone clinic architecture---//
-        referringClinicId: formReferringClinicId || currentUser?.clinicId || 'LINTANG',
-        fundusProviderClinicId: formFundusProviderClinicId || currentClinic?.id || '',
+        referringClinicId,
+        fundusProviderClinicId: providerClinicId,
 
         patientName:
           data.patientName || '',
@@ -3456,16 +3978,14 @@ const tomorrowTCATotal = Object.values(
           className="relative z-10 bg-white/92 backdrop-blur-md rounded-3xl shadow-2xl p-8 w-full max-w-md border border-white/40"
         >
           <div className="flex flex-col items-center mb-10">
-            <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-white shadow-xl mb-6 ring-1 ring-slate-100">
+            <div className="overflow-hidden mb-6 h-40">
               <img 
                 src={clinicLogo} 
                 alt={`${currentClinic?.name || 'Klinik Kesihatan Lintang'} Logo`}
                 className="w-full h-full object-cover"
-                
               />
             </div>
             {/*---SINAR platform identity: clinic is display context, not the product identity---*/}
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight text-center">SINAR</h1>
             <p className="text-slate-600 font-bold text-[11px] tracking-wide mt-1">Sistem Interpretasi &amp; Nota Awal Retinopati</p>
             <p className="text-blue-600 font-black text-[10px] uppercase tracking-[0.2em] mt-1">Fundus Screening Platform</p>
           </div>
@@ -3910,19 +4430,22 @@ const tomorrowTCATotal = Object.values(
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-3 py-2 md:h-16 flex flex-col md:flex-row md:items-center justify-center md:justify-between gap-3 md:gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-slate-100 shadow-sm bg-white shrink-0">
+            <div className="w-13 h-13 rounded-full overflow-hidden border-2 border-slate-100 shadow-sm bg-white shrink-0">
               <img 
-                src={clinicLogo} 
+                src={roundLogo} 
                 alt={`${currentClinic?.name || 'Klinik Kesihatan Lintang'} Logo`}
                 className="w-full h-full object-cover"
-              
               />
             </div>
             <div className="flex flex-col min-w-0">
               {/*---One SINAR identity across every clinic; clinic name is the active tenant context---*/}
-              <span className="font-black text-base md:text-lg leading-none tracking-tight text-slate-900">SINAR</span>
-              <span className="text-[9px] md:text-[10px] font-black text-blue-600 uppercase tracking-widest mt-1">Sistem Interpretasi &amp; Nota Awal Retinopati</span>
-              <span className="text-[11px] md:text-xs font-bold text-slate-700 mt-0.5 truncate">
+              <img 
+                src={textLogo} 
+                alt={`${currentClinic?.name || 'Klinik Kesihatan Lintang'} Logo`}
+                className="w-29 h-6 object-cover"
+              />
+              <div className="w-auto h-[1px] bg-slate-300 my-1 mt-2" />
+              <span className="text-[12px] md:text-xs font-bold text-slate-700 mt-0 truncate">
                 {currentUser.role === UserRole.SUPER_ADMIN ? 'Multi-Clinic Administration' : (currentClinic?.name || 'Klinik Kesihatan Lintang')}
               </span>
             </div>
@@ -4061,12 +4584,21 @@ const tomorrowTCATotal = Object.values(
               <p className="font-black text-slate-900">User Management</p>
               <p className="text-xs text-slate-500 mt-1">Create and manage admins and staff by clinic.</p>
             </button>
-            <button className="text-left p-5 rounded-2xl border border-emerald-100 bg-emerald-50 hover:bg-emerald-100 transition-all">
+            <button onClick={() => setShowFundusNetwork(true)} className="text-left p-5 rounded-2xl border border-emerald-100 bg-emerald-50 hover:bg-emerald-100 transition-all">
               <Network className="text-emerald-600 mb-4" size={25} />
               <p className="font-black text-slate-900">Fundus Network</p>
               <p className="text-xs text-slate-500 mt-1">Configure fundus provider clinics and referral routing.</p>
             </button>
-            <button className="text-left p-5 rounded-2xl border border-cyan-100 bg-cyan-50 hover:bg-cyan-100 transition-all">
+            <button
+              type="button"
+              onClick={(e) => {
+                //--- Open Data & Migration directly from the Super Admin home dashboard ---//
+                e.stopPropagation();
+                setShowDataMigration(true);
+                void scanMigrationData();
+              }}
+              className="text-left p-5 rounded-2xl border border-cyan-100 bg-cyan-50 hover:bg-cyan-100 transition-all cursor-pointer"
+            >
               <Database className="text-cyan-600 mb-4" size={25} />
               <p className="font-black text-slate-900">Data &amp; Migration</p>
               <p className="text-xs text-slate-500 mt-1">Review legacy records and migration status.</p>
@@ -4938,17 +5470,11 @@ const badgeClass =
   initial={{ opacity: 0 }}
   animate={{ opacity: 1 }}
   exit={{ opacity: 0 }}
-  className={`group hover:bg-slate-50 transition-colors border-l-4 ${
-    
-    app.department === 'OPD KKL'
-      ? 'border-l-sky-500'
-      : app.department === 'PBOA'
-        ? 'border-l-emerald-500'
-        : app.department === 'HSS'
-          ? 'border-l-violet-500'
-          : 'border-l-slate-500'
-
-  } ${
+  className={`group hover:bg-slate-50 transition-colors border-l-4 ${getClinicBorderClass(
+  clinics,
+  getReferringClinicId(app),
+  currentUser?.clinicId || 'LINTANG'
+)} ${
         app.status === AppointmentStatus.DONE
       ? 'bg-emerald-50/20'
       : app.status === AppointmentStatus.DONE_FUNDUS
@@ -5151,8 +5677,14 @@ const badgeClass =
                             {app.otherDisease && (
                               <span className="text-[8px] bg-slate-50 text-slate-600 px-1 py-[1px] rounded font-bold border border-slate-100 uppercase">{app.otherDisease}</span>
                             )}
-<span className="text-[8px] px-2 py-[1px] rounded font-black border uppercase bg-blue-50 text-blue-700 border-blue-200">
-  {getClinicById(clinics, app.clinicId)?.shortName || 'Clinic'}
+<span
+  className={`text-[8px] px-2 py-[1px] rounded font-black border uppercase ${getClinicBadgeClass(
+    clinics,
+    getReferringClinicId(app),
+    currentUser?.clinicId || 'LINTANG'
+  )}`}
+>
+  {getClinicById(clinics, getReferringClinicId(app))?.shortName || 'Clinic'}
 </span>
                           </div>
                           <span className="text-[9px] md:text-[11px] font-normal text-slate-500 mt-1">
@@ -5706,15 +6238,25 @@ setSelectedReviewSummary(app);
                     <p className="font-black text-slate-900">User Management</p>
                     <p className="text-xs text-slate-500 mt-1">Manage admins and staff across clinics.</p>
                   </button>
-                  <button className="text-left p-5 rounded-2xl border border-emerald-100 bg-emerald-50 hover:bg-emerald-100 transition-all">
+                  <button onClick={() => setShowFundusNetwork(true)} className="text-left p-5 rounded-2xl border border-emerald-100 bg-emerald-50 hover:bg-emerald-100 transition-all">
                     <Network className="text-emerald-600 mb-4" size={25} />
                     <p className="font-black text-slate-900">Fundus Network</p>
                     <p className="text-xs text-slate-500 mt-1">Configure which clinics provide fundus services.</p>
                   </button>
-                  <button className="text-left p-5 rounded-2xl border border-cyan-100 bg-cyan-50 hover:bg-cyan-100 transition-all">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      //--- Open Data & Migration as its own modal layer and close the console underneath ---//
+                      e.stopPropagation();
+                      setShowSuperAdminConsole(false);
+                      setShowDataMigration(true);
+                      void scanMigrationData();
+                    }}
+                    className="text-left p-5 rounded-2xl border border-cyan-100 bg-cyan-50 hover:bg-cyan-100 transition-all cursor-pointer"
+                  >
                     <Database className="text-cyan-600 mb-4" size={25} />
                     <p className="font-black text-slate-900">Data &amp; Migration</p>
-                    <p className="text-xs text-slate-500 mt-1">Monitor migration and clinic data structure.</p>
+                    <p className="text-xs text-slate-500 mt-1">Review legacy records and migrate clinic structure safely.</p>
                   </button>
                   <button className="text-left p-5 rounded-2xl border border-amber-100 bg-amber-50 hover:bg-amber-100 transition-all">
                     <Activity className="text-amber-600 mb-4" size={25} />
@@ -5725,6 +6267,522 @@ setSelectedReviewSummary(app);
                     <Settings2 className="text-slate-600 mb-4" size={25} />
                     <p className="font-black text-slate-900">System Configuration</p>
                     <p className="text-xs text-slate-500 mt-1">Global SINAR settings and future modules.</p>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =====================================================
+          DATA & MIGRATION
+          Super Admin can scan legacy records and migrate only the
+          new clinic/referral/provider fields. Legacy department data
+          is intentionally preserved for backward compatibility.
+         ===================================================== */}
+      <AnimatePresence>
+        {showDataMigration && currentUser.role === UserRole.SUPER_ADMIN && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowDataMigration(false)}
+              className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-5xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-cyan-50/70">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-cyan-600 text-white flex items-center justify-center shadow-lg">
+                    <Database size={22} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black text-slate-900">Data &amp; Migration</h2>
+                    <p className="text-[10px] font-black text-cyan-700 uppercase tracking-widest mt-1">
+                      Legacy data → multiclinic structure
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowDataMigration(false)}
+                  className="p-2 rounded-xl hover:bg-cyan-100 text-slate-400"
+                >
+                  <XCircle size={24} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto space-y-5">
+                <div className="rounded-2xl border border-cyan-100 bg-cyan-50/50 p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="text-cyan-600 shrink-0 mt-0.5" size={19} />
+                    <div>
+                      <p className="font-black text-slate-900">Safe migration policy</p>
+                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                        Migration only fills the new clinic structure. The legacy <b>department</b> field is preserved and existing provider assignments are never overwritten.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {migrationStats ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Appointments</p>
+                      <p className="text-2xl font-black text-slate-900 mt-1">{migrationStats.appointmentsTotal}</p>
+                      <p className="text-[11px] text-slate-500 mt-1">total records</p>
+                    </div>
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Clinic migration</p>
+                      <p className="text-2xl font-black text-amber-900 mt-1">{migrationStats.appointmentsNeedsClinicMigration}</p>
+                      <p className="text-[11px] text-amber-700 mt-1">appointments</p>
+                    </div>
+                    <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-violet-700">Referral migration</p>
+                      <p className="text-2xl font-black text-violet-900 mt-1">{migrationStats.appointmentsNeedsReferralMigration}</p>
+                      <p className="text-[11px] text-violet-700 mt-1">appointments</p>
+                    </div>
+                    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Missing provider</p>
+                      <p className="text-2xl font-black text-rose-900 mt-1">{migrationStats.appointmentsMissingProvider}</p>
+                      <p className="text-[11px] text-rose-700 mt-1">appointments</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-center">
+                    <p className="text-sm font-bold text-slate-600">Scan Firestore to view migration status.</p>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-black text-slate-900">1. Clinic Structure</h3>
+                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                          Fill <b>clinicId</b> and <b>referringClinicId</b> for legacy appointments, and <b>clinicId</b> for legacy users.
+                        </p>
+                      </div>
+                      <ShieldCheck className="text-emerald-500 shrink-0" size={21} />
+                    </div>
+                    <button
+                      disabled={migrationRunning || migrationScanning}
+                      onClick={migrateClinicStructure}
+                      className="mt-5 w-full py-3 rounded-xl bg-cyan-600 text-white font-black text-sm hover:bg-cyan-700 disabled:opacity-50"
+                    >
+                      Migrate Clinic Structure
+                    </button>
+                  </section>
+
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-black text-slate-900">2. Missing Fundus Provider</h3>
+                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                          For old appointments without a provider field, choose the clinic that actually handled those legacy fundus cases.
+                        </p>
+                      </div>
+                      <Network className="text-emerald-500 shrink-0" size={21} />
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-rose-100 bg-rose-50/60 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Legacy source breakdown</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Assign the historical fundus provider by legacy source. Existing provider assignments are never overwritten.
+                      </p>
+
+                      <div className="mt-3 space-y-2">
+                        {Object.entries(migrationStats?.missingProviderByLegacyDepartment || {})
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([department, count]) => {
+                            const selectedProviderId = migrationProviderByLegacyDepartment[department] || '';
+                            const selectedProvider = clinics.find(clinic => clinic.id === selectedProviderId);
+                            const mappedClinic =
+                              department === 'OPD KKL'
+                                ? 'LINTANG'
+                                : department === 'PBOA'
+                                  ? 'PBOA'
+                                  : department === 'HSS'
+                                    ? 'HSS'
+                                    : '';
+
+                            return (
+                              <div key={department} className="rounded-xl border border-white bg-white p-3 shadow-sm">
+                                <div className="flex flex-col xl:flex-row xl:items-center gap-3">
+                                  <div className="min-w-0 xl:w-[28%]">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-xs font-black text-slate-800">{department}</span>
+                                      <span className="text-sm font-black text-rose-700">{count}</span>
+                                    </div>
+                                    {mappedClinic && (
+                                      <p className="text-[10px] font-bold text-slate-400 mt-1">Legacy clinic → {mappedClinic}</p>
+                                    )}
+                                  </div>
+
+                                  <div className="flex-1 flex flex-col sm:flex-row gap-2">
+                                    <select
+                                      value={selectedProviderId}
+                                      onChange={(e) =>
+                                        setMigrationProviderByLegacyDepartment(prev => ({
+                                          ...prev,
+                                          [department]: e.target.value,
+                                        }))
+                                      }
+                                      disabled={migrationRunning || migrationScanning || count <= 0}
+                                      className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-200 disabled:opacity-50"
+                                    >
+                                      <option value="">Select fundus provider...</option>
+                                      {getFundusProviderClinics(clinics).map(provider => (
+                                        <option key={provider.id} value={provider.id}>
+                                          {provider.name}
+                                        </option>
+                                      ))}
+                                    </select>
+
+                                    <button
+                                      type="button"
+                                      disabled={migrationRunning || migrationScanning || count <= 0 || !selectedProviderId}
+                                      onClick={() => migrateMissingProvidersByLegacyDepartment(department, selectedProviderId)}
+                                      className="sm:min-w-[150px] px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:opacity-50"
+                                    >
+                                      Assign Provider
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {selectedProvider && (
+                                  <p className="text-[10px] font-semibold text-emerald-700 mt-2">
+                                    Selected: {selectedProvider.shortName}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 p-3">
+                      <p className="text-xs font-black text-amber-900">Safe historical assignment</p>
+                      <p className="text-[11px] text-amber-800 mt-1 leading-relaxed">
+                        Each legacy source is migrated separately. Review the source and provider before confirming; no record from another source will be changed.
+                      </p>
+                    </div>
+                  </section>
+                </div>
+
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-1">
+                  <div className="text-xs font-semibold text-slate-500 min-h-[18px]">
+                    {migrationScanning ? 'Scanning...' : migrationRunning ? 'Migration in progress...' : migrationMessage}
+                  </div>
+                  <button
+                    disabled={migrationScanning || migrationRunning}
+                    onClick={scanMigrationData}
+                    className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-black text-xs hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Refresh Scan
+                  </button>
+                </div>
+
+                {migrationStats && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <p>Users: <b className="text-slate-900">{migrationStats.usersTotal}</b> total · <b className="text-amber-700">{migrationStats.usersNeedsClinicMigration}</b> need clinic mapping</p>
+                      <p>Appointments with clinicId: <b className="text-slate-900">{migrationStats.appointmentsWithClinicId}</b> / {migrationStats.appointmentsTotal}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =====================================================
+          FUNDUS NETWORK
+          Super Admin controls provider status and referral routing.
+         ===================================================== */}
+      <AnimatePresence>
+        {showFundusNetwork && currentUser.role === UserRole.SUPER_ADMIN && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowFundusNetwork(false)}
+              className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-5xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[88vh] flex flex-col"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-emerald-50/70">
+                <div>
+                  <h2 className="text-xl font-black text-slate-900">Fundus Network</h2>
+                  <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mt-1">
+                    Provider clinics & referral routing
+                  </p>
+                </div>
+                <button onClick={() => setShowFundusNetwork(false)} className="p-2 rounded-xl hover:bg-emerald-100 text-slate-400">
+                  <XCircle size={24} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto space-y-6">
+                {/*--- Provider clinics ---*/}
+                <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-5">
+                  <div className="flex items-center justify-between gap-4 mb-4">
+                    <div>
+                      <h3 className="font-black text-slate-900">Fundus Provider Clinics</h3>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Turn fundus service on or off for active clinics.
+                      </p>
+                    </div>
+                    <div className="px-3 py-1.5 rounded-full bg-white border border-emerald-200 text-[10px] font-black text-emerald-700 uppercase">
+                      {getFundusProviderClinics(clinics).length} active providers
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {clinics.filter(c => c.active).map(clinic => (
+                      <div key={clinic.id} className="flex items-center justify-between gap-4 bg-white border border-slate-200 rounded-2xl p-4">
+                        <div className="min-w-0">
+                          <p className="font-black text-slate-900 truncate">{clinic.name}</p>
+                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">
+                            {clinic.shortName} · {clinic.id}
+                          </p>
+                        </div>
+                        <button
+                          disabled={fundusNetworkSaving === `provider:${clinic.id}`}
+                          onClick={async () => {
+                            const nextValue = !clinic.isFundusProvider;
+                            if (!nextValue && getFundusProviderClinics(clinics).length <= 1) {
+                              alert('At least one active fundus provider clinic is required.');
+                              return;
+                            }
+                            const savingKey = `provider:${clinic.id}`;
+                            setFundusNetworkSaving(savingKey);
+
+                            //--- Optimistic UI update ---//
+                            const previousClinics = clinics;
+                            pendingFundusProviderRef.current[clinic.id] = nextValue;
+                            setClinics(prev =>
+                              prev.map(c =>
+                                c.id === clinic.id
+                                  ? { ...c, isFundusProvider: nextValue }
+                                  : !nextValue
+                                    ? {
+                                        ...c,
+                                        fundusProviderClinicIds: (c.fundusProviderClinicIds || [])
+                                          .filter(id => id !== clinic.id)
+                                      }
+                                    : c
+                              )
+                            );
+
+                            try {
+                              await setDoc(
+                                doc(db, 'clinics', clinic.id),
+                                { isFundusProvider: nextValue },
+                                { merge: true }
+                              );
+
+                              //--- When a provider is disabled, remove it from referral routing ---//
+                              if (!nextValue) {
+                                const referralClinics = previousClinics.filter(
+                                  c => c.active && !c.isFundusProvider && c.id !== clinic.id
+                                );
+
+                                await Promise.all(
+                                  referralClinics
+                                    .filter(c => (c.fundusProviderClinicIds || []).includes(clinic.id))
+                                    .map(c =>
+                                      setDoc(
+                                        doc(db, 'clinics', c.id),
+                                        {
+                                          fundusProviderClinicIds: (c.fundusProviderClinicIds || [])
+                                            .filter(id => id !== clinic.id)
+                                        },
+                                        { merge: true }
+                                      )
+                                    )
+                                );
+                              }
+
+                              addActivityLog(
+                                nextValue ? 'Enabled Fundus Provider' : 'Disabled Fundus Provider',
+                                `${clinic.name} (${clinic.id})`,
+                                currentUser.displayName
+                              );
+                            } catch (error) {
+                              console.error('Failed to update fundus provider status', error);
+                              delete pendingFundusProviderRef.current[clinic.id];
+                              setClinics(previousClinics);
+                              const code = (error as any)?.code || 'unknown';
+                              alert(`Failed to update ${clinic.shortName}. Firestore error: ${code}`);
+                            } finally {
+                              setFundusNetworkSaving(null);
+                            }
+                          }}
+                          className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border ${
+                            clinic.isFundusProvider
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'bg-slate-50 text-slate-500 border-slate-200'
+                          }`}
+                        >
+                          {fundusNetworkSaving === `provider:${clinic.id}`
+                            ? 'Saving...'
+                            : clinic.isFundusProvider ? 'Provider: ON' : 'Provider: OFF'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {/*--- Referral routing: multiple providers can be selected ---*/}
+                <section className="rounded-2xl border border-blue-100 bg-blue-50/40 p-5">
+                  <div className="mb-4">
+                    <h3 className="font-black text-slate-900">Referral Routing</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Each non-provider clinic can have more than one fundus provider available for referral.
+                    </p>
+                  </div>
+
+                  {/*--- Compact 3-column routing cards on larger screens so the modal stays usable on small laptops ---*/}
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {clinics.filter(c => c.active && !c.isFundusProvider).map(clinic => {
+                      const providers = getFundusProviderClinics(clinics);
+                      const selectedProviders = clinic.fundusProviderClinicIds || [];
+
+                      return (
+                        <div
+                          key={clinic.id}
+                          className="bg-white border border-slate-200 rounded-2xl p-3"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="font-black text-slate-900">{clinic.name}</p>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">
+                                Referral / source clinic
+                              </p>
+                            </div>
+
+                            <div className="shrink-0 px-2 py-1 rounded-full bg-blue-50 border border-blue-100 text-[9px] font-black text-blue-700 uppercase">
+                              {selectedProviders.length} provider{selectedProviders.length === 1 ? '' : 's'} selected
+                            </div>
+                          </div>
+
+                          {providers.length === 0 ? (
+                            <div className="mt-4 p-3 rounded-xl bg-amber-50 border border-amber-100 text-xs font-bold text-amber-700">
+                              No active fundus provider clinic is available.
+                            </div>
+                          ) : (
+                            <div className="mt-3 grid grid-cols-1 gap-2">
+                              {providers.map(provider => {
+                                const checked = selectedProviders.includes(provider.id);
+
+                                return (
+                                  <label
+                                    key={provider.id}
+                                    className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                                      checked
+                                        ? 'bg-blue-50 border-blue-200'
+                                        : 'bg-white border-slate-200 hover:bg-slate-50'
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      disabled={fundusNetworkSaving === `routing:${clinic.id}:${provider.id}`}
+                                      onChange={async e => {
+                                        const nextProviders = e.target.checked
+                                          ? Array.from(new Set([...selectedProviders, provider.id]))
+                                          : selectedProviders.filter(id => id !== provider.id);
+
+                                        const savingKey = `routing:${clinic.id}:${provider.id}`;
+                                        const previousClinics = clinics;
+                                        setFundusNetworkSaving(savingKey);
+
+                                        //--- Mark this clinic's latest routing value as pending ---//
+                                        pendingFundusRoutingRef.current[clinic.id] = nextProviders;
+
+                                        //--- Optimistic UI update so every clinic behaves the same ---//
+                                        setClinics(prev =>
+                                          prev.map(c =>
+                                            c.id === clinic.id
+                                              ? { ...c, fundusProviderClinicIds: nextProviders }
+                                              : c
+                                          )
+                                        );
+
+                                        try {
+                                          await setDoc(
+                                            doc(db, 'clinics', clinic.id),
+                                            { fundusProviderClinicIds: nextProviders },
+                                            { merge: true }
+                                          );
+
+                                          addActivityLog(
+                                            'Updated Fundus Routing',
+                                            `${clinic.shortName} → ${nextProviders.length
+                                              ? nextProviders.map(id => getClinicById(clinics, id)?.shortName || id).join(', ')
+                                              : 'No provider selected'}`,
+                                            currentUser.displayName
+                                          );
+                                        } catch (error) {
+                                          console.error('Failed to update fundus routing', error);
+                                          delete pendingFundusRoutingRef.current[clinic.id];
+                                          setClinics(previousClinics);
+                                          const code = (error as any)?.code || 'unknown';
+                                          alert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`);
+                                        } finally {
+                                          setFundusNetworkSaving(null);
+                                        }
+                                      }}
+                                      className="h-4 w-4"
+                                    />
+
+                                    <div className="min-w-0">
+                                      <p className={`text-xs font-black ${
+                                        checked ? 'text-blue-800' : 'text-slate-700'
+                                      }`}>
+                                        {provider.shortName}
+                                      </p>
+                                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+                                        {provider.id}
+                                      </p>
+                                    </div>
+
+                                    {checked && (
+                                      <CheckCircle2 size={16} className="ml-auto text-blue-600 shrink-0" />
+                                    )}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {clinics.filter(c => c.active && !c.isFundusProvider).length === 0 && (
+                      <div className="col-span-full text-center py-8 text-sm font-bold text-slate-400">
+                        All active clinics are currently fundus providers.
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <div className="flex justify-end">
+                  <button onClick={() => setShowFundusNetwork(false)} className="px-5 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-black uppercase tracking-widest">
+                    Done
                   </button>
                 </div>
               </div>
@@ -6502,7 +7560,18 @@ setSelectedReviewSummary(app);
                         <option value="">Pilih asal klinik</option>
 
                         {clinics
-                          .filter(clinic => clinic.active)
+                          .filter(clinic => {
+                            //--- Non-provider clinic: only allow the clinic's own environment as the source ---//
+                            if (!currentClinic?.isFundusProvider) {
+                              return clinic.active && clinic.id === currentClinic?.id;
+                            }
+
+                            //--- Provider clinic: show own clinic plus clinics routed to this fundus provider in Fundus Network ---//
+                            if (!clinic.active) return false;
+                            if (clinic.id === currentClinic.id) return true;
+
+                            return (clinic.fundusProviderClinicIds || []).includes(currentClinic.id);
+                          })
                           .map(clinic => (
                             <option key={clinic.id} value={clinic.id}>
                               {clinic.name}
@@ -6537,11 +7606,27 @@ setSelectedReviewSummary(app);
                         >
                           <option value="">Pilih klinik fundus</option>
 
-                          {fundusProviderClinics.map(clinic => (
-                            <option key={clinic.id} value={clinic.id}>
-                              {clinic.name}
-                            </option>
-                          ))}
+                          {fundusProviderClinics
+                            .filter(provider => {
+                              //--- Only show providers allowed by Fundus Network for the selected referring clinic ---//
+                              const referringClinic = clinics.find(
+                                clinic => clinic.id === formReferringClinicId
+                              );
+
+                              if (!referringClinic) return false;
+
+                              //--- A provider clinic may route to itself ---//
+                              if (referringClinic.id === provider.id && referringClinic.isFundusProvider) {
+                                return true;
+                              }
+
+                              return (referringClinic.fundusProviderClinicIds || []).includes(provider.id);
+                            })
+                            .map(clinic => (
+                              <option key={clinic.id} value={clinic.id}>
+                                {clinic.name}
+                              </option>
+                            ))}
                         </select>
                       )}
 
