@@ -94,6 +94,8 @@ interface Clinic {
   isFundusProvider: boolean;
   //--- Multiple fundus providers allowed for referral routing ---//
   fundusProviderClinicIds?: string[];
+  //--- TCA days configured by a provider clinic for each referring clinic ---//
+  referralTcaDays?: Record<string, number[]>;
 }
 
 const DEFAULT_CLINICS: Clinic[] = [
@@ -552,11 +554,18 @@ export default function App() {
 
   //--- Super Admin Fundus Network ---//
   const [showFundusNetwork, setShowFundusNetwork] = useState(false);
+  //--- Clinic Admin referral TCA schedule ---//
+  const [showReferralClinicManager, setShowReferralClinicManager] = useState(false);
+  const [referralTcaDraft, setReferralTcaDraft] = useState<Record<string, number[]>>({});
+  const [referralTcaSaving, setReferralTcaSaving] = useState(false);
   //--- Super Admin Data & Migration ---//
   const [showDataMigration, setShowDataMigration] = useState(false);
   const [migrationStats, setMigrationStats] = useState<MigrationStats | null>(null);
   const [migrationScanning, setMigrationScanning] = useState(false);
   const [migrationRunning, setMigrationRunning] = useState(false);
+  //--- Clinic Master Sync: only create missing default clinic documents; never overwrite existing clinics ---//
+  const [clinicMasterSyncRunning, setClinicMasterSyncRunning] = useState(false);
+  const [clinicMasterSyncMessage, setClinicMasterSyncMessage] = useState('');
   //---Selected historical provider for each legacy source clinic---//
   const [migrationProviderByLegacyDepartment, setMigrationProviderByLegacyDepartment] = useState<Record<string, string>>({
     'OPD KKL': 'LINTANG',
@@ -572,6 +581,13 @@ export default function App() {
 
   //--- Pending provider ON/OFF writes prevent realtime snapshots from undoing recent clicks ---//
   const pendingFundusProviderRef = useRef<Record<string, boolean>>({});
+
+  //--- Keep the latest clinic state available to queued Fundus Routing writes ---//
+  const clinicsRef = useRef<Clinic[]>(DEFAULT_CLINICS);
+  clinicsRef.current = clinics;
+
+  //--- Serialize routing writes per referral clinic so rapid checkbox clicks cannot overwrite each other ---//
+  const fundusRoutingWriteQueueRef = useRef<Record<string, Promise<void>>>({});
 
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
@@ -1279,6 +1295,65 @@ const isReviewCompleted = (app: Appointment) => {
       setMigrationMessage('Scan failed. Please check Firestore access.');
     } finally {
       setMigrationScanning(false);
+    }
+  };
+
+  //--- Sync only missing default clinic master documents into Firestore ---//
+  // Existing clinic documents are never overwritten or modified by this operation.
+  const syncMissingClinicMaster = async () => {
+    if (currentUser?.role !== UserRole.SUPER_ADMIN) {
+      alert('Only Super Admin can sync the clinic master.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Sync missing clinic master?\\n\\n' +
+      'Only clinic documents that do not exist in Firestore will be created.\\n' +
+      'Existing clinic documents and their routing/provider/TCA settings will NOT be changed.'
+    );
+
+    if (!confirmed) return;
+
+    setClinicMasterSyncRunning(true);
+    setClinicMasterSyncMessage('Checking clinic master...');
+
+    try {
+      const snapshot = await getDocs(collection(db, 'clinics'));
+      const existingIds = new Set(snapshot.docs.map(docSnapshot => docSnapshot.id));
+      const missingClinics = DEFAULT_CLINICS.filter(clinic => !existingIds.has(clinic.id));
+
+      if (missingClinics.length === 0) {
+        setClinicMasterSyncMessage('Clinic master is already complete. No missing clinics found.');
+        return;
+      }
+
+      for (const clinic of missingClinics) {
+        await setDoc(
+          doc(db, 'clinics', clinic.id),
+          {
+            ...clinic,
+            fundusProviderClinicIds: clinic.fundusProviderClinicIds || [],
+            referralTcaDays: clinic.referralTcaDays || {},
+          },
+          { merge: false }
+        );
+      }
+
+      addActivityLog(
+        'Synced Missing Clinic Master',
+        `Created: ${missingClinics.map(clinic => `${clinic.shortName} (${clinic.id})`).join(', ')}`,
+        currentUser.displayName
+      );
+
+      setClinicMasterSyncMessage(
+        `Sync complete: ${missingClinics.length} missing clinic(s) created — ${missingClinics.map(clinic => clinic.shortName).join(', ')}.`
+      );
+    } catch (error) {
+      console.error('Failed to sync missing clinic master', error);
+      setClinicMasterSyncMessage('Clinic master sync failed. Please check Firestore access and try again.');
+      alert('Failed to sync missing clinic master. Please check Firestore permissions and try again.');
+    } finally {
+      setClinicMasterSyncRunning(false);
     }
   };
 
@@ -2336,23 +2411,36 @@ useEffect(() => {
         return;
       }
 
+      //---Merge Firestore clinic configuration over migration defaults.
+      //---Some legacy clinic documents contain only configuration fields (e.g. routing)
+      //---and do not contain name/shortName. Do NOT discard those documents.
+      //---Always hydrate known clinics from DEFAULT_CLINICS, then overlay Firestore fields.---//
       const firestoreClinics = snapshot.docs
         .map(docSnapshot => ({
           id: docSnapshot.id,
           ...(docSnapshot.data() as Partial<Clinic>),
         }))
-        .filter(clinic => clinic.id && clinic.name) as Clinic[];
+        .filter(clinic => Boolean(clinic.id)) as Clinic[];
 
-      //---Merge Firestore configuration over migration defaults---//
-      const merged = DEFAULT_CLINICS.map(defaultClinic =>
-        firestoreClinics.find(clinic => clinic.id === defaultClinic.id) || defaultClinic
-      );
+      const merged = DEFAULT_CLINICS.map(defaultClinic => {
+        const firestoreClinic = firestoreClinics.find(clinic => clinic.id === defaultClinic.id);
+        return firestoreClinic
+          ? {
+              ...defaultClinic,
+              ...firestoreClinic,
+              shortName: firestoreClinic.shortName || defaultClinic.shortName || defaultClinic.name,
+              active: firestoreClinic.active ?? defaultClinic.active,
+              isFundusProvider: firestoreClinic.isFundusProvider ?? defaultClinic.isFundusProvider,
+            }
+          : defaultClinic;
+      });
 
       firestoreClinics.forEach(clinic => {
         if (!merged.some(existing => existing.id === clinic.id)) {
           merged.push({
             ...clinic,
-            shortName: clinic.shortName || clinic.name,
+            name: clinic.name || clinic.id,
+            shortName: clinic.shortName || clinic.name || clinic.id,
             active: clinic.active ?? true,
             isFundusProvider: clinic.isFundusProvider ?? false,
           });
@@ -3286,6 +3374,42 @@ link.setAttribute(
     if (!validProvider) {
       alert('Klinik Rujukan Fundus tidak dibenarkan untuk klinik perujuk ini berdasarkan Fundus Network.');
       return;
+    }
+
+    //--- Referral TCA schedule: warn only when the selected date is outside configured days ---//
+    const configuredTcaDays =
+      referringClinic.id !== providerClinicId
+        ? clinics.find(clinic => clinic.id === providerClinicId)?.referralTcaDays?.[referringClinic.id] || []
+        : [];
+
+    if (data.date && configuredTcaDays.length > 0) {
+      const appointmentDate = new Date(`${data.date}T00:00:00`);
+      const appointmentDay = appointmentDate.getDay();
+
+      if (!configuredTcaDays.includes(appointmentDay)) {
+        const dayLabels: Record<number, string> = {
+          0: 'Sunday',
+          1: 'Monday',
+          2: 'Tuesday',
+          3: 'Wednesday',
+          4: 'Thursday',
+          5: 'Friday',
+          6: 'Saturday',
+        };
+
+        const allowedLabels = configuredTcaDays
+          .map(day => dayLabels[day])
+          .filter(Boolean)
+          .join(', ');
+
+        const proceed = window.confirm(
+          `Hari TCA untuk ${referringClinic.name} ialah ${allowedLabels} sahaja.\n\n` +
+          `Tarikh yang dipilih ialah ${dayLabels[appointmentDay] || 'hari tidak diketahui'}.\n\n` +
+          `Nak teruskan?`
+        );
+
+        if (!proceed) return;
+      }
     }
 
 //---Standalone clinics no longer use department-specific scheduling rules---//
@@ -4457,7 +4581,29 @@ const tomorrowTCATotal = Object.values(
 
     <>
 
-      <button 
+      <button
+  onClick={() => {
+    //--- Load only referral clinics already authorised by Super Admin ---//
+    const providerClinicId = currentUser?.clinicId;
+    const nextDraft: Record<string, number[]> = {};
+    if (providerClinicId) {
+      clinics
+        .filter(c => c.active && c.id !== providerClinicId && (c.fundusProviderClinicIds || []).includes(providerClinicId))
+        .forEach(c => {
+          nextDraft[c.id] = [...(clinics.find(x => x.id === providerClinicId)?.referralTcaDays?.[c.id] || [])];
+        });
+    }
+    setReferralTcaDraft(nextDraft);
+    setShowReferralClinicManager(true);
+  }}
+  className="flex items-center gap-2 px-2 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-all border border-indigo-200"
+>
+  <Calendar size={15} className="text-indigo-600" />
+  <span className="hidden md:inline">Manage Referral Clinic</span>
+  <span className="md:hidden">Referral</span>
+</button>
+
+<button 
   onClick={() => setShowAdminConsole(true)}
   className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
 >
@@ -6360,6 +6506,53 @@ setSelectedReviewSummary(app);
                   </div>
                 )}
 
+                {/* =====================================================
+                    CLINIC MASTER SYNCHRONIZATION
+                    Creates only missing DEFAULT_CLINICS in Firestore.
+                    Existing clinic documents are never overwritten.
+                   ===================================================== */}
+                <section className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-5">
+                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm shrink-0">
+                        <Building2 size={19} />
+                      </div>
+                      <div>
+                        <h3 className="font-black text-slate-900">Clinic Master Synchronization</h3>
+                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                          Create missing default clinic documents in Firestore. Existing clinics and their
+                          provider, referral routing and TCA settings will not be changed.
+                        </p>
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {DEFAULT_CLINICS.map(clinic => (
+                            <span
+                              key={clinic.id}
+                              className="px-2.5 py-1 rounded-lg bg-white border border-emerald-100 text-[10px] font-black text-slate-600"
+                            >
+                              {clinic.shortName}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={clinicMasterSyncRunning || migrationRunning || migrationScanning}
+                      onClick={syncMissingClinicMaster}
+                      className="shrink-0 px-5 py-3 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
+                    >
+                      {clinicMasterSyncRunning ? 'Syncing...' : 'Sync Missing Clinic Master'}
+                    </button>
+                  </div>
+
+                  {clinicMasterSyncMessage && (
+                    <div className="mt-4 rounded-xl border border-emerald-100 bg-white px-4 py-3 text-[11px] font-semibold text-emerald-700">
+                      {clinicMasterSyncMessage}
+                    </div>
+                  )}
+                </section>
+
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <section className="rounded-2xl border border-slate-200 bg-white p-5">
                     <div className="flex items-start justify-between gap-3">
@@ -6702,48 +6895,66 @@ setSelectedReviewSummary(app);
                                       checked={checked}
                                       disabled={fundusNetworkSaving === `routing:${clinic.id}:${provider.id}`}
                                       onChange={async e => {
-                                        const nextProviders = e.target.checked
-                                          ? Array.from(new Set([...selectedProviders, provider.id]))
-                                          : selectedProviders.filter(id => id !== provider.id);
-
                                         const savingKey = `routing:${clinic.id}:${provider.id}`;
-                                        const previousClinics = clinics;
+                                        const checkedNow = e.currentTarget.checked;
                                         setFundusNetworkSaving(savingKey);
 
-                                        //--- Mark this clinic's latest routing value as pending ---//
-                                        pendingFundusRoutingRef.current[clinic.id] = nextProviders;
+                                        //--- Queue this clinic's routing change. Each queued action reads the latest state when it actually runs, preventing stale checkbox closures from overwriting earlier selections. ---//
+                                        const previousQueue =
+                                          fundusRoutingWriteQueueRef.current[clinic.id] || Promise.resolve();
 
-                                        //--- Optimistic UI update so every clinic behaves the same ---//
-                                        setClinics(prev =>
-                                          prev.map(c =>
-                                            c.id === clinic.id
-                                              ? { ...c, fundusProviderClinicIds: nextProviders }
-                                              : c
-                                          )
-                                        );
+                                        const queuedWrite = previousQueue.then(async () => {
+                                          const latestClinic = clinicsRef.current.find(c => c.id === clinic.id);
+                                          const currentProviders = latestClinic?.fundusProviderClinicIds || [];
+                                          const nextProviders = checkedNow
+                                            ? Array.from(new Set([...currentProviders, provider.id]))
+                                            : currentProviders.filter(id => id !== provider.id);
+
+                                          //--- Mark this clinic's latest routing value as pending ---//
+                                          pendingFundusRoutingRef.current[clinic.id] = nextProviders;
+
+                                          //--- Optimistic UI update using the latest queued value ---//
+                                          setClinics(prev =>
+                                            prev.map(c =>
+                                              c.id === clinic.id
+                                                ? { ...c, fundusProviderClinicIds: nextProviders }
+                                                : c
+                                            )
+                                          );
+
+                                          try {
+                                            await setDoc(
+                                              doc(db, 'clinics', clinic.id),
+                                              { fundusProviderClinicIds: nextProviders },
+                                              { merge: true }
+                                            );
+
+                                            addActivityLog(
+                                              'Updated Fundus Routing',
+                                              `${clinic.shortName} → ${nextProviders.length
+                                                ? nextProviders.map(id => getClinicById(clinicsRef.current, id)?.shortName || id).join(', ')
+                                                : 'No provider selected'}`,
+                                              currentUser.displayName
+                                            );
+                                          } catch (error) {
+                                            console.error('Failed to update fundus routing', error);
+                                            delete pendingFundusRoutingRef.current[clinic.id];
+                                            const code = (error as any)?.code || 'unknown';
+                                            alert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`);
+                                          }
+                                        });
+
+                                        const queuedSafe = queuedWrite.catch(() => undefined);
+                                        fundusRoutingWriteQueueRef.current[clinic.id] = queuedSafe;
 
                                         try {
-                                          await setDoc(
-                                            doc(db, 'clinics', clinic.id),
-                                            { fundusProviderClinicIds: nextProviders },
-                                            { merge: true }
-                                          );
-
-                                          addActivityLog(
-                                            'Updated Fundus Routing',
-                                            `${clinic.shortName} → ${nextProviders.length
-                                              ? nextProviders.map(id => getClinicById(clinics, id)?.shortName || id).join(', ')
-                                              : 'No provider selected'}`,
-                                            currentUser.displayName
-                                          );
-                                        } catch (error) {
-                                          console.error('Failed to update fundus routing', error);
-                                          delete pendingFundusRoutingRef.current[clinic.id];
-                                          setClinics(previousClinics);
-                                          const code = (error as any)?.code || 'unknown';
-                                          alert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`);
+                                          await queuedWrite;
                                         } finally {
-                                          setFundusNetworkSaving(null);
+                                          //--- Clear the queue entry only when this is still the latest queued task ---//
+                                          if (fundusRoutingWriteQueueRef.current[clinic.id] === queuedSafe) {
+                                            delete fundusRoutingWriteQueueRef.current[clinic.id];
+                                            setFundusNetworkSaving(null);
+                                          }
                                         }
                                       }}
                                       className="h-4 w-4"
@@ -6875,6 +7086,198 @@ setSelectedReviewSummary(app);
                     </div>
                   ))}
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =====================================================
+          REFERRAL CLINIC TCA SCHEDULE
+          Clinic Admin manages TCA days only for referral clinics
+          already authorised by Super Admin in Fundus Network.
+         ===================================================== */}
+      <AnimatePresence>
+        {showReferralClinicManager && currentUser?.role === UserRole.ADMIN && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !referralTcaSaving && setShowReferralClinicManager(false)}
+              className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-3xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[88vh] flex flex-col"
+            >
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-indigo-50/70">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg">
+                    <Calendar size={21} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black text-slate-900">Manage Referral Clinic</h2>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                      TCA schedule · {currentClinic?.shortName || currentUser?.clinicId || 'Clinic'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={referralTcaSaving}
+                  onClick={() => setShowReferralClinicManager(false)}
+                  className="p-2 rounded-xl hover:bg-indigo-100 text-slate-400 disabled:opacity-50"
+                >
+                  <XCircle size={24} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto space-y-4">
+                <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
+                  <p className="text-xs font-black text-indigo-900">Referral clinic schedule</p>
+                  <p className="text-[11px] text-indigo-700 mt-1 leading-relaxed">
+                    Only clinics authorised by Super Admin through Fundus Network are shown here. Select one or more days when your clinic accepts TCA for each referral source.
+                  </p>
+                </div>
+
+                {(() => {
+                  const providerClinicId = currentUser?.clinicId;
+                  const referralClinics = clinics.filter(
+                    c => c.active && c.id !== providerClinicId && (c.fundusProviderClinicIds || []).includes(providerClinicId || '')
+                  );
+                  const dayOptions = [
+                    { value: 1, label: 'Monday' },
+                    { value: 2, label: 'Tuesday' },
+                    { value: 3, label: 'Wednesday' },
+                    { value: 4, label: 'Thursday' },
+                    { value: 5, label: 'Friday' },
+                    { value: 6, label: 'Saturday' },
+                    { value: 0, label: 'Sunday' },
+                  ];
+
+                  if (referralClinics.length === 0) {
+                    return (
+                      <div className="text-center py-10 rounded-2xl border border-dashed border-slate-200 bg-slate-50">
+                        <Network size={28} className="mx-auto text-slate-300 mb-3" />
+                        <p className="text-sm font-black text-slate-500">No referral clinic configured</p>
+                        <p className="text-[11px] text-slate-400 mt-1">Ask Super Admin to enable a referral route to this clinic first.</p>
+                      </div>
+                    );
+                  }
+
+                  return referralClinics.map(referralClinic => {
+                    const selectedDays = referralTcaDraft[referralClinic.id] || [];
+                    return (
+                      <section key={referralClinic.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                        <div className="flex items-center justify-between gap-3 mb-4">
+                          <div>
+                            <p className="font-black text-slate-900">{referralClinic.name}</p>
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">{referralClinic.id}</p>
+                          </div>
+                          <span className="text-[9px] font-black uppercase px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-100">Referral Source</span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {dayOptions.map(day => {
+                            const checked = selectedDays.includes(day.value);
+                            return (
+                              <label
+                                key={day.value}
+                                className={`flex items-center gap-2 p-3 rounded-xl border cursor-pointer transition-all ${
+                                  checked
+                                    ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                                    : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={referralTcaSaving}
+                                  onChange={e => {
+                                    setReferralTcaDraft(prev => {
+                                      const current = prev[referralClinic.id] || [];
+                                      const next = e.target.checked
+                                        ? Array.from(new Set([...current, day.value])).sort((a, b) => a - b)
+                                        : current.filter(value => value !== day.value);
+                                      return { ...prev, [referralClinic.id]: next };
+                                    });
+                                  }}
+                                  className="accent-indigo-600"
+                                />
+                                <span className="text-xs font-black">{day.label}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-3 font-semibold">
+                          Selected: {selectedDays.length ? selectedDays.map(day => dayOptions.find(x => x.value === day)?.label).join(', ') : 'No TCA day configured'}
+                        </p>
+                      </section>
+                    );
+                  });
+                })()}
+              </div>
+
+              <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={referralTcaSaving}
+                  onClick={() => setShowReferralClinicManager(false)}
+                  className="px-5 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-600 text-xs font-black disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={referralTcaSaving}
+                  onClick={async () => {
+                    const providerClinicId = currentUser?.clinicId;
+                    if (!providerClinicId) return;
+                    setReferralTcaSaving(true);
+                    try {
+                      const providerClinic = clinics.find(c => c.id === providerClinicId);
+                      if (!providerClinic) throw new Error('Provider clinic not found');
+
+                      const allowedReferralIds = new Set(
+                        clinics
+                          .filter(c => c.active && c.id !== providerClinicId && (c.fundusProviderClinicIds || []).includes(providerClinicId))
+                          .map(c => c.id)
+                      );
+
+                      const cleanedSchedule: Record<string, number[]> = {};
+                      Object.entries(referralTcaDraft).forEach(([clinicId, days]) => {
+                        if (allowedReferralIds.has(clinicId)) {
+                          cleanedSchedule[clinicId] = Array.from(new Set(days)).sort((a, b) => a - b);
+                        }
+                      });
+
+                      await setDoc(
+                        doc(db, 'clinics', providerClinicId),
+                        { referralTcaDays: cleanedSchedule },
+                        { merge: true }
+                      );
+
+                      setClinics(prev => prev.map(c => c.id === providerClinicId ? { ...c, referralTcaDays: cleanedSchedule } : c));
+                      addActivityLog(
+                        'Updated Referral TCA Schedule',
+                        `${providerClinic.shortName}: ${Object.entries(cleanedSchedule).map(([id, days]) => `${id} [${days.join(',') || 'none'}]`).join(' · ') || 'No schedules configured'}`,
+                        currentUser.displayName
+                      );
+                      setShowReferralClinicManager(false);
+                    } catch (error) {
+                      console.error('Failed to save referral TCA schedule', error);
+                      alert('Failed to save referral clinic schedule. Please try again.');
+                    } finally {
+                      setReferralTcaSaving(false);
+                    }
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-black hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {referralTcaSaving ? 'Saving...' : 'Save Schedule'}
+                </button>
               </div>
             </motion.div>
           </div>
@@ -7690,17 +8093,52 @@ setSelectedReviewSummary(app);
     Date
   </label>
 
- <input
-  name="date"
-  required
-  type="date"
-  value={selectedDate}
-  onChange={(e) => {
-    const value = e.target.value;
+  <div className="flex items-center gap-3">
+    <input
+      name="date"
+      required
+      type="date"
+      value={selectedDate}
+      onChange={(e) => {
+        const value = e.target.value;
+        setSelectedDate(value);
+      }}
+      className="w-[220px] px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+    />
 
-    setSelectedDate(value);
-  }}
-/>
+    {(() => {
+      const referringClinic = clinics.find(
+        clinic => clinic.id === formReferringClinicId
+      );
+      const providerClinic = clinics.find(
+        clinic => clinic.id === formFundusProviderClinicId
+      );
+      const tcaDays =
+        referringClinic &&
+        providerClinic &&
+        referringClinic.id !== providerClinic.id
+          ? providerClinic.referralTcaDays?.[referringClinic.id] || []
+          : [];
+
+      if (tcaDays.length === 0) return null;
+
+      const dayLabels: Record<number, string> = {
+        0: 'Sunday',
+        1: 'Monday',
+        2: 'Tuesday',
+        3: 'Wednesday',
+        4: 'Thursday',
+        5: 'Friday',
+        6: 'Saturday',
+      };
+
+      return (
+        <span className="shrink-0 text-[10px] font-black text-blue-600 whitespace-nowrap">
+          TCA: {tcaDays.map(day => dayLabels[day]).filter(Boolean).join(', ')} only
+        </span>
+      );
+    })()}
+  </div>
 
   {false && selectedDate && (() => {
 
