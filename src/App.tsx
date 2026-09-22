@@ -607,6 +607,9 @@ export default function App() {
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   
   const [selectedAnalyticsMonth, setSelectedAnalyticsMonth] = useState(new Date());
+  //--- Selected clinic for Super Admin monthly clinical detail ---//
+  const [selectedSuperAdminClinicId, setSelectedSuperAdminClinicId] = useState<string | null>(null);
+  const [showSuperAdminClinicDetail, setShowSuperAdminClinicDetail] = useState(false);
   const [showTCASchedule, setShowTCASchedule] = useState(false);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [selectedPhotoApp, setSelectedPhotoApp] = useState<{app: Appointment, eye: 'right' | 'left'} | null>(null);
@@ -1092,7 +1095,10 @@ const isReviewCompleted = (app: Appointment) => {
 
   const addActivityLog = (action: string, patient: string = 'System', byOverride?: string) => {
     const logEntry: ActivityLog = {
-      clinicId: currentUser?.clinicId || 'LINTANG',
+      //--- Super Admin activity is global; clinic users are scoped to their own clinic ---//
+      clinicId: currentUser?.role === UserRole.SUPER_ADMIN
+        ? 'SUPER_ADMIN'
+        : (currentUser?.clinicId || ''),
       action,
       patient,
       by: byOverride || getUserDisplayName(currentUser?.id || 'SYSTEM'),
@@ -2220,6 +2226,95 @@ const departmentStats = availableDepartments.reduce(
       });
   }, [appointments, clinics, selectedAnalyticsMonth]);
 
+  // =====================================================
+  // SUPER ADMIN MONTHLY CLINICAL DETAIL
+  // Uses the same selected month as the clinic summary cards.
+  // Provider clinics count fundus work performed by that clinic;
+  // referral clinics count their own operational records.
+  // =====================================================
+  const superAdminClinicMonthlyDetail = useMemo(() => {
+    if (!selectedSuperAdminClinicId) return null;
+
+    const clinic = clinics.find(c => c.id === selectedSuperAdminClinicId);
+    if (!clinic) return null;
+
+    const month = selectedAnalyticsMonth.getMonth();
+    const year = selectedAnalyticsMonth.getFullYear();
+
+    //--- Local helpers keep the Super Admin detail summary independent from monthlyRetenStats scope ---//
+    const hasFindingForDetail = (app: Appointment, finding: string) => {
+      const right = app.rightEyeReviewDetails?.abnormalTypes || [];
+      const left = app.leftEyeReviewDetails?.abnormalTypes || [];
+      return right.includes(finding) || left.includes(finding);
+    };
+
+    const hasNPDRSeverityForDetail = (
+      app: Appointment,
+      severity: 'mild' | 'moderate' | 'severe'
+    ) => {
+      return (
+        app.rightEyeReviewDetails?.npdrSeverity === severity ||
+        app.leftEyeReviewDetails?.npdrSeverity === severity
+      );
+    };
+
+    const getScreeningOutcomeForDetail = (
+      app: Appointment
+    ): 'Normal' | 'Abnormal' | 'Not Obtainable' | 'Not Review Yet' => {
+      const rightNotObtainable = app.rightEyeImageStatus === 'Not Obtainable';
+      const leftNotObtainable = app.leftEyeImageStatus === 'Not Obtainable';
+      const rightNormal = app.rightEyeReviewDetails?.status === 'Normal';
+      const leftNormal = app.leftEyeReviewDetails?.status === 'Normal';
+      const hasCataract =
+        hasFindingForDetail(app, 'Cataract') ||
+        app.rightEyeImageReason?.trim().toLowerCase() === 'dense cataract' ||
+        app.leftEyeImageReason?.trim().toLowerCase() === 'dense cataract';
+
+      if (rightNormal && leftNormal) return 'Normal';
+      if (hasCataract) return 'Abnormal';
+      if (rightNotObtainable || leftNotObtainable) return 'Not Obtainable';
+      if (!isReviewCompleted(app)) return 'Not Review Yet';
+      return 'Abnormal';
+    };
+
+    const clinicApps = appointments.filter(app => {
+      if (!app?.date || app.status === AppointmentStatus.NO_SHOW) return false;
+
+      const d = new Date(app.date);
+      if (d.getMonth() !== month || d.getFullYear() !== year) return false;
+
+      if (clinic.isFundusProvider) {
+        const providerMatch = (app.fundusProviderClinicId || '').trim() === clinic.id;
+        const legacyLintangMatch = clinic.id === 'LINTANG' && isLegacyLintangProviderRecord(app);
+        return providerMatch || legacyLintangMatch;
+      }
+
+      return (app.clinicId || 'LINTANG') === clinic.id;
+    });
+
+    return {
+      clinic,
+      total: clinicApps.length,
+      normal: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Normal').length,
+      abnormal: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Abnormal').length,
+      notObtainable: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Not Obtainable').length,
+      notReviewYet: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Not Review Yet').length,
+      mildNPDR: clinicApps.filter(app => hasNPDRSeverityForDetail(app, 'mild')).length,
+      moderateNPDR: clinicApps.filter(app => hasNPDRSeverityForDetail(app, 'moderate')).length,
+      severeNPDR: clinicApps.filter(app => hasNPDRSeverityForDetail(app, 'severe')).length,
+      pdr: clinicApps.filter(app => hasFindingForDetail(app, 'PDR')).length,
+      maculopathy: clinicApps.filter(app => hasFindingForDetail(app, 'Maculopathy')).length,
+      aded: clinicApps.filter(app => hasFindingForDetail(app, 'ADED')).length,
+      cataract: clinicApps.filter(app => {
+        const hasCataractFinding = hasFindingForDetail(app, 'Cataract');
+        const hasDenseCataract =
+          app.rightEyeImageReason?.trim().toLowerCase() === 'dense cataract' ||
+          app.leftEyeImageReason?.trim().toLowerCase() === 'dense cataract';
+        return hasCataractFinding || hasDenseCataract;
+      }).length,
+    };
+  }, [appointments, clinics, selectedAnalyticsMonth, selectedSuperAdminClinicId]);
+
   const yearlyStats = useMemo(() => {
     const currentYear = new Date().getFullYear();
 
@@ -2544,7 +2639,8 @@ const unsubscribeActivityLogs = onSnapshot(
 
     const firestoreActivityLogs = snapshot.docs.map(docSnapshot => ({
       ...docSnapshot.data(),
-      clinicId: (docSnapshot.data() as Partial<ActivityLog>).clinicId ?? 'LINTANG',
+      //--- Preserve missing clinicId as empty; only Super Admin should see legacy/global logs ---//
+      clinicId: (docSnapshot.data() as Partial<ActivityLog>).clinicId ?? '',
     })) as ActivityLog[];
 
     setActivityLogs(firestoreActivityLogs);
@@ -4045,11 +4141,15 @@ const tomorrowTCATotal = Object.values(
   0
 );
 
-  //--- Activity logs follow the same clinic context as the operational UI; Super Admin sees all ---//
+  //--- Activity logs are clinic-scoped for Admin/Staff; Super Admin sees the global audit trail ---//
   const visibleActivityLogs = useMemo(() => {
     if (currentUser?.role === UserRole.SUPER_ADMIN) return activityLogs;
-    const activeClinicId = currentUser?.clinicId || 'LINTANG';
-    return activityLogs.filter(log => (log.clinicId || 'LINTANG') === activeClinicId);
+
+    const activeClinicId = currentUser?.clinicId;
+    if (!activeClinicId) return [];
+
+    //--- Do not use a LINTANG fallback here: legacy/global logs must never leak into clinic views ---//
+    return activityLogs.filter(log => log.clinicId === activeClinicId);
   }, [activityLogs, currentUser?.clinicId, currentUser?.role]);
 
   // --- Views ---
@@ -4786,8 +4886,17 @@ const tomorrowTCATotal = Object.values(
                 <div key={clinic.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="font-black text-slate-900 truncate">{clinic.name}</p>
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">{clinic.id}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedSuperAdminClinicId(clinic.id);
+                          setShowSuperAdminClinicDetail(true);
+                        }}
+                        className="text-left max-w-full group"
+                      >
+                        <p className="font-black text-slate-900 truncate group-hover:text-blue-600 transition-colors">{clinic.name}</p>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">{clinic.id}</p>
+                      </button>
                     </div>
                     <span className={`shrink-0 px-2 py-1 rounded-lg text-[8px] font-black uppercase ${clinic.isFundusProvider ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
                       {clinic.isFundusProvider ? 'Fundus Provider' : 'Referral Clinic'}
@@ -4800,11 +4909,11 @@ const tomorrowTCATotal = Object.values(
                       <p className="text-2xl font-black text-slate-900">{total}</p>
                     </div>
                     <div className="text-center rounded-xl bg-white border border-blue-100 p-2">
-                      <p className="text-[8px] font-black text-blue-500 uppercase">Fundus</p>
+                      <p className="text-[8px] font-black text-blue-500 uppercase">Need Fundus</p>
                       <p className="text-2xl font-black text-blue-600">{pendingFundus}</p>
                     </div>
                     <div className="text-center rounded-xl bg-white border border-indigo-100 p-2">
-                      <p className="text-[8px] font-black text-indigo-500 uppercase">Review</p>
+                      <p className="text-[8px] font-black text-indigo-500 uppercase">Need Review</p>
                       <p className="text-2xl font-black text-indigo-600">{pendingReview}</p>
                     </div>
                     <div className="text-center rounded-xl bg-white border border-emerald-100 p-2">
@@ -7847,6 +7956,94 @@ setSelectedReviewSummary(app);
     </div>
   )}
 </AnimatePresence>
+
+      {/*--- Super Admin Monthly Clinic Clinical Detail Modal ---*/}
+      <AnimatePresence>
+        {showSuperAdminClinicDetail && superAdminClinicMonthlyDetail && (
+          <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSuperAdminClinicDetail(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden relative z-10 flex flex-col"
+            >
+              <div className="px-6 py-5 border-b border-slate-100 flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-1">Monthly Clinical Summary</p>
+                  <h2 className="text-xl font-black text-slate-900 truncate">{superAdminClinicMonthlyDetail.clinic.name}</h2>
+                  <p className="text-xs font-bold text-slate-400 mt-1">
+                    {selectedAnalyticsMonth.toLocaleString('en-US', { month: 'long', year: 'numeric' })} · {superAdminClinicMonthlyDetail.clinic.id}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSuperAdminClinicDetail(false)}
+                  className="shrink-0 p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                  aria-label="Close monthly clinical summary"
+                >
+                  <XCircle size={22} />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto space-y-6">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="text-center rounded-2xl bg-slate-50 border border-slate-100 p-3">
+                    <p className="text-[8px] font-black text-slate-400 uppercase">Total</p>
+                    <p className="text-2xl font-black text-slate-900 mt-1">{superAdminClinicMonthlyDetail.total}</p>
+                  </div>
+                  <div className="text-center rounded-2xl bg-emerald-50 border border-emerald-100 p-3">
+                    <p className="text-[8px] font-black text-emerald-600 uppercase">Normal</p>
+                    <p className="text-2xl font-black text-emerald-600 mt-1">{superAdminClinicMonthlyDetail.normal}</p>
+                  </div>
+                  <div className="text-center rounded-2xl bg-rose-50 border border-rose-100 p-3">
+                    <p className="text-[8px] font-black text-rose-600 uppercase">Abnormal</p>
+                    <p className="text-2xl font-black text-rose-600 mt-1">{superAdminClinicMonthlyDetail.abnormal}</p>
+                  </div>
+                  <div className="text-center rounded-2xl bg-amber-50 border border-amber-100 p-3">
+                    <p className="text-[8px] font-black text-amber-600 uppercase">Not Obtainable</p>
+                    <p className="text-2xl font-black text-amber-600 mt-1">{superAdminClinicMonthlyDetail.notObtainable}</p>
+                  </div>
+                  <div className="text-center rounded-2xl bg-indigo-50 border border-indigo-100 p-3">
+                    <p className="text-[8px] font-black text-indigo-600 uppercase">Not Review Yet</p>
+                    <p className="text-2xl font-black text-indigo-600 mt-1">{superAdminClinicMonthlyDetail.notReviewYet}</p>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Reten Findings</h3>
+                    <span className="text-[9px] font-bold text-slate-400">Selected month only</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {[
+                      ['Mild NPDR', superAdminClinicMonthlyDetail.mildNPDR],
+                      ['Moderate NPDR', superAdminClinicMonthlyDetail.moderateNPDR],
+                      ['Severe NPDR', superAdminClinicMonthlyDetail.severeNPDR],
+                      ['PDR', superAdminClinicMonthlyDetail.pdr],
+                      ['Maculopathy', superAdminClinicMonthlyDetail.maculopathy],
+                      ['ADED', superAdminClinicMonthlyDetail.aded],
+                      ['Cataract', superAdminClinicMonthlyDetail.cataract],
+                    ].map(([label, value]) => (
+                      <div key={label as string} className="rounded-2xl border border-slate-200 bg-white p-4">
+                        <p className="text-[9px] font-black text-slate-400 uppercase">{label}</p>
+                        <p className="text-2xl font-black text-slate-800 mt-1">{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Appointment Modal Overlay */}
       <AnimatePresence>
