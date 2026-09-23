@@ -5136,32 +5136,6 @@ year:'numeric'
 
 <div className="flex flex-wrap items-center gap-2 ml-2">
 
-  {/*--- Today's department badges generated automatically ---*/}
-  {availableDepartments.map((department) => {
-
-    const count =
-      todayDepartmentStats[department.id] ?? 0;
-
-    //--- Department badge colours ---//
-const badgeClass =
-  department.id === 'OPD KKL'
-    ? 'bg-sky-100 text-sky-700 border-sky-200'
-    : department.id === 'PBOA'
-      ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
-      : department.id === 'HSS'
-        ? 'bg-violet-100 text-violet-700 border-violet-200'
-        : 'bg-slate-100 text-slate-600 border-slate-200';
-
-    return (
-      <span
-        key={department.id}
-        className={`${badgeClass} px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter border`}
-      >
-        {department.shortName}: {count}
-      </span>
-    );
-  })}
-
   {/*--- Show TCA notification when any department has TCA tomorrow ---*/}
   {tomorrowTCATotal > 0 && (
 
