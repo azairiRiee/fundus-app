@@ -45,6 +45,7 @@ import {
   Shield
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { jsPDF } from 'jspdf';
 
 import clinicLogo from './assets/logo.png';
 import fundusBg from './assets/fundus-bg.png';
@@ -157,10 +158,9 @@ const getReferringClinicId = (app: Partial<Appointment>) => {
   return app.clinicId || 'LINTANG';
 };
 
-//--- Keep the familiar OPD label for KK Lintang's own source cases. ---//
-// Other referring clinics use their current clinic short name.
+//--- Monthly PDF reports use the full clinic master name for every source clinic. ---//
 const getSourceDisplayName = (clinic: Clinic) =>
-  clinic.id === 'LINTANG' ? 'OPD' : clinic.shortName;
+  clinic.name || clinic.shortName || clinic.id;
 
 //---Convert old appointment records into the new standalone-clinic context without deleting legacy fields---//
 const normalizeAppointmentClinic = (data: Partial<Appointment>) => ({
@@ -3434,6 +3434,348 @@ link.setAttribute(
 );
   };
 
+  //--- Convert Vite logo assets into data URLs so jsPDF can embed the SINAR branding ---//
+  const loadPdfImage = async (src: string): Promise<string | null> => {
+    try {
+      const response = await fetch(src);
+      const blob = await response.blob();
+
+      return await new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  //--- Generate a real downloadable PDF for the selected month; no browser print dialog required ---//
+  const exportToPDF = async () => {
+    const month = selectedAnalyticsMonth.getMonth();
+    const year = selectedAnalyticsMonth.getFullYear();
+
+    const monthlyAppointments = providerWorkloadAppointments.filter(app => {
+      if (!app || !app.date) return false;
+      const d = new Date(app.date);
+      return (
+        d.getMonth() === month &&
+        d.getFullYear() === year &&
+        app.status !== AppointmentStatus.NO_SHOW
+      );
+    });
+
+    const monthLabel = selectedAnalyticsMonth.toLocaleString('en-US', {
+      month: 'long',
+      year: 'numeric'
+    });
+    const clinicName = currentClinic?.name || 'SINAR Clinic';
+    const generatedAt = new Date().toLocaleString('en-GB', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const referralRows = clinics
+      .map(clinic => {
+        const count = monthlyAppointments.filter(app => {
+          if (isCurrentClinicFundusProvider) {
+            return getReferringClinicId(app) === clinic.id;
+          }
+          return (app.clinicId || 'LINTANG') === clinic.id;
+        }).length;
+        return { clinic, count };
+      })
+      .filter(row => row.count > 0);
+
+    //--- Referred cases: use the same "Kes Dirujuk" flag from Clinical Review ---//
+    const referredCases = monthlyAppointments.filter(app => app.referred === true);
+
+    const getCaseFinding = (app: Appointment) => {
+      const findings = new Set<string>();
+      const right = app.rightEyeReviewDetails?.abnormalTypes || [];
+      const left = app.leftEyeReviewDetails?.abnormalTypes || [];
+      [...right, ...left].forEach(f => findings.add(f));
+      if (app.rightEyeReviewDetails?.npdrSeverity) {
+        findings.add(`NPDR ${app.rightEyeReviewDetails.npdrSeverity}`);
+      }
+      if (app.leftEyeReviewDetails?.npdrSeverity) {
+        findings.add(`NPDR ${app.leftEyeReviewDetails.npdrSeverity}`);
+      }
+      if (app.rightEyeReviewDetails?.othersText?.trim()) {
+        findings.add(app.rightEyeReviewDetails.othersText.trim());
+      }
+      if (app.leftEyeReviewDetails?.othersText?.trim()) {
+        findings.add(app.leftEyeReviewDetails.othersText.trim());
+      }
+      return findings.size ? Array.from(findings).join(', ') : '-';
+    };
+
+    const getSourceName = (app: Appointment) => {
+      const sourceId = getReferringClinicId(app);
+      const sourceClinic = clinics.find(c => c.id === sourceId);
+
+      //--- Referred-case table also uses the full clinic master name. ---//
+      return sourceClinic
+        ? getSourceDisplayName(sourceClinic)
+        : sourceId || '-';
+    };
+
+    const percentage = (value: number, total: number) =>
+      total > 0 ? `${((value / total) * 100).toFixed(1)}%` : '0.0%';
+
+    const outcomeRows = [
+      ['Normal', monthlyRetenStats.normal],
+      ['Abnormal', monthlyRetenStats.abnormal],
+      ['Not Obtainable', monthlyRetenStats.notObtainable],
+      ['Not Review Yet', monthlyRetenStats.notReviewYet]
+    ];
+
+    const findingRows = [
+      ['Mild NPDR', monthlyRetenStats.mildNPDR],
+      ['Moderate NPDR', monthlyRetenStats.moderateNPDR],
+      ['Severe NPDR', monthlyRetenStats.severeNPDR],
+      ['PDR', monthlyRetenStats.pdr],
+      ['Maculopathy', monthlyRetenStats.maculopathy],
+      ['ADED', monthlyRetenStats.aded],
+      ['Cataract', monthlyRetenStats.cataract],
+      ['Others', monthlyRetenStats.others]
+    ];
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 14;
+    const contentWidth = pageWidth - margin * 2;
+    let y = 14;
+
+    const blue = [21, 87, 166] as const;
+    const lightBlue = [234, 243, 255] as const;
+    const text = [23, 32, 51] as const;
+    const muted = [100, 116, 139] as const;
+
+    //--- Use the same circular SINAR logo and wordmark shown in the app header ---//
+    const pdfRoundLogo = await loadPdfImage(roundLogo);
+    const pdfTextLogo = await loadPdfImage(textLogo);
+
+    const ensureSpace = (height: number) => {
+      if (y + height > pageHeight - 16) {
+        doc.addPage();
+        y = 14;
+        drawHeader(true);
+      }
+    };
+
+    const drawHeader = (continuation = false) => {
+      //--- Match the official SINAR PDF header with logo2/logo3 branding ---//
+      if (pdfRoundLogo) {
+        doc.addImage(pdfRoundLogo, 'PNG', margin, y - 1, 12, 12);
+      }
+
+      if (pdfTextLogo) {
+        doc.addImage(pdfTextLogo, 'PNG', margin + 15, y + 0.5, 30, 7);
+      } else {
+        doc.setTextColor(...blue);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(20);
+        doc.text('SINAR', margin + 15, y + 5);
+      }
+
+      doc.setFontSize(8);
+      doc.setTextColor(...muted);
+      doc.text('Sistem Interpretasi & Nota Awal Retinopati', margin + 15, y + 10);
+      doc.setFontSize(9);
+      doc.setTextColor(...text);
+      doc.setFont('helvetica', 'bold');
+      doc.text(clinicName, margin + 15, y + 15);
+
+      doc.setFontSize(12);
+      doc.text('Monthly Clinical Summary', pageWidth - margin, y + 5, { align: 'right' });
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.text(monthLabel, pageWidth - margin, y + 10, { align: 'right' });
+      doc.setFontSize(7);
+      doc.setTextColor(...muted);
+      doc.text(continuation ? 'Continuation page' : `Report generated: ${generatedAt}`, pageWidth - margin, y + 15, { align: 'right' });
+
+      doc.setDrawColor(...blue);
+      doc.setLineWidth(0.7);
+      doc.line(margin, y + 20, pageWidth - margin, y + 20);
+      y += 27;
+    };
+
+    const sectionTitle = (title: string) => {
+      ensureSpace(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(...blue);
+      doc.text(title.toUpperCase(), margin, y);
+      y += 6;
+    };
+
+    const drawTable = (
+      headers: string[],
+      rows: string[][],
+      widths: number[],
+      options?: { fontSize?: number; headerFill?: readonly [number, number, number] }
+    ) => {
+      const fontSize = options?.fontSize || 7.5;
+      const headerFill = options?.headerFill || lightBlue;
+      const rowHeightMin = 6;
+      const cellPadding = 2;
+
+      const drawRow = (cells: string[], isHeader = false, isTotal = false) => {
+        const wrapped = cells.map((cell, i) =>
+          doc.splitTextToSize(String(cell ?? ''), Math.max(8, widths[i] - cellPadding * 2))
+        );
+        const rowHeight = Math.max(rowHeightMin, ...wrapped.map(lines => lines.length * 3.5 + cellPadding * 2));
+        ensureSpace(rowHeight + 2);
+
+        let x = margin;
+        cells.forEach((_, i) => {
+          if (isHeader) doc.setFillColor(...headerFill);
+          else if (isTotal) doc.setFillColor(237, 245, 255);
+          else doc.setFillColor(255, 255, 255);
+          doc.setDrawColor(216, 226, 238);
+          doc.rect(x, y, widths[i], rowHeight, 'FD');
+          doc.setFont('helvetica', isHeader || isTotal ? 'bold' : 'normal');
+          doc.setFontSize(fontSize);
+          doc.setTextColor(...text);
+          const alignRight = i > 0 && widths.length <= 3;
+          doc.text(wrapped[i], alignRight ? x + widths[i] - cellPadding : x + cellPadding, y + cellPadding + 2.6, {
+            align: alignRight ? 'right' : 'left'
+          });
+          x += widths[i];
+        });
+        y += rowHeight;
+      };
+
+      drawRow(headers, true);
+      rows.forEach(row => drawRow(row));
+    };
+
+    const drawFooter = () => {
+      doc.setDrawColor(219, 227, 238);
+      doc.setLineWidth(0.3);
+      doc.line(margin, pageHeight - 12, pageWidth - margin, pageHeight - 12);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.5);
+      doc.setTextColor(...muted);
+      doc.text('SINAR | Sistem Interpretasi & Nota Awal Retinopati', margin, pageHeight - 7);
+      doc.text(`${clinicName} | ${monthLabel}`, pageWidth - margin, pageHeight - 7, { align: 'right' });
+    };
+
+    //--- Header and summary ---//
+    drawHeader();
+    sectionTitle('1. Overall Summary');
+    const cardGap = 3;
+    const cardWidth = (contentWidth - cardGap * 3) / 4;
+    const cards = [
+      ['TOTAL CASES', monthlyStats.total],
+      ['PENDING REVIEW', monthlyStats.reviewPending],
+      ['PENDING FUNDUS', monthlyStats.fundusPending],
+      ['INCOMPLETE CASES', monthlyStats.totalPending]
+    ];
+    cards.forEach((card, index) => {
+      const x = margin + index * (cardWidth + cardGap);
+      doc.setFillColor(index === 1 ? 250 : index === 2 ? 255 : 248, index === 1 ? 247 : index === 2 ? 250 : 251, index === 1 ? 255 : index === 2 ? 240 : 255);
+      doc.setDrawColor(219, 231, 245);
+      doc.roundedRect(x, y, cardWidth, 17, 2, 2, 'FD');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(6.5);
+      doc.setTextColor(...muted);
+      doc.text(String(card[0]), x + 3, y + 5);
+      doc.setFontSize(15);
+      doc.setTextColor(...text);
+      doc.text(String(card[1]), x + 3, y + 13.5);
+    });
+    y += 23;
+
+    sectionTitle('2. Screening Outcome');
+    drawTable(
+      ['Outcome', 'Cases', 'Percentage'],
+      [...outcomeRows.map(([label, count]) => [String(label), String(count), percentage(Number(count), monthlyRetenStats.total)]),
+        ['Total', String(monthlyRetenStats.total), '100%']],
+      [95, 38, 49]
+    );
+    y += 5;
+
+    sectionTitle('3. Clinical Findings');
+    drawTable(
+      ['Finding', 'Cases', 'Percentage'],
+      findingRows.map(([label, count]) => [String(label), String(count), percentage(Number(count), monthlyRetenStats.total)]),
+      [95, 38, 49]
+    );
+    y += 5;
+
+    sectionTitle('4. Referral / Source Breakdown');
+    drawTable(
+      ['Clinic / Source', 'Cases', 'Percentage'],
+      [...referralRows.map(({ clinic, count }) => [getSourceDisplayName(clinic), String(count), percentage(count, monthlyRetenStats.total)]),
+        ['Total', String(monthlyRetenStats.total), '100%']],
+      [95, 38, 49]
+    );
+    y += 5;
+
+    sectionTitle(`5. Referred Cases (${referredCases.length})`);
+    if (referredCases.length === 0) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(...muted);
+      doc.text('No referred cases recorded for this month.', margin, y);
+      y += 8;
+    } else {
+      const referredRows = referredCases.map(app => [
+        app.date ? new Date(app.date).toLocaleDateString('en-GB') : '-',
+        app.patientName || '-',
+        getSourceName(app),
+        getCaseFinding(app),
+        app.referralComment?.trim() || '-'
+      ]);
+      drawTable(
+        ['Date', 'Patient', 'Source', 'Finding', 'Referral Note'],
+        referredRows,
+        [22, 38, 31, 46, 35],
+        { fontSize: 6.5 }
+      );
+    }
+
+    ensureSpace(24);
+    doc.setFillColor(245, 249, 255);
+    doc.setDrawColor(220, 232, 246);
+    doc.roundedRect(margin, y, contentWidth, 18, 2, 2, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(...text);
+    doc.text('Notes', margin + 4, y + 5);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.5);
+    doc.setTextColor(...muted);
+    const notes = doc.splitTextToSize(
+      `Data shown are based on SINAR clinical records for ${monthLabel} and exclude No Show appointments. Screening outcomes and clinical findings follow the same calculation rules used by Monthly Analytics. Referred cases are taken directly from the Clinical Review "Kes Dirujuk" flag.`,
+      contentWidth - 8
+    );
+    doc.text(notes, margin + 4, y + 9);
+
+    const pageCount = doc.getNumberOfPages();
+    for (let page = 1; page <= pageCount; page++) {
+      doc.setPage(page);
+      drawFooter();
+    }
+
+    const safeClinic = clinicName.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
+    const safeMonth = monthLabel.replace(/\s+/g, '_');
+    doc.save(`${safeClinic || 'SINAR'}_Monthly_Clinical_Summary_${safeMonth}.pdf`);
+
+    addActivityLog(
+      'Exported Monthly Summary PDF',
+      `${monthlyAppointments.length} records`
+    );
+  };
+
   const upsertAppointment = async (
   data: Partial<Appointment>
 ) => {
@@ -5046,11 +5388,11 @@ year:'numeric'
   {(currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN) && (
 
   <button
-    onClick={exportToCSV}
+    onClick={exportToPDF}
     className="mt-4 w-full bg-slate-900 border border-slate-800 hover:bg-black text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all"
   >
     <Download size={14}/>
-    Export Monthly CSV
+    Export Monthly PDF
   </button>
 
 )}
