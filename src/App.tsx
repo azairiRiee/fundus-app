@@ -700,15 +700,6 @@ export default function App() {
   const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
 
   const [showImageNotObtainable, setShowImageNotObtainable] = useState(false);
-        useEffect(() => {
-  document.body.style.overflow = showImageNotObtainable
-    ? "hidden"
-    : "";
-
-  return () => {
-    document.body.style.overflow = "";
-  };
-}, [showImageNotObtainable]);
 const [selectedUnableApp, setSelectedUnableApp] =
   useState<Appointment | null>(null);
 
@@ -739,30 +730,38 @@ const [unableOtherReason, setUnableOtherReason] =
   });
   useEffect(() => {
 
+  //--- Lock the page behind every modal so the dashboard/background never scrolls together with an open popup ---//
   const modalOpen =
     showPboaWarning ||
     showTCASchedule ||
     showAdminConsole ||
     showActivityLogs ||
     showMonthlySummary ||
+    showSuperAdminConsole ||
+    showClinicManager ||
+    showFundusNetwork ||
+    showReferralClinicManager ||
+    showDataMigration ||
+    showAccountSettings ||
+    showSuperAdminClinicDetail ||
     isFormOpen ||
+    isICLookupOpen ||
     !!selectedPhotoApp ||
-    !!editingAppointment;
+    !!selectedHistory ||
+    !!selectedReviewSummary ||
+    !!deletingApp ||
+    !!userToDelete ||
+    showDuplicateWarning ||
+    showImageNotObtainable;
 
   if (modalOpen) {
-
     document.body.style.overflow = 'hidden';
-
   } else {
-
     document.body.style.overflow = 'auto';
-
   }
 
   return () => {
-
     document.body.style.overflow = 'auto';
-
   };
 
 }, [
@@ -771,9 +770,22 @@ const [unableOtherReason, setUnableOtherReason] =
   showAdminConsole,
   showActivityLogs,
   showMonthlySummary,
+  showSuperAdminConsole,
+  showClinicManager,
+  showFundusNetwork,
+  showReferralClinicManager,
+  showDataMigration,
+  showAccountSettings,
+  showSuperAdminClinicDetail,
   isFormOpen,
+  isICLookupOpen,
   selectedPhotoApp,
-  editingAppointment
+  selectedHistory,
+  selectedReviewSummary,
+  deletingApp,
+  userToDelete,
+  showDuplicateWarning,
+  showImageNotObtainable
 ]);
 
 const analyzeWithAI = async () => {
@@ -1581,25 +1593,6 @@ const isReviewCompleted = (app: Appointment) => {
      setZoomScale(1);
   }, [selectedPhotoApp?.eye, !!selectedPhotoApp]);
 
-  useEffect(() => {
-
-  if (selectedPhotoApp) {
-
-    document.body.style.overflow = 'hidden';
-
-  } else {
-
-    document.body.style.overflow = 'auto';
-
-  }
-
-  return () => {
-
-    document.body.style.overflow = 'auto';
-
-  };
-
-}, [selectedPhotoApp]);
   
   // =========================================================
   // LEGACY FUNDUS PROVIDER COMPATIBILITY
@@ -4503,7 +4496,7 @@ const tomorrowTCATotal = Object.values(
 
   <div className="fixed inset-0 z-[99999] bg-black/30 backdrop-blur-sm flex items-center justify-center">
 
-    <div className="bg-white/95 backdrop-blur-xl rounded-2xl px-8 py-7 shadow-2xl flex flex-col items-center w-[300px] border border-white/40">
+    <div className="bg-white/95 backdrop-blur-xl rounded-2xl px-6 sm:px-8 py-6 sm:py-7 shadow-2xl flex flex-col items-center w-[calc(100vw-1rem)] max-w-[300px] border border-white/40">
 
       <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-5"></div>
 
@@ -4656,7 +4649,7 @@ const tomorrowTCATotal = Object.values(
 
   <div className="fixed inset-0 z-[99999] bg-black/40 flex items-center justify-center">
 
-    <div className="bg-white rounded-2xl shadow-2xl p-6 w-[350px]">
+    <div className="bg-white rounded-2xl shadow-2xl p-4 sm:p-6 w-[calc(100vw-1rem)] max-w-[350px] max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain">
 
       <div className="flex items-center gap-3 mb-4">
 
@@ -4693,7 +4686,7 @@ const tomorrowTCATotal = Object.values(
 
   <div className="fixed inset-0 z-[99999] bg-black/30 backdrop-blur-sm flex items-center justify-center">
 
-    <div className="bg-white/95 backdrop-blur-xl rounded-2xl px-8 py-7 shadow-2xl flex flex-col items-center w-[300px] border border-white/40">
+    <div className="bg-white/95 backdrop-blur-xl rounded-2xl px-6 sm:px-8 py-6 sm:py-7 shadow-2xl flex flex-col items-center w-[calc(100vw-1rem)] max-w-[300px] border border-white/40">
 
       {/* Spinner */}
       <div className="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-5"></div>
@@ -4726,7 +4719,7 @@ const tomorrowTCATotal = Object.values(
 
   <div className="fixed inset-0 z-[99999] bg-black/40 flex items-center justify-center">
 
-    <div className="bg-white rounded-3xl shadow-2xl w-[92vw] max-w-[560px] max-h-[80vh] flex flex-col overflow-hidden">
+    <div className="bg-white rounded-3xl shadow-2xl w-[calc(100vw-1rem)] sm:w-[92vw] max-w-[560px] max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
 
       <div className="p-5 border-b border-slate-300 flex items-center justify-between bg-gradient-to-r from-slate-100 to-slate-200">
 
@@ -6087,8 +6080,6 @@ year:'numeric'
 
     if (isReviewCompleted(app)) {
 
-      document.body.style.overflow = "hidden";
-
       setShowPatientHistory(false);
       setSelectedReviewSummary(app);
 
@@ -6138,8 +6129,6 @@ year:'numeric'
   onClick={() => {
 
     if (isReviewCompleted(app)) {
-
-      document.body.style.overflow = "hidden";
 
       setShowPatientHistory(false);
       setSelectedReviewSummary(app);
@@ -6431,8 +6420,6 @@ year:'numeric'
     app.leftEyeReview;
 
   if (isReviewed) {
-
-    document.body.style.overflow = 'hidden';
 
 setShowPatientHistory(false);
 setSelectedReviewSummary(app);
@@ -6768,7 +6755,7 @@ setSelectedReviewSummary(app);
          ===================================================== */}
       <AnimatePresence>
         {showSuperAdminConsole && currentUser.role === UserRole.SUPER_ADMIN && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[110] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -6780,9 +6767,9 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.94, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.94, y: 20 }}
-              className="relative w-full max-w-4xl bg-white rounded-[28px] shadow-2xl overflow-hidden"
+              className="relative w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-2xl bg-violet-600 text-white flex items-center justify-center shadow-lg">
                     <Shield size={22} />
@@ -6797,7 +6784,7 @@ setSelectedReviewSummary(app);
                 </button>
               </div>
 
-              <div className="p-6 md:p-8">
+              <div className="p-4 sm:p-6 md:p-8 overflow-y-auto overscroll-contain min-h-0">
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   <button onClick={() => setShowClinicManager(true)} className="group text-left p-5 rounded-2xl border border-blue-100 bg-blue-50 hover:bg-blue-100 transition-all">
                     <Building2 className="text-blue-600 mb-4" size={25} />
@@ -6854,7 +6841,7 @@ setSelectedReviewSummary(app);
          ===================================================== */}
       <AnimatePresence>
         {showDataMigration && currentUser.role === UserRole.SUPER_ADMIN && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[120] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -6867,9 +6854,9 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-5xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+              className="relative w-full max-w-5xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-cyan-50/70">
+              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-cyan-50/70">
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-2xl bg-cyan-600 text-white flex items-center justify-center shadow-lg">
                     <Database size={22} />
@@ -7127,7 +7114,7 @@ setSelectedReviewSummary(app);
          ===================================================== */}
       <AnimatePresence>
         {showFundusNetwork && currentUser.role === UserRole.SUPER_ADMIN && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[120] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -7139,9 +7126,9 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-5xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[88vh] flex flex-col"
+              className="relative w-full max-w-5xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-emerald-50/70">
+              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-emerald-50/70">
                 <div>
                   <h2 className="text-xl font-black text-slate-900">Fundus Network</h2>
                   <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mt-1">
@@ -7433,10 +7420,10 @@ setSelectedReviewSummary(app);
          ===================================================== */}
       <AnimatePresence>
         {showClinicManager && currentUser.role === UserRole.SUPER_ADMIN && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[120] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowClinicManager(false)} className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-4xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[88vh] flex flex-col">
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col">
+              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
                 <div>
                   <h2 className="text-xl font-black text-slate-900">Clinic Management</h2>
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Dynamic clinic master</p>
@@ -7524,7 +7511,7 @@ setSelectedReviewSummary(app);
          ===================================================== */}
       <AnimatePresence>
         {showReferralClinicManager && currentUser?.role === UserRole.ADMIN && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[120] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -7536,9 +7523,9 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-3xl bg-white rounded-[28px] shadow-2xl overflow-hidden max-h-[88vh] flex flex-col"
+              className="relative w-full max-w-3xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-indigo-50/70">
+              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-indigo-50/70">
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg">
                     <Calendar size={21} />
@@ -7712,7 +7699,7 @@ setSelectedReviewSummary(app);
       {/* Staff Management Console */}
       <AnimatePresence>
         {showAdminConsole && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -7724,9 +7711,9 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl flex flex-col max-h-[70vh] md:max-h-[80vh] overflow-hidden"
+              className="relative w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-3xl shadow-2xl flex flex-col overflow-hidden"
             >
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <div className="flex items-center gap-3">
                   <div className="p-2 bg-blue-600 rounded-xl">
                     <Users size={20} className="text-white" />
@@ -8043,7 +8030,7 @@ setSelectedReviewSummary(app);
       </AnimatePresence>
       <AnimatePresence>
         {userToDelete && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[200] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -8086,8 +8073,8 @@ setSelectedReviewSummary(app);
       </AnimatePresence>
 
 {showDuplicateWarning && duplicatePatient && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-    <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+  <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain bg-black/50 backdrop-blur-sm">
+    <div className="w-full max-w-lg max-h-[calc(100dvh-1rem)] overflow-y-auto overscroll-contain rounded-2xl bg-white shadow-2xl">
 
       {/* Header */}
       <div className="border-b px-6 py-4">
@@ -8184,7 +8171,7 @@ setSelectedReviewSummary(app);
 
 <AnimatePresence>
   {isICLookupOpen && (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[120] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
 
       <motion.div
         initial={{ opacity: 0 }}
@@ -8276,7 +8263,7 @@ setSelectedReviewSummary(app);
       {/*--- Super Admin Monthly Clinic Clinical Detail Modal ---*/}
       <AnimatePresence>
         {showSuperAdminClinicDetail && superAdminClinicMonthlyDetail && (
-          <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[9998] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -8289,7 +8276,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden relative z-10 flex flex-col"
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden relative z-10 flex flex-col"
             >
               <div className="px-6 py-5 border-b border-slate-100 flex items-start justify-between gap-4">
                 <div className="min-w-0">
@@ -8364,7 +8351,7 @@ setSelectedReviewSummary(app);
       {/* Appointment Modal Overlay */}
       <AnimatePresence>
         {isFormOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -8376,9 +8363,9 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden relative z-10"
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden relative z-10 flex flex-col"
             >
-              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="px-4 sm:px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
                 <h2 className="text-lg font-bold text-slate-800">
                   {editingAppointment ? 'Edit Appointment' : 'Create Appointment'}
                 </h2>
@@ -8388,7 +8375,7 @@ setSelectedReviewSummary(app);
               </div>
 
               <form 
-                className="p-6 space-y-4"
+                className="p-4 sm:p-6 space-y-4 overflow-y-auto overscroll-contain min-h-0"
                   onSubmit={(e) => {
                     e.preventDefault();
                     const formData = new FormData(e.currentTarget);
@@ -8720,7 +8707,7 @@ setSelectedReviewSummary(app);
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {deletingApp && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[200] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -8767,7 +8754,7 @@ setSelectedReviewSummary(app);
       {/* Image Not Obtainable Modal */}
 <AnimatePresence>
   {showImageNotObtainable && selectedUnableApp && (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[120] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
 
       <motion.div
         initial={{ opacity: 0 }}
@@ -8782,7 +8769,7 @@ setSelectedReviewSummary(app);
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.9, y: 30 }}
         transition={{ duration: 0.2 }}
-        className="relative z-10 w-full max-w-xl max-h-[88vh] overflow-hidden rounded-3xl bg-white shadow-2xl flex flex-col"
+        className="relative z-10 w-full max-w-xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden rounded-3xl bg-white shadow-2xl flex flex-col"
       >
 
         {/* Header */}
@@ -9047,7 +9034,7 @@ setSelectedReviewSummary(app);
   )}
 </AnimatePresence>
         {selectedPhotoApp && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[110] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -9067,7 +9054,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 30 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[95vh] lg:max-h-[90vh] overflow-y-auto scroll-smooth lg:overflow-hidden relative z-10 flex flex-col lg:flex-row"
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[calc(100dvh-1rem)] sm:h-[calc(100dvh-2rem)] overflow-hidden scroll-smooth relative z-10 flex flex-col lg:flex-row"
             >
 {/* Photo Area Bahagian Review Form*/}
 <div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
@@ -9813,7 +9800,7 @@ const imageReason =
   initial={false}
 >
   {selectedHistory && (
-    <div className="fixed inset-0 z-[140] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[140] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
 
       <motion.div
   initial={{ opacity: 0 }}
@@ -9846,7 +9833,7 @@ const imageReason =
     duration: 0.65,
     ease: [0.16, 1, 0.3, 1]
   }}
-        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6"
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain p-4 sm:p-6"
       >
 
         <div className="flex items-center justify-between mb-6">
@@ -10044,15 +10031,13 @@ const imageReason =
 
   {selectedReviewSummary && (
 
-    <div className="fixed inset-0 z-[130] flex items-start lg:items-center justify-center p-2 md:p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-[130] flex items-start lg:items-center justify-center p-2 md:p-4 overflow-y-auto overscroll-contain">
 
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={() => {
-
-  document.body.style.overflow = 'auto';
 
   setSelectedReviewSummary(null);
 
@@ -10064,7 +10049,7 @@ const imageReason =
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[95vh] lg:h-[90vh] overflow-y-auto flex flex-col lg:flex-row"
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[calc(100dvh-1rem)] sm:h-[calc(100dvh-2rem)] overflow-hidden flex flex-col lg:flex-row"
       >
 
         <div className="flex flex-col lg:flex-row w-full">
@@ -10267,8 +10252,6 @@ const imageReason =
 
       <button
         onClick={() => {
-
-  document.body.style.overflow = 'auto';
 
   setSelectedReviewSummary(null);
 
@@ -10663,7 +10646,7 @@ const imageReason =
 
   {showAccountSettings && (
 
-    <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[300] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
 
       <motion.div
         initial={{ opacity: 0 }}
@@ -10687,7 +10670,7 @@ const imageReason =
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        className="relative z-10 w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden"
+        className="relative z-10 w-full max-w-md max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col"
       >
 
         {/* Header */}
@@ -10879,7 +10862,7 @@ const imageReason =
 <AnimatePresence>
   {showMonthlySummary && (
     <div
-      className="fixed inset-0 z-[145] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
+      className="fixed inset-0 z-[145] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain bg-slate-900/50 backdrop-blur-sm"
       onClick={() => setShowMonthlySummary(false)}
     >
       <motion.div
@@ -10888,7 +10871,7 @@ const imageReason =
         exit={{ opacity: 0, scale: 0.96, y: 10 }}
         transition={{ duration: 0.2 }}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-5xl max-h-[90vh] bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden"
+        className="w-full max-w-5xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col"
       >
 
         {/* HEADER */}
@@ -10963,7 +10946,7 @@ const imageReason =
 </div>
 
         {/* CONTENT */}
-<div className="p-6 overflow-y-auto max-h-[calc(90vh-100px)]">
+<div className="p-4 sm:p-6 flex-1 min-h-0 overflow-y-auto overscroll-contain">
 
   {/* ===== SCREENING SUMMARY ===== */}
   <section>
@@ -11180,7 +11163,7 @@ const imageReason =
 
   {showActivityLogs && (
 
-    <div className="fixed inset-0 z-[140] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[140] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
 
       <motion.div
         initial={{ opacity: 0 }}
@@ -11194,7 +11177,7 @@ const imageReason =
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col"
+        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden flex flex-col"
       >
 
         <div className="p-6 border-b border-slate-200 flex items-center justify-between">
