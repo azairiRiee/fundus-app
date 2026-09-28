@@ -93,6 +93,8 @@ interface Clinic {
   shortName: string;
   active: boolean;
   isFundusProvider: boolean;
+  //--- Persistent clinic identity color; Super Admin can change this from Clinic Management ---//
+  colorKey?: string;
   //--- Multiple fundus providers allowed for referral routing ---//
   fundusProviderClinicIds?: string[];
   //--- TCA days configured by a provider clinic for each referring clinic ---//
@@ -106,6 +108,7 @@ const DEFAULT_CLINICS: Clinic[] = [
     shortName: 'KK Lintang',
     active: true,
     isFundusProvider: true,
+    colorKey: 'blue',
   },
   {
     id: 'PDG_RENGAS',
@@ -113,6 +116,7 @@ const DEFAULT_CLINICS: Clinic[] = [
     shortName: 'KK Padang Rengas',
     active: true,
     isFundusProvider: true,
+    colorKey: 'purple',
   },
   {
     id: 'HSS',
@@ -120,6 +124,7 @@ const DEFAULT_CLINICS: Clinic[] = [
     shortName: 'HSS',
     active: true,
     isFundusProvider: false,
+    colorKey: 'orange',
   },
   {
     id: 'PBOA',
@@ -127,6 +132,7 @@ const DEFAULT_CLINICS: Clinic[] = [
     shortName: 'PBOA',
     active: true,
     isFundusProvider: false,
+    colorKey: 'green',
   },
 ];
 
@@ -178,43 +184,38 @@ const getClinicById = (clinics: Clinic[], clinicId?: string | null) =>
   clinics.find(clinic => clinic.id === clinicId) || null;
 
 //--- SINAR clinic color system ---//
-// Own clinic / current environment = BLUE.
-// Referral clinic #1 = YELLOW.
-// Referral clinic #2 = PURPLE.
-// Referral clinic #3 = GREEN.
-// Referral clinic #4 = ORANGE.
-const REFERRAL_CLINIC_COLORS = [
-  {
-    badge: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-    border: 'border-l-yellow-500',
-  },
-  {
-    badge: 'bg-purple-50 text-purple-700 border-purple-200',
-    border: 'border-l-purple-500',
-  },
-  {
-    badge: 'bg-green-50 text-green-700 border-green-200',
-    border: 'border-l-green-500',
-  },
-  {
-    badge: 'bg-orange-50 text-orange-700 border-orange-200',
-    border: 'border-l-orange-500',
-  },
-];
+// Persistent clinic colors are stored in the Clinic Master (`colorKey`).
+// Super Admin can change a clinic color without affecting other clinics.
+const CLINIC_COLORS = [
+  { key: 'blue', label: 'Blue', badge: 'bg-blue-50 text-blue-700 border-blue-200', border: 'border-l-blue-500', dot: 'bg-blue-500' },
+  { key: 'purple', label: 'Purple', badge: 'bg-purple-50 text-purple-700 border-purple-200', border: 'border-l-purple-500', dot: 'bg-purple-500' },
+  { key: 'green', label: 'Green', badge: 'bg-green-50 text-green-700 border-green-200', border: 'border-l-green-500', dot: 'bg-green-500' },
+  { key: 'orange', label: 'Orange', badge: 'bg-orange-50 text-orange-700 border-orange-200', border: 'border-l-orange-500', dot: 'bg-orange-500' },
+  { key: 'pink', label: 'Pink', badge: 'bg-pink-50 text-pink-700 border-pink-200', border: 'border-l-pink-500', dot: 'bg-pink-500' },
+  { key: 'yellow', label: 'Yellow', badge: 'bg-yellow-50 text-yellow-700 border-yellow-200', border: 'border-l-yellow-500', dot: 'bg-yellow-500' },
+  { key: 'cyan', label: 'Cyan', badge: 'bg-cyan-50 text-cyan-700 border-cyan-200', border: 'border-l-cyan-500', dot: 'bg-cyan-500' },
+  { key: 'red', label: 'Red', badge: 'bg-red-50 text-red-700 border-red-200', border: 'border-l-red-500', dot: 'bg-red-500' },
+  { key: 'indigo', label: 'Indigo', badge: 'bg-indigo-50 text-indigo-700 border-indigo-200', border: 'border-l-indigo-500', dot: 'bg-indigo-500' },
+  { key: 'teal', label: 'Teal', badge: 'bg-teal-50 text-teal-700 border-teal-200', border: 'border-l-teal-500', dot: 'bg-teal-500' },
+] as const;
 
-const getReferralClinicIndex = (
-  clinics: Clinic[],
-  clinicId?: string | null,
-  activeClinicId?: string | null
-) => {
-  if (!clinicId || clinicId === activeClinicId) return -1;
+type ClinicColorKey = typeof CLINIC_COLORS[number]['key'];
 
-  //--- Only active external clinics participate in referral color assignment ---//
-  const externalClinics = clinics.filter(
-    clinic => clinic.active && clinic.id !== activeClinicId
-  );
+const getClinicColor = (clinic?: Clinic | null) => {
+  if (!clinic) return CLINIC_COLORS[0];
 
-  return externalClinics.findIndex(clinic => clinic.id === clinicId);
+  const configured = CLINIC_COLORS.find(color => color.key === clinic.colorKey);
+  if (configured) return configured;
+
+  //--- Backward-compatible defaults for existing clinic documents without colorKey ---//
+  const legacyDefaults: Record<string, ClinicColorKey> = {
+    LINTANG: 'blue',
+    PDG_RENGAS: 'purple',
+    PBOA: 'green',
+    HSS: 'orange',
+  };
+
+  return CLINIC_COLORS.find(color => color.key === legacyDefaults[clinic.id]) || CLINIC_COLORS[0];
 };
 
 const getClinicBadgeClass = (
@@ -222,24 +223,8 @@ const getClinicBadgeClass = (
   clinicId?: string | null,
   activeClinicId?: string | null
 ) => {
-  //--- Own clinic is always blue ---//
-  if (clinicId && clinicId === activeClinicId) {
-    return 'bg-blue-50 text-blue-700 border-blue-200';
-  }
-
-  const referralIndex = getReferralClinicIndex(
-    clinics,
-    clinicId,
-    activeClinicId
-  );
-
-  return (
-    REFERRAL_CLINIC_COLORS[
-      referralIndex >= 0
-        ? referralIndex % REFERRAL_CLINIC_COLORS.length
-        : 0
-    ]?.badge || 'bg-slate-50 text-slate-600 border-slate-200'
-  );
+  const clinic = clinics.find(item => item.id === clinicId);
+  return getClinicColor(clinic).badge;
 };
 
 const getClinicBorderClass = (
@@ -247,24 +232,8 @@ const getClinicBorderClass = (
   clinicId?: string | null,
   activeClinicId?: string | null
 ) => {
-  //--- Own clinic is always blue ---//
-  if (clinicId && clinicId === activeClinicId) {
-    return 'border-l-blue-500';
-  }
-
-  const referralIndex = getReferralClinicIndex(
-    clinics,
-    clinicId,
-    activeClinicId
-  );
-
-  return (
-    REFERRAL_CLINIC_COLORS[
-      referralIndex >= 0
-        ? referralIndex % REFERRAL_CLINIC_COLORS.length
-        : 0
-    ]?.border || 'border-l-slate-400'
-  );
+  const clinic = clinics.find(item => item.id === clinicId);
+  return getClinicColor(clinic).border;
 };
 
 const getFundusProviderClinics = (clinics: Clinic[]) =>
@@ -551,6 +520,9 @@ export default function App() {
   const [newClinicName, setNewClinicName] = useState('');
   const [newClinicShortName, setNewClinicShortName] = useState('');
   const [newClinicIsFundusProvider, setNewClinicIsFundusProvider] = useState(false);
+  //--- Super Admin clinic color assignment ---//
+  const [newClinicColorKey, setNewClinicColorKey] = useState<ClinicColorKey>('pink');
+  const [clinicColorSaving, setClinicColorSaving] = useState<string | null>(null);
 
   //--- Super Admin Fundus Network ---//
   const [showFundusNetwork, setShowFundusNetwork] = useState(false);
@@ -1550,6 +1522,47 @@ const isReviewCompleted = (app: Appointment) => {
       setMigrationMessage('Provider migration failed.');
     } finally {
       setMigrationRunning(false);
+    }
+  };
+
+  const pinchStartDistanceRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef(1);
+
+  //--- Mobile pinch zoom: scale the fundus image itself instead of zooming the modal/page ---//
+  const getTouchDistance = (touches: React.TouchList) => {
+    if (touches.length < 2) return 0;
+
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const handlePinchStart = (e: React.TouchEvent<HTMLImageElement>) => {
+    if (e.touches.length !== 2) return;
+
+    pinchStartDistanceRef.current = getTouchDistance(e.touches);
+    pinchStartZoomRef.current = zoomScale;
+  };
+
+  const handlePinchMove = (e: React.TouchEvent<HTMLImageElement>) => {
+    if (e.touches.length !== 2 || !pinchStartDistanceRef.current) return;
+
+    //--- Keep the browser from pinch-zooming the modal/viewport while the image is being pinched ---//
+    e.preventDefault();
+
+    const currentDistance = getTouchDistance(e.touches);
+    if (!currentDistance) return;
+
+    const nextZoom = Math.min(5, Math.max(1,
+      pinchStartZoomRef.current * (currentDistance / pinchStartDistanceRef.current)
+    ));
+
+    setZoomScale(Number(nextZoom.toFixed(2)));
+  };
+
+  const handlePinchEnd = (e: React.TouchEvent<HTMLImageElement>) => {
+    if (e.touches.length < 2) {
+      pinchStartDistanceRef.current = null;
     }
   };
 
@@ -4486,6 +4499,26 @@ const tomorrowTCATotal = Object.values(
     //--- Do not use a LINTANG fallback here: legacy/global logs must never leak into clinic views ---//
     return activityLogs.filter(log => log.clinicId === activeClinicId);
   }, [activityLogs, currentUser?.clinicId, currentUser?.role]);
+
+  //--- Persist a clinic's identity color in the Clinic Master ---//
+  const handleClinicColorChange = async (clinic: Clinic, colorKey: ClinicColorKey) => {
+    if (clinic.colorKey === colorKey) return;
+
+    setClinicColorSaving(clinic.id);
+    try {
+      await updateDoc(doc(db, 'clinics', clinic.id), { colorKey });
+      addActivityLog(
+        'Updated Clinic Color',
+        `${clinic.name} → ${CLINIC_COLORS.find(color => color.key === colorKey)?.label || colorKey}`,
+        currentUser?.displayName || 'System'
+      );
+    } catch (error) {
+      console.error('Failed to update clinic color', error);
+      alert('Failed to update clinic color. Please try again.');
+    } finally {
+      setClinicColorSaving(null);
+    }
+  };
 
   // --- Views ---
 
@@ -7443,6 +7476,7 @@ setSelectedReviewSummary(app);
                     shortName: newClinicShortName.trim() || newClinicName.trim(),
                     active: true,
                     isFundusProvider: newClinicIsFundusProvider,
+                    colorKey: newClinicColorKey,
                   };
                   try {
                     await setDoc(doc(db, 'clinics', clinic.id), clinic);
@@ -7451,6 +7485,7 @@ setSelectedReviewSummary(app);
                     setNewClinicName('');
                     setNewClinicShortName('');
                     setNewClinicIsFundusProvider(false);
+                    setNewClinicColorKey('pink');
                   } catch (error) {
                     console.error('Failed to create clinic', error);
                     alert('Failed to create clinic. Please try again.');
@@ -7460,10 +7495,15 @@ setSelectedReviewSummary(app);
                     <Plus size={16} className="text-blue-600" />
                     <p className="text-xs font-black text-slate-800 uppercase tracking-widest">Add New Clinic</p>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
                     <input required value={newClinicId} onChange={e => setNewClinicId(e.target.value)} placeholder="CLINIC_ID" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-blue-500" />
                     <input required value={newClinicName} onChange={e => setNewClinicName(e.target.value)} placeholder="Clinic name" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                     <input value={newClinicShortName} onChange={e => setNewClinicShortName(e.target.value)} placeholder="Short name" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                    <select value={newClinicColorKey} onChange={e => setNewClinicColorKey(e.target.value as ClinicColorKey)} className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500">
+                      {CLINIC_COLORS.map(color => (
+                        <option key={color.key} value={color.key}>{color.label}</option>
+                      ))}
+                    </select>
                     <button type="submit" className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-widest">Add Clinic</button>
                   </div>
                   <label className="flex items-center gap-2 mt-3 text-xs font-bold text-slate-600 cursor-pointer">
@@ -7482,7 +7522,22 @@ setSelectedReviewSummary(app);
                         </div>
                         <p className="text-xs text-slate-400 mt-1">{clinic.shortName}</p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-3.5 h-3.5 rounded-full shrink-0 ${getClinicColor(clinic).dot}`} />
+                          <span className="text-[8px] font-black text-slate-500 uppercase tracking-wide">Color</span>
+                          <select
+                            value={getClinicColor(clinic).key}
+                            disabled={clinicColorSaving === clinic.id}
+                            onChange={e => handleClinicColorChange(clinic, e.target.value as ClinicColorKey)}
+                            className="h-8 min-w-[96px] px-2.5 rounded-lg border border-slate-200 bg-white text-[10px] font-black text-slate-700 outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                            aria-label={`Choose color for ${clinic.name}`}
+                          >
+                            {CLINIC_COLORS.map(color => (
+                              <option key={color.key} value={color.key}>{color.label}</option>
+                            ))}
+                          </select>
+                        </div>
                         <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase ${clinic.active ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{clinic.active ? 'Active' : 'Inactive'}</span>
                         <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase ${clinic.isFundusProvider ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>{clinic.isFundusProvider ? 'Fundus Provider' : 'Referral Clinic'}</span>
                         <button
@@ -7953,7 +8008,10 @@ setSelectedReviewSummary(app);
 <section className="flex flex-col max-h-[420px]">
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Current System Users' : 'Current Clinic Users'} ({users.filter(u => currentUser?.role === UserRole.SUPER_ADMIN ? true : u.clinicId === currentUser?.clinicId).length})</h3>
                   <div className="space-y-2 overflow-y-auto overscroll-contain pr-2 h-full">
-                    {users.filter(u => currentUser?.role === UserRole.SUPER_ADMIN || u.clinicId === currentUser?.clinicId).map(u => (
+                    {users
+  .filter(u => currentUser?.role === UserRole.SUPER_ADMIN || u.clinicId === currentUser?.clinicId)
+  .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+  .map(u => (
                       <div key={u.id} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:border-slate-200 transition-all group">
                         <div className="flex items-center gap-4">
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${u.role === UserRole.ADMIN ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
@@ -7981,9 +8039,18 @@ setSelectedReviewSummary(app);
   </span>
 
   {/* Clinic Badge */}
-  <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded bg-emerald-100 text-emerald-700 border border-emerald-200">
-    {getClinicById(clinics, u.clinicId)?.shortName || u.clinicId || 'Clinic'}
-  </span>
+  {(() => {
+    const userClinic = getClinicById(clinics, u.clinicId);
+    const clinicColor = getClinicColor(userClinic);
+    return (
+      <span
+        className={`text-[8px] font-black uppercase px-2 py-0.5 rounded border ${clinicColor.badge}`}
+        title={userClinic?.name || u.clinicId || 'Clinic'}
+      >
+        {userClinic?.shortName || u.clinicId || 'Clinic'}
+      </span>
+    );
+  })()}
 
 
 </div>
@@ -7992,7 +8059,11 @@ setSelectedReviewSummary(app);
                                 <Key size={10} /> ••••••
                               </span>
                               <span className="text-[10px] text-slate-300 font-medium">
-                                Created {new Date(u.createdAt).toLocaleDateString()}
+                                Created {new Date(u.createdAt).toLocaleDateString('en-GB', {
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric'
+})}
                               </span>
                             </div>
                           </div>
@@ -9060,8 +9131,14 @@ setSelectedReviewSummary(app);
 <div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
 <div className="flex-1 flex items-center justify-center p-2 md:p-4 overflow-y-auto lg:overflow-hidden relative">
 
-{/* 🤖 AI PANEL */}
-<div className="absolute top-5 left-1/2 -translate-x-1/2 z-30 w-[330px]">
+{/* 🤖 AI PANEL — desktop keeps the full header; mobile collapses to a small side arrow so the fundus image stays clear. */}
+<div
+  className={`absolute z-30 top-2 right-2 sm:top-5 sm:right-auto sm:left-1/2 sm:-translate-y-0 sm:-translate-x-1/2 ${
+    isAIPanelOpen
+      ? 'w-[210px] sm:w-[330px]'
+      : 'w-10 sm:w-[330px]'
+  }`}
+>
 
   <motion.div
     initial={false}
@@ -9072,7 +9149,7 @@ setSelectedReviewSummary(app);
       duration: 0.25,
       ease: "easeInOut",
     }}
-    className="overflow-hidden rounded-2xl border border-slate-700 bg-slate-900/90 backdrop-blur-md shadow-2xl"
+    className="overflow-hidden rounded-xl sm:rounded-2xl border border-slate-700 bg-slate-900/90 backdrop-blur-md shadow-2xl"
   >
 
     {/* AI HEADER / COLLAPSE BUTTON */}
@@ -9081,10 +9158,10 @@ setSelectedReviewSummary(app);
       onClick={() =>
         setIsAIPanelOpen(prev => !prev)
       }
-      className="w-full h-11 px-4 flex items-center justify-between hover:bg-white/5 transition-all"
+      className="w-full h-9 sm:h-11 px-0 sm:px-4 flex items-center justify-center sm:justify-between hover:bg-white/5 transition-all"
     >
 
-      <div className="flex-1 text-center">
+      <div className="flex-1 text-center hidden sm:block">
 
         <p className="text-[9px] uppercase tracking-[0.3em] text-slate-400 font-bold">
           AI ASSISTED REVIEW
@@ -9098,8 +9175,13 @@ setSelectedReviewSummary(app);
 
       </div>
 
-      <span className="text-slate-400 text-xs">
-        {isAIPanelOpen ? "▲" : "▼"}
+      <span className="text-slate-300 flex items-center justify-center">
+        <span className="hidden sm:inline text-xs">
+          {isAIPanelOpen ? "▲" : "▼"}
+        </span>
+        <span className="sm:hidden">
+          {isAIPanelOpen ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+        </span>
       </span>
 
     </button>
@@ -9126,14 +9208,14 @@ setSelectedReviewSummary(app);
           transition={{
             duration: 0.2,
           }}
-          className="px-4 pb-4"
+          className="px-3 pb-3 sm:px-4 sm:pb-4"
         >
 
           {/* ANALYZE BUTTON */}
           <button
             onClick={analyzeWithAI}
             disabled={isAnalyzing}
-            className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 py-2.5 text-white font-bold transition-all disabled:opacity-60"
+            className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-700 py-1.5 sm:py-2.5 text-xs sm:text-base text-white font-bold transition-all disabled:opacity-60"
           >
 
             {isAnalyzing
@@ -9146,9 +9228,9 @@ setSelectedReviewSummary(app);
 
 
           {/* SELECTED EYE */}
-          <div className="mt-3 flex justify-center">
+          <div className="mt-2 sm:mt-3 flex justify-center">
 
-            <span className="text-[10px] font-bold text-blue-300">
+            <span className="text-[8px] sm:text-[10px] font-bold text-blue-300">
 
               {selectedPhotoApp?.eye === "right"
                 ? "RIGHT EYE (RE)"
@@ -9334,7 +9416,10 @@ setSelectedReviewSummary(app);
         ? selectedPhotoApp?.app?.rightEyePhoto
         : selectedPhotoApp?.app?.leftEyePhoto
     }
-    className="form-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none"
+    className="form-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none touch-none"
+    onTouchStart={handlePinchStart}
+    onTouchMove={handlePinchMove}
+    onTouchEnd={handlePinchEnd}
     alt="Fundus View"
   />
 
@@ -10090,7 +10175,10 @@ const imageReason =
         ? selectedReviewSummary.rightEyePhoto
         : selectedReviewSummary.leftEyePhoto
     }
-    className="summary-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none"
+    className="summary-fundus-image max-w-full max-h-full object-contain shadow-2xl rounded-lg select-none touch-none"
+    onTouchStart={handlePinchStart}
+    onTouchMove={handlePinchMove}
+    onTouchEnd={handlePinchEnd}
     alt="Fundus View"
   />
 
