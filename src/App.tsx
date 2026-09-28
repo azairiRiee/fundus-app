@@ -9158,15 +9158,31 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 30 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-auto lg:h-[calc(100dvh-2rem)] overflow-visible lg:overflow-hidden scroll-smooth relative z-10 flex flex-col lg:flex-row"
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[calc(100dvh-1rem)] sm:h-[calc(100dvh-2rem)] overflow-hidden scroll-smooth relative z-10"
             >
+              <div className="h-full min-h-0 overflow-hidden flex flex-col lg:flex-row">
+
+              {/*--- Fundus Review close button: fixed to the mobile review box top-right ---*/}
+              <button
+                type="button"
+                onClick={() => {
+                  setRightEyeAIResult(null);
+                  setLeftEyeAIResult(null);
+                  setSelectedPhotoApp(null);
+                }}
+                className="absolute top-3 right-3 z-40 p-0 bg-transparent text-slate-500 flex items-center justify-center hover:text-slate-700 transition-all"
+                aria-label="Close Fundus Review"
+              >
+                <XCircle size={22} />
+              </button>
+
 {/* Photo Area Bahagian Review Form*/}
-<div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
+<div className="h-[320px] shrink-0 lg:flex-1 lg:h-auto lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
 <div className="flex-1 flex items-center justify-center p-2 md:p-4 overflow-y-auto lg:overflow-hidden relative">
 
 {/* 🤖 AI PANEL — desktop keeps the full header; mobile collapses to a small side arrow so the fundus image stays clear. */}
 <div
-  className={`absolute z-30 top-2 right-2 sm:top-5 sm:right-auto sm:left-1/2 sm:-translate-y-0 sm:-translate-x-1/2 ${
+  className={`absolute z-30 top-2 left-2 right-auto sm:top-5 sm:right-auto sm:left-1/2 sm:-translate-y-0 sm:-translate-x-1/2 ${
     isAIPanelOpen
       ? 'w-[210px] sm:w-[330px]'
       : 'w-10 sm:w-[330px]'
@@ -9213,7 +9229,7 @@ setSelectedReviewSummary(app);
           {isAIPanelOpen ? "▲" : "▼"}
         </span>
         <span className="sm:hidden">
-          {isAIPanelOpen ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          {isAIPanelOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
         </span>
       </span>
 
@@ -9556,7 +9572,8 @@ side === "right"
               </div>
               
               {/* Sidebar Info & Review */}
-              <div className="w-full md:w-96 flex flex-col p-8 border-l border-slate-100 bg-slate-50" key={selectedPhotoApp?.app?.id}>
+              <div className="w-full md:w-96 flex flex-col p-4 sm:p-8 border border-slate-200 rounded-2xl bg-slate-50 h-full min-h-0 overflow-hidden flex-1 lg:flex-none" key={selectedPhotoApp?.app?.id}>
+                <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-visible pr-1">
                 <div className="flex justify-between items-start mb-6">
                   <div>
                     <h2 className="text-base sm:text-lg lg:text-2xl font-bold text-slate-800 tracking-tight">
@@ -9565,21 +9582,10 @@ side === "right"
                     <p className="text-sm text-slate-500 uppercase mt-1">IC: {selectedPhotoApp?.app?.icNumber}</p>
                     
                   </div>
-                  <button
-  onClick={() => {
 
-    setRightEyeAIResult(null);
-
-    setLeftEyeAIResult(null);
-
-    setSelectedPhotoApp(null);
-
-  }} className="text-slate-400 hover:text-slate-600">
-                    <XCircle size={28} />
-                  </button>
                 </div>
 
-                <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+                <div className="flex flex-col min-h-0">
                   <div className="p-3 bg-white rounded-xl border border-slate-200 mb-6 shrink-0">
                     <span className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2">Patient History</span>
                     <div className="flex flex-wrap gap-1">
@@ -9627,7 +9633,7 @@ side === "right"
                       }
                     }}
                   >
-                    <div className="flex-1 min-h-0 overflow-visible lg:overflow-y-auto pr-2 space-y-6 summary-scrollbar">
+                    <div className="space-y-6 pr-2 summary-scrollbar lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
                       {/* Eye Selection Tabs */}
                       <div className="flex gap-2 p-1 bg-slate-200 rounded-2xl sticky top-0 z-20">
                         {(['right', 'left'] as const).map(eye => (
@@ -9891,7 +9897,7 @@ const imageReason =
   </div>
 )}
 </div>
-                    <div className="pt-6 mt-auto shrink-0">
+                    <div className="pt-6 shrink-0">
                       <button 
   type="submit"
   disabled={isSavingReview}
@@ -9908,6 +9914,8 @@ const imageReason =
                     </div>
                   </form>
                 </div>
+                </div>
+              </div>
               </div>
             </motion.div>
           </div>
@@ -10220,7 +10228,7 @@ const imageReason =
         className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[calc(100dvh-1rem)] sm:h-[calc(100dvh-2rem)] overflow-hidden flex flex-col lg:flex-row"
       >
 
-        <div className="flex flex-col lg:flex-row w-full">
+        <div className="flex flex-col lg:flex-row w-full h-full min-h-0">
 
   {/* Summary LEFT IMAGE SECTION */}
 <div
@@ -10382,7 +10390,7 @@ const imageReason =
 </div>
 
   {/* RIGHT SIDEBAR */}
-  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 flex flex-col h-full min-h-0 overflow-hidden">
+  <div className="w-full lg:w-[380px] bg-slate-50 border-l border-slate-200 p-4 md:p-6 flex flex-col flex-1 lg:flex-none h-full min-h-0 overflow-y-auto lg:overflow-hidden">
 
     <div className="flex items-center justify-between mb-6">
 
@@ -10433,7 +10441,7 @@ const imageReason =
       </button>
 
     </div>
-<div className="flex-1 min-h-0 overflow-y-auto pr-2 space-y-6 summary-scrollbar">
+<div className="lg:flex-1 min-h-0 overflow-visible lg:overflow-y-auto pr-2 space-y-6 summary-scrollbar">
 
   {/* REVIEWED BY */}
 <div className="bg-white rounded-2xl border border-slate-200 p-4">
@@ -10784,6 +10792,21 @@ const imageReason =
 
 </div>
 )}
+
+{/*--- Mobile edit button: stays in the normal scroll flow at the very bottom ---*/}
+<button
+  onClick={() => {
+    setSelectedReviewSummary(null);
+    setSelectedPhotoApp({
+      app: selectedReviewSummary,
+      eye: 'right'
+    });
+  }}
+  className="lg:hidden w-full py-4 mt-6 mb-2 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
+>
+  Edit Review
+</button>
+
 </div>
 {/* EDIT REVIEW BUTTON */}
 <button
@@ -10794,7 +10817,7 @@ const imageReason =
       eye: 'right'
     });
   }}
-  className="shrink-0 w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
+  className="hidden lg:block shrink-0 w-full py-4 bg-slate-900 hover:bg-black text-white font-black rounded-2xl transition-all text-[11px] uppercase tracking-[0.2em]"
 >
   Edit Review
 </button>
