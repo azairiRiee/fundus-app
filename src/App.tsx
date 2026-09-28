@@ -902,6 +902,37 @@ const isCurrentMonth =
   selectedAnalyticsMonth.getFullYear() ===
     today.getFullYear();
 
+  //--- Previous fundus visits for the selected historical record ---//
+  //--- Keep the latest record as the main view; older fundus records can be opened from the date list. ---//
+  const selectedHistoryVisits = useMemo(() => {
+    if (!selectedHistory) return [];
+
+    return appointments
+      .filter(app => {
+        if (app.id === selectedHistory.id) return false;
+        if (normalizeIC(app.icNumber) !== normalizeIC(selectedHistory.icNumber)) return false;
+        if (app.status === AppointmentStatus.NO_SHOW) return false;
+
+        //--- Only show records that contain evidence of a fundus visit. ---//
+        return !!(
+          app.rightEyePhoto ||
+          app.leftEyePhoto ||
+          app.rightEyeImageStatus ||
+          app.leftEyeImageStatus ||
+          app.rightEyeReview ||
+          app.leftEyeReview ||
+          app.rightEyeReviewDetails ||
+          app.leftEyeReviewDetails
+        );
+      })
+      .sort((a, b) => {
+        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        if (dateDiff !== 0) return dateDiff;
+
+        return (b.createdAt || 0) - (a.createdAt || 0);
+      });
+  }, [appointments, selectedHistory]);
+
   const handlePatientLookup = () => {
 
   const patientRecords = appointments
@@ -8213,10 +8244,12 @@ setSelectedReviewSummary(app);
 
         <button
   onClick={() => {
-  if (!duplicatePatient) return;
+    if (!duplicatePatient) return;
 
-  setSelectedHistory(duplicatePatient);
-}}
+    //--- Open the previous fundus record but keep duplicatePatient alive so Close can return to this warning ---//
+    setSelectedHistory(duplicatePatient);
+    setShowDuplicateWarning(false);
+  }}
   className="rounded-lg border px-4 py-2"
 >
   View Previous
@@ -8281,9 +8314,9 @@ setSelectedReviewSummary(app);
   autoFocus
   value={lookupIC}
   onChange={(e) => {
-    // Hanya nombor dan maksimum 12 digit
+    //--- Auto format IC: XXXXXX-XX-XXXX ---//
     const digits = e.target.value.replace(/\D/g, "").slice(0, 12);
-  setLookupIC(digits);
+    setLookupIC(formatIC(digits));
 }}
   onKeyDown={(e) => {
   if (
@@ -8295,8 +8328,8 @@ setSelectedReviewSummary(app);
   }
 }}
   inputMode="numeric"
-  maxLength={12}
-  placeholder="900101085555"
+  maxLength={14}
+  placeholder="900101-08-5555"
   className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
 />
 
@@ -9125,7 +9158,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 30 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 30 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-[calc(100dvh-1rem)] sm:h-[calc(100dvh-2rem)] overflow-hidden scroll-smooth relative z-10 flex flex-col lg:flex-row"
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-6xl h-auto lg:h-[calc(100dvh-2rem)] overflow-visible lg:overflow-hidden scroll-smooth relative z-10 flex flex-col lg:flex-row"
             >
 {/* Photo Area Bahagian Review Form*/}
 <div className="flex-1 min-h-[320px] lg:min-h-0 bg-black flex flex-col overflow-hidden relative" onWheel={handleWheel} ref={containerRef}>
@@ -9594,7 +9627,7 @@ side === "right"
                       }
                     }}
                   >
-                    <div className="flex-1 min-h-0 overflow-y-auto pr-2 space-y-6 summary-scrollbar">
+                    <div className="flex-1 min-h-0 overflow-visible lg:overflow-y-auto pr-2 space-y-6 summary-scrollbar">
                       {/* Eye Selection Tabs */}
                       <div className="flex gap-2 p-1 bg-slate-200 rounded-2xl sticky top-0 z-20">
                         {(['right', 'left'] as const).map(eye => (
@@ -9894,7 +9927,14 @@ const imageReason =
   transition={{
     duration: 0.5
   }}
-        onClick={() => setSelectedHistory(null)}
+        onClick={() => {
+  setSelectedHistory(null);
+
+  //--- Return to the duplicate-fundus warning after viewing previous ---//
+  if (duplicatePatient) {
+    setShowDuplicateWarning(true);
+  }
+}}
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
       />
 
@@ -9934,7 +9974,14 @@ const imageReason =
           </div>
 
           <button
-            onClick={() => setSelectedHistory(null)}
+  onClick={() => {
+    setSelectedHistory(null);
+
+    //--- Return to the duplicate-fundus warning after viewing previous ---//
+    if (duplicatePatient) {
+      setShowDuplicateWarning(true);
+    }
+  }}
             className="px-4 py-2 rounded-xl bg-slate-100 text-xs font-bold"
           >
             Close
@@ -10107,6 +10154,42 @@ const imageReason =
           </div>
 
         </div>
+
+        {/*--- Other previous fundus visits ---*/}
+        {selectedHistoryVisits.length > 0 && (
+          <div className="mt-6 bg-white rounded-2xl border border-slate-200 overflow-hidden">
+            <div className="px-4 py-3 border-b border-slate-200">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Previous Fundus Visits
+              </p>
+            </div>
+
+            <div className="p-3 space-y-2">
+              {selectedHistoryVisits.map(history => (
+                <button
+                  key={history.id}
+                  type="button"
+                  onClick={() => setSelectedHistory(history)}
+                  className="w-full flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 hover:bg-blue-50 hover:border-blue-200 px-4 py-3 transition-all group"
+                >
+                  <div className="text-left">
+                    <p className="text-sm font-bold text-slate-700">
+                      {new Date(history.date).toLocaleDateString("en-GB")}
+                    </p>
+                    <p className="text-[10px] uppercase text-slate-400 mt-0.5">
+                      {history.status}
+                    </p>
+                  </div>
+
+                  <Eye
+                    size={17}
+                    className="text-slate-400 group-hover:text-blue-600"
+                  />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
       </motion.div>
 
