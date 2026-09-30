@@ -700,20 +700,147 @@ const [unableOtherReason, setUnableOtherReason] =
     othersText: '',
     comment: ''
   });
-  //--- Mobile back button: close the active Fundus Review before browser navigation ---//
+  //--- Mobile back button: close the active SINAR modal without leaving the app ---//
+  const modalHistoryCountRef = useRef(0);
+  const suppressModalHistoryCleanupRef = useRef(false);
+
+  //--- Keep this list limited to the existing modal states; no UI/layout/function is changed here ---//
+  const activeModalCount = [
+    showPboaWarning,
+    showTCASchedule,
+    showAdminConsole,
+    showActivityLogs,
+    showMonthlySummary,
+    showSuperAdminConsole,
+    showClinicManager,
+    showFundusNetwork,
+    showReferralClinicManager,
+    showDataMigration,
+    showAccountSettings,
+    showSuperAdminClinicDetail,
+    isFormOpen,
+    isICLookupOpen,
+    !!selectedPhotoApp,
+    !!selectedHistory,
+    !!selectedReviewSummary,
+    !!deletingApp,
+    !!userToDelete,
+    showDuplicateWarning,
+    showImageNotObtainable
+  ].filter(Boolean).length;
+
+  useEffect(() => {
+    //--- Modal opened: add one temporary history entry ---//
+    if (activeModalCount > modalHistoryCountRef.current) {
+      const entriesToAdd = activeModalCount - modalHistoryCountRef.current;
+      for (let i = 0; i < entriesToAdd; i++) {
+        window.history.pushState({ sinarModal: true }, '', window.location.href);
+      }
+      modalHistoryCountRef.current = activeModalCount;
+      return;
+    }
+
+    //--- Modal closed by the normal UI: remove only our temporary history entry ---//
+    if (activeModalCount < modalHistoryCountRef.current) {
+      const entriesToRemove = modalHistoryCountRef.current - activeModalCount;
+      modalHistoryCountRef.current = activeModalCount;
+
+      //--- Mark UI-driven history cleanup so popstate does not close another modal ---//
+      suppressModalHistoryCleanupRef.current = entriesToRemove;
+      window.history.back();
+    }
+  }, [activeModalCount]);
+
   useEffect(() => {
     const handleMobileBack = () => {
-      if (selectedPhotoApp) {
+      if (modalHistoryCountRef.current <= 0) return;
+
+      //--- Normal X/Close cleanup: consume the temporary history entry without closing another modal ---//
+      if (suppressModalHistoryCleanupRef.current > 0) {
+        suppressModalHistoryCleanupRef.current -= 1;
+        if (suppressModalHistoryCleanupRef.current > 0) {
+          window.history.back();
+        }
+        return;
+      }
+
+      //--- Browser Back consumed one temporary modal history entry ---//
+      modalHistoryCountRef.current -= 1;
+
+      //--- Close only the currently active/top modal; existing close functions remain untouched ---//
+      if (showImageNotObtainable) {
+        setShowImageNotObtainable(false);
+      } else if (deletingApp) {
+        setDeletingApp(null);
+      } else if (userToDelete) {
+        setUserToDelete(null);
+      } else if (showDuplicateWarning) {
+        setShowDuplicateWarning(false);
+      } else if (selectedHistory) {
+      setSelectedHistory(null);
+      } else if (showPatientHistory) {
+      setShowPatientHistory(false);
+      } else if (selectedReviewSummary) {
+        setSelectedReviewSummary(null);
+      } else if (selectedPhotoApp) {
         setSelectedPhotoApp(null);
+      } else if (isICLookupOpen) {
+        setIsICLookupOpen(false);
+      } else if (isFormOpen) {
+        setIsFormOpen(false);
+      } else if (showClinicManager) {
+        setShowClinicManager(false);
+      } else if (showFundusNetwork) {
+        setShowFundusNetwork(false);
+      } else if (showReferralClinicManager) {
+        setShowReferralClinicManager(false);
+      } else if (showDataMigration) {
+        setShowDataMigration(false);
+      } else if (showAccountSettings) {
+        setShowAccountSettings(false);
+      } else if (showSuperAdminClinicDetail) {
+        setShowSuperAdminClinicDetail(false);
+      } else if (showMonthlySummary) {
+        setShowMonthlySummary(false);
+      } else if (showActivityLogs) {
+        setShowActivityLogs(false);
+      } else if (showTCASchedule) {
+        setShowTCASchedule(false);
+      } else if (showPboaWarning) {
+        setShowPboaWarning(false);
+      } else if (showAdminConsole) {
+        setShowAdminConsole(false);
+      } else if (showSuperAdminConsole) {
+        setShowSuperAdminConsole(false);
       }
     };
 
     window.addEventListener('popstate', handleMobileBack);
-
-    return () => {
-      window.removeEventListener('popstate', handleMobileBack);
-    };
-  }, [selectedPhotoApp]);
+    return () => window.removeEventListener('popstate', handleMobileBack);
+  }, [
+    showImageNotObtainable,
+    deletingApp,
+    userToDelete,
+    showDuplicateWarning,
+    selectedHistory,
+    showPatientHistory,
+    selectedReviewSummary,
+    selectedPhotoApp,
+    isICLookupOpen,
+    isFormOpen,
+    showClinicManager,
+    showFundusNetwork,
+    showReferralClinicManager,
+    showDataMigration,
+    showAccountSettings,
+    showSuperAdminClinicDetail,
+    showMonthlySummary,
+    showActivityLogs,
+    showTCASchedule,
+    showPboaWarning,
+    showAdminConsole,
+    showSuperAdminConsole
+  ]);
 
   useEffect(() => {
 
@@ -5182,24 +5309,27 @@ const tomorrowTCATotal = Object.values(
     </button>
 
   )}
-            <div className="flex flex-col items-end mr-1 md:mr-2">
-              <span className="text-sm font-semibold text-slate-700">{currentUser.displayName}</span>
-              <span className="text-[11px] font-black text-emerald-600 uppercase tracking-widest">
-                {currentUser.role === UserRole.SUPER_ADMIN ? 'MULTI-CLINIC ADMIN' : (currentClinic?.shortName || 'Clinic')}
-              </span>
-              <span className="text-[9px] text-slate-400 uppercase tracking-widest font-bold max-w-[240px] truncate">
-                {currentUser.role === UserRole.SUPER_ADMIN
-                  ? `SUPER ADMIN • ${currentUser.id}`
-                  : `${currentClinic?.shortName || 'KK Lintang'} • ${currentUser.role} • ${currentUser.id}`}
-              </span>
+            {/*--- Mobile: keep user identity close to the logout button; desktop layout remains unchanged ---*/}
+            <div className="flex items-center gap-1 ml-auto md:ml-0">
+              <div className="flex flex-col items-end mr-0 md:mr-2">
+                <span className="text-sm font-semibold text-slate-700 uppercase">{currentUser.displayName}</span>
+                <span className="text-[11px] font-black text-emerald-600 uppercase tracking-widest">
+                  {currentUser.role === UserRole.SUPER_ADMIN ? 'MULTI-CLINIC ADMIN' : (currentClinic?.shortName || 'Clinic')}
+                </span>
+                <span className="text-[9px] text-slate-400 uppercase tracking-widest font-bold max-w-[240px] truncate">
+                  {currentUser.role === UserRole.SUPER_ADMIN
+                    ? `SUPER ADMIN`
+                    : `${currentUser.role}`}
+                </span>
+              </div>
+              <button 
+                onClick={handleLogout}
+                className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-all"
+                title="Logout"
+              >
+                <LogOut size={20} />
+              </button>
             </div>
-            <button 
-              onClick={handleLogout}
-              className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-all"
-              title="Logout"
-            >
-              <LogOut size={20} />
-            </button>
           </div>
         </div>
       </header>
