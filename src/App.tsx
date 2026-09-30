@@ -700,6 +700,21 @@ const [unableOtherReason, setUnableOtherReason] =
     othersText: '',
     comment: ''
   });
+  //--- Mobile back button: close the active Fundus Review before browser navigation ---//
+  useEffect(() => {
+    const handleMobileBack = () => {
+      if (selectedPhotoApp) {
+        setSelectedPhotoApp(null);
+      }
+    };
+
+    window.addEventListener('popstate', handleMobileBack);
+
+    return () => {
+      window.removeEventListener('popstate', handleMobileBack);
+    };
+  }, [selectedPhotoApp]);
+
   useEffect(() => {
 
   //--- Lock the page behind every modal so the dashboard/background never scrolls together with an open popup ---//
@@ -9170,10 +9185,10 @@ setSelectedReviewSummary(app);
                   setLeftEyeAIResult(null);
                   setSelectedPhotoApp(null);
                 }}
-                className="absolute top-3 right-3 z-40 p-0 bg-transparent text-slate-500 flex items-center justify-center hover:text-slate-700 transition-all"
+                className="absolute top-3 right-3 z-40 px-3 py-2 rounded-xl bg-slate-100 text-xs font-bold hover:bg-slate-200"
                 aria-label="Close Fundus Review"
               >
-                <XCircle size={22} />
+                Close
               </button>
 
 {/* Photo Area Bahagian Review Form*/}
@@ -10435,9 +10450,9 @@ const imageReason =
   setSelectedReviewSummary(null);
 
 }}
-        className="absolute top-3 right-3 z-20 w-8 h-8 rounded-full bg-slate-200 hover:bg-slate-300 transition-all font-black"
+        className="absolute top-3 right-3 z-40 px-3 py-2 rounded-xl bg-slate-100 text-xs font-bold hover:bg-slate-200"
       >
-        x
+        Close
       </button>
 
     </div>
