@@ -1851,6 +1851,18 @@ const isReviewCompleted = (app: Appointment) => {
     });
   }, [appointments, currentUser, isCurrentClinicFundusProvider]);
 
+  //--- Monthly analytics only count appointments whose scheduled date has arrived.
+  // Future TCA appointments remain excluded until their actual appointment date.
+  const isAnalyticsDateReached = (dateValue: string | number | Date) => {
+    const appointmentDate = new Date(dateValue);
+    if (Number.isNaN(appointmentDate.getTime())) return false;
+
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+
+    return appointmentDate <= today;
+  };
+
   const monthlyStats = useMemo(() => {
     const currentMonth = selectedAnalyticsMonth.getMonth();
     const currentYear = selectedAnalyticsMonth.getFullYear();
@@ -1863,6 +1875,7 @@ const isReviewCompleted = (app: Appointment) => {
       return (
         appDate.getMonth() === currentMonth &&
         appDate.getFullYear() === currentYear &&
+        isAnalyticsDateReached(app.date) &&
         app.status !== AppointmentStatus.NO_SHOW
       );
     });
@@ -1922,6 +1935,7 @@ const monthlyRetenStats = useMemo(() => {
     return (
       appDate.getMonth() === currentMonth &&
       appDate.getFullYear() === currentYear &&
+      isAnalyticsDateReached(app.date) &&
       app.status !== AppointmentStatus.NO_SHOW
     );
 
@@ -1940,61 +1954,56 @@ const monthlyRetenStats = useMemo(() => {
 
   // Helper:
 // Determine overall screening outcome
+// Shared two-eye calculation rule used by Monthly/Yearly/Super Admin summaries.
 const getScreeningOutcome = (
   app: Appointment
 ): 'Normal' | 'Abnormal' | 'Not Obtainable' | 'Not Review Yet' => {
 
-  const rightNotObtainable =
-    app.rightEyeImageStatus === 'Not Obtainable';
+  const rightNotObtainable = app.rightEyeImageStatus === 'Not Obtainable';
+  const leftNotObtainable = app.leftEyeImageStatus === 'Not Obtainable';
 
-  const leftNotObtainable =
-    app.leftEyeImageStatus === 'Not Obtainable';
+  const rightStatus =
+    app.rightEyeReviewDetails?.status ||
+    (app.rightEyeReview === 'Normal' || app.rightEyeReview === 'Abnormal'
+      ? app.rightEyeReview
+      : '');
 
-  const rightNormal =
-    app.rightEyeReviewDetails?.status === 'Normal';
+  const leftStatus =
+    app.leftEyeReviewDetails?.status ||
+    (app.leftEyeReview === 'Normal' || app.leftEyeReview === 'Abnormal'
+      ? app.leftEyeReview
+      : '');
 
-  const leftNormal =
-    app.leftEyeReviewDetails?.status === 'Normal';
+  const rightCompleted = rightNotObtainable || !!rightStatus;
+  const leftCompleted = leftNotObtainable || !!leftStatus;
 
-  const hasCataract =
-  hasFinding(app, 'Cataract') ||
-  app.rightEyeImageReason?.trim().toLowerCase() === 'dense cataract' ||
-  app.leftEyeImageReason?.trim().toLowerCase() === 'dense cataract';
+  // Both eyes Not Obtainable: case is complete and does not require review.
+  if (rightNotObtainable && leftNotObtainable) {
+    return 'Not Obtainable';
+  }
 
-  const hasBothReviews =
-    isReviewCompleted(app);
+  // Any reviewed abnormal eye takes priority over Not Obtainable.
+  if (rightStatus === 'Abnormal' || leftStatus === 'Abnormal') {
+    return 'Abnormal';
+  }
 
-// RULE 1
-// Kedua-dua mata Normal
-if (rightNormal && leftNormal) {
-  return 'Normal';
-}
+  // One eye Not Obtainable does NOT complete the review for the other eye.
+  if (!rightCompleted || !leftCompleted) {
+    return 'Not Review Yet';
+  }
 
+  // One Normal eye + one Not Obtainable eye.
+  if (rightNotObtainable || leftNotObtainable) {
+    return 'Not Obtainable';
+  }
 
-// RULE 2
-// Cataract / Dense Cataract = ABNORMAL
-if (hasCataract) {
+  // Both eyes reviewed and Normal.
+  if (rightStatus === 'Normal' && leftStatus === 'Normal') {
+    return 'Normal';
+  }
+
+  // Defensive fallback for an unexpected completed review value.
   return 'Abnormal';
-}
-
-
-// RULE 3
-// Ada mata Not Obtainable
-if (rightNotObtainable || leftNotObtainable) {
-  return 'Not Obtainable';
-}
-
-
-// RULE 4
-// Review belum lengkap
-if (!hasBothReviews) {
-  return 'Not Review Yet';
-}
-
-
-// RULE 5
-// Selain daripada keadaan di atas = ABNORMAL
-return 'Abnormal';
 };
 
 
@@ -2183,7 +2192,7 @@ notReviewYet: monthlyApps.filter(
 
   };
 
-}, [visibleAppointments, selectedAnalyticsMonth]);
+}, [providerWorkloadAppointments, selectedAnalyticsMonth]);
 
 // =====================================================
 // DEPARTMENT STATISTICS HELPER
@@ -2219,6 +2228,7 @@ selectedAnalyticsMonth.getFullYear();
     return (
       appDate.getMonth() === currentMonth &&
       appDate.getFullYear() === currentYear &&
+      isAnalyticsDateReached(app.date) &&
       app.status !== AppointmentStatus.NO_SHOW
     );
 
@@ -2376,7 +2386,11 @@ const departmentStats = availableDepartments.reduce(
         const clinicApps = appointments.filter(app => {
           if (!app?.date || app.status === AppointmentStatus.NO_SHOW) return false;
           const d = new Date(app.date);
-          if (d.getMonth() !== month || d.getFullYear() !== year) return false;
+          if (
+            d.getMonth() !== month ||
+            d.getFullYear() !== year ||
+            !isAnalyticsDateReached(app.date)
+          ) return false;
 
           if (clinic.isFundusProvider) {
             const providerMatch = (app.fundusProviderClinicId || '').trim() === clinic.id;
@@ -2442,17 +2456,27 @@ const departmentStats = availableDepartments.reduce(
     ): 'Normal' | 'Abnormal' | 'Not Obtainable' | 'Not Review Yet' => {
       const rightNotObtainable = app.rightEyeImageStatus === 'Not Obtainable';
       const leftNotObtainable = app.leftEyeImageStatus === 'Not Obtainable';
-      const rightNormal = app.rightEyeReviewDetails?.status === 'Normal';
-      const leftNormal = app.leftEyeReviewDetails?.status === 'Normal';
-      const hasCataract =
-        hasFindingForDetail(app, 'Cataract') ||
-        app.rightEyeImageReason?.trim().toLowerCase() === 'dense cataract' ||
-        app.leftEyeImageReason?.trim().toLowerCase() === 'dense cataract';
 
-      if (rightNormal && leftNormal) return 'Normal';
-      if (hasCataract) return 'Abnormal';
+      const rightStatus =
+        app.rightEyeReviewDetails?.status ||
+        (app.rightEyeReview === 'Normal' || app.rightEyeReview === 'Abnormal'
+          ? app.rightEyeReview
+          : '');
+
+      const leftStatus =
+        app.leftEyeReviewDetails?.status ||
+        (app.leftEyeReview === 'Normal' || app.leftEyeReview === 'Abnormal'
+          ? app.leftEyeReview
+          : '');
+
+      const rightCompleted = rightNotObtainable || !!rightStatus;
+      const leftCompleted = leftNotObtainable || !!leftStatus;
+
+      if (rightNotObtainable && leftNotObtainable) return 'Not Obtainable';
+      if (rightStatus === 'Abnormal' || leftStatus === 'Abnormal') return 'Abnormal';
+      if (!rightCompleted || !leftCompleted) return 'Not Review Yet';
       if (rightNotObtainable || leftNotObtainable) return 'Not Obtainable';
-      if (!isReviewCompleted(app)) return 'Not Review Yet';
+      if (rightStatus === 'Normal' && leftStatus === 'Normal') return 'Normal';
       return 'Abnormal';
     };
 
@@ -2460,7 +2484,11 @@ const departmentStats = availableDepartments.reduce(
       if (!app?.date || app.status === AppointmentStatus.NO_SHOW) return false;
 
       const d = new Date(app.date);
-      if (d.getMonth() !== month || d.getFullYear() !== year) return false;
+      if (
+        d.getMonth() !== month ||
+        d.getFullYear() !== year ||
+        !isAnalyticsDateReached(app.date)
+      ) return false;
 
       if (clinic.isFundusProvider) {
         const providerMatch = (app.fundusProviderClinicId || '').trim() === clinic.id;
@@ -2499,6 +2527,7 @@ const departmentStats = availableDepartments.reduce(
 
     // Practice Summary = KK Lintang service workload for the current year.
     // Department is only a referring/source breakdown.
+    // Only appointments whose scheduled date has arrived are included.
     const thisYearApps = providerWorkloadAppointments.filter(app => {
       if (!app || !app.date) return false;
 
@@ -2506,6 +2535,7 @@ const departmentStats = availableDepartments.reduce(
 
       return (
         appDate.getFullYear() === currentYear &&
+        isAnalyticsDateReached(app.date) &&
         app.status !== AppointmentStatus.NO_SHOW
       );
     });
@@ -3569,7 +3599,8 @@ const monthlyAppointments = visibleAppointments.filter(app => {
 
   return (
     d.getMonth() === month &&
-    d.getFullYear() === year
+    d.getFullYear() === year &&
+    isAnalyticsDateReached(app.date)
   );
 });
 
@@ -3641,6 +3672,7 @@ link.setAttribute(
       return (
         d.getMonth() === month &&
         d.getFullYear() === year &&
+        isAnalyticsDateReached(app.date) &&
         app.status !== AppointmentStatus.NO_SHOW
       );
     });
@@ -9622,25 +9654,25 @@ setSelectedReviewSummary(app);
   <div className="flex flex-col items-center justify-center text-center">
 
     <CircleOff
-      size={80}
-      className="text-amber-500 mb-6"
+      size={56}
+      className="text-amber-500 mb-4 md:mb-6 md:w-20 md:h-20"
     />
 
-    <h2 className="text-3xl font-black text-white">
+    <h2 className="text-2xl md:text-3xl font-black text-white">
       Image Not Obtainable
     </h2>
 
-    <p className="mt-2 text-slate-300">
+    <p className="mt-2 text-sm md:text-base text-slate-300">
       No fundus image available.
     </p>
 
-    <div className="mt-8 rounded-2xl border border-amber-300 bg-amber-500/10 px-8 py-5">
+    <div className="mt-5 md:mt-8 rounded-2xl border border-amber-300 bg-amber-500/10 px-6 py-4 md:px-8 md:py-5">
 
       <p className="text-xs font-black uppercase tracking-widest text-amber-300">
         Reason
       </p>
 
-      <p className="mt-2 text-xl font-bold text-white">
+      <p className="mt-2 text-lg md:text-xl font-bold text-white">
         {
           selectedPhotoApp?.eye === "right"
             ? selectedPhotoApp?.app?.rightEyeImageReason
@@ -9718,7 +9750,9 @@ side === "right"
               
               {/* Sidebar Info & Review */}
               <div className="w-full md:w-96 flex flex-col p-4 sm:p-8 border border-slate-200 rounded-2xl bg-slate-50 h-full min-h-0 overflow-hidden flex-1 lg:flex-none" key={selectedPhotoApp?.app?.id}>
-                <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-visible pr-1">
+                {/* Desktop review panel: header/history stay fixed; only the review content scrolls.
+                    Mobile layout/behaviour is intentionally unchanged. */}
+                <div className="flex-1 min-h-0 overflow-y-auto lg:flex lg:flex-col lg:overflow-hidden pr-1">
                 <div className="flex justify-between items-start mb-6">
                   <div>
                     <h2 className="text-base sm:text-lg lg:text-2xl font-bold text-slate-800 tracking-tight">
@@ -9779,8 +9813,9 @@ side === "right"
                     }}
                   >
                     <div className="space-y-6 pr-2 summary-scrollbar lg:flex-1 lg:min-h-0 lg:overflow-y-auto">
-                      {/* Eye Selection Tabs */}
-                      <div className="flex gap-2 p-1 bg-slate-200 rounded-2xl sticky top-0 z-20">
+                      {/* Eye Selection Tabs — desktop only.
+                          Mobile already has the RE/LE controls below the fundus image. */}
+                      <div className="hidden lg:flex gap-2 p-1 bg-slate-200 rounded-2xl sticky top-0 z-20">
                         {(['right', 'left'] as const).map(eye => (
                           <button
                             key={eye}
@@ -9822,32 +9857,48 @@ const imageReason =
                             
                             <div className="space-y-6 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm min-h-0">
                               
-                              {/* Status Selection */}
-                              <div className="space-y-3">
-                                <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Findings Status</label>
-                                <div className="flex gap-4 p-1 bg-slate-100 rounded-xl">
-                                  {(['Normal', 'Abnormal'] as const).map(status => (
-                                    <button
-                                      key={status}
-                                      type="button"
-                                      onClick={() => setDetails(prev => ({ ...(prev || {
-                                        status: '',
-                                        abnormalTypes: [],
-                                        npdrSeverity: '',
-                                        othersText: '',
-                                        comment: ''
-                                      }), status }))}
-                                      className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all ${
-                                        details?.status === status 
-                                          ? (status === 'Normal' ? 'bg-emerald-600 text-white shadow-md' : 'bg-rose-600 text-white shadow-md')
-                                          : 'text-slate-500 hover:bg-slate-200'
-                                      }`}
-                                    >
-                                      {status}
-                                    </button>
-                                  ))}
+                              {/* Findings Status / Image Status */}
+                              {isNotObtainable ? (
+                                <div className="space-y-3">
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Image Status</label>
+                                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                                    <div className="flex items-center gap-3">
+                                      <span className="inline-flex px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 text-xs font-black uppercase">
+                                        Not Obtainable
+                                      </span>
+                                      <span className="text-xs font-bold text-slate-600 uppercase">
+                                        {imageReason || 'Reason not specified'}
+                                      </span>
+                                    </div>
+                                  </div>
                                 </div>
-                              </div>
+                              ) : (
+                                <div className="space-y-3">
+                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Findings Status</label>
+                                  <div className="flex gap-4 p-1 bg-slate-100 rounded-xl">
+                                    {(['Normal', 'Abnormal'] as const).map(status => (
+                                      <button
+                                        key={status}
+                                        type="button"
+                                        onClick={() => setDetails(prev => ({ ...(prev || {
+                                          status: '',
+                                          abnormalTypes: [],
+                                          npdrSeverity: '',
+                                          othersText: '',
+                                          comment: ''
+                                        }), status }))}
+                                        className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all ${
+                                          details?.status === status 
+                                            ? (status === 'Normal' ? 'bg-emerald-600 text-white shadow-md' : 'bg-rose-600 text-white shadow-md')
+                                            : 'text-slate-500 hover:bg-slate-200'
+                                        }`}
+                                      >
+                                        {status}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
 
                               {/* Abnormal Options */}
                               {details?.status === 'Abnormal' && (
@@ -10588,23 +10639,25 @@ const imageReason =
     </div>
 <div className="lg:flex-1 min-h-0 overflow-visible lg:overflow-y-auto pr-2 space-y-6 summary-scrollbar">
 
-  {/* REVIEWED BY */}
+  {/* REVIEWED BY / IMAGE STATUS BY */}
 <div className="bg-white rounded-2xl border border-slate-200 p-4">
 
   <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
   {
-    selectedReviewSummary.isEdited
-  ? 'Review Edited By'
-  : 'Reviewed By'
+    selectedReviewSummary.rightEyeImageStatus === "Not Obtainable" &&
+    selectedReviewSummary.leftEyeImageStatus === "Not Obtainable"
+      ? "Image Status By"
+      : (selectedReviewSummary.isEdited ? "Review Edited By" : "Reviewed By")
   }
 </p>
 
   <p className="text-sm font-bold text-slate-700 uppercase mt-2">
     {getUserDisplayName(
-  selectedReviewSummary.updatedBy ||
-  selectedReviewSummary.reviewedBy ||
-  '-'
-)}
+      selectedReviewSummary.rightEyeImageStatus === "Not Obtainable" &&
+      selectedReviewSummary.leftEyeImageStatus === "Not Obtainable"
+        ? (selectedReviewSummary.imageStatusUpdatedBy || "-")
+        : (selectedReviewSummary.updatedBy || selectedReviewSummary.reviewedBy || "-")
+    )}
   </p>
 
 </div>
