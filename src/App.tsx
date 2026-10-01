@@ -9947,10 +9947,10 @@ const imageReason =
                                                     othersText: '',
                                                     comment: ''
                                                   }), npdrSeverity: sev }))}
-                                                  className={`py-1.5 px-2 rounded-lg text-[10px] font-bold transition-all ${
+                                                  className={`w-full py-1.5 px-1 rounded-lg text-[9px] font-bold transition-all ${
                                                     details?.npdrSeverity === sev
                                                       ? 'bg-blue-600 text-white shadow-sm'
-                                                      : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300'
+                                                      : 'bg-white border border-slate-200 text-slate-400 hover:border-slate-300 hover:bg-slate-100 hover:text-slate-600'
                                                   }`}
                                                 >
                                                   {sev.toUpperCase()}
