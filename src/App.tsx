@@ -9448,7 +9448,7 @@ setSelectedReviewSummary(app);
               ? "Analyzing..."
               : currentAIResult
                 ? "Re-analyze"
-                : "Analyze Fundus"}
+                : "Coming Soon: Analyze with AI"}
 
           </button>
 
