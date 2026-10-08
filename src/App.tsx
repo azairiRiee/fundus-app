@@ -644,9 +644,15 @@ export default function App() {
 
   const [selectedDate, setSelectedDate] = useState('');
   const [deletingApp, setDeletingApp] = useState<Appointment | null>(null);
+  const [isDeletingAppointment, setIsDeletingAppointment] = useState(false);
   const [zoomScale, setZoomScale] = useState(1);
   const [uploadingImageId, setUploadingImageId] = useState<string | null>(null);
   const [isSavingReview, setIsSavingReview] = useState(false);
+  const [isSavingAppointment, setIsSavingAppointment] = useState(false);
+  const [isSavingStaff, setIsSavingStaff] = useState(false);
+  const [isSavingAccount, setIsSavingAccount] = useState(false);
+  const [isSavingImageStatus, setIsSavingImageStatus] = useState(false);
+  const [isAddingClinic, setIsAddingClinic] = useState(false);
   const [isReferred, setIsReferred] = useState(false);
   const [referralComment, setReferralComment] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -3116,6 +3122,7 @@ const addStaffMember = async (e: React.FormEvent) => {
   };
 
   try {
+    setIsSavingStaff(true);
     // Save to Firestore first
     await addDoc(
       collection(db, "users"),
@@ -3145,6 +3152,8 @@ const addStaffMember = async (e: React.FormEvent) => {
     alert(
       'Failed to create staff account. Please try again.'
     );
+  } finally {
+    setIsSavingStaff(false);
   }
 };
   
@@ -3154,21 +3163,30 @@ const updateStaffMember = async (e: React.FormEvent) => {
     
     if (!editingUser?.firestoreId) return;
 
-updateDoc(
-  doc(db, "users", editingUser.firestoreId),
-  {
-    ...editingUser
-  }
-);
+    setIsSavingStaff(true);
 
-    addActivityLog('Updated Staff Account', `${editingUser.displayName} (${editingUser.id})`);
-    
-    // If current user is editing themselves, update current user state too
-    if (currentUser && currentUser.id === editingUser.id) {
-      setCurrentUser(editingUser);
+    try {
+      await updateDoc(
+        doc(db, "users", editingUser.firestoreId),
+        {
+          ...editingUser
+        }
+      );
+
+      addActivityLog('Updated Staff Account', `${editingUser.displayName} (${editingUser.id})`);
+      
+      // If current user is editing themselves, update current user state too
+      if (currentUser && currentUser.id === editingUser.id) {
+        setCurrentUser(editingUser);
+      }
+      
+      setEditingUser(null);
+    } catch (error) {
+      console.error('Failed to update staff account', error);
+      alert('Failed to update staff account. Please try again.');
+    } finally {
+      setIsSavingStaff(false);
     }
-    
-    setEditingUser(null);
   };
 
   const handleAccountUpdate = async () => {
@@ -3203,6 +3221,8 @@ updateDoc(
   }
 
   try {
+
+    setIsSavingAccount(true);
 
     await updateDoc(
       doc(db, "users", currentUser.firestoreId),
@@ -3244,6 +3264,10 @@ setTimeout(() => {
     console.error(error);
 
     alert('Failed to update account');
+
+  } finally {
+
+    setIsSavingAccount(false);
 
   }
 
@@ -3992,6 +4016,7 @@ link.setAttribute(
 ) => {
 
   try {
+    setIsSavingAppointment(true);
     //--- Validate referral/provider routing against Fundus Network before saving ---//
     const referringClinicId =
       formReferringClinicId ||
@@ -4151,6 +4176,10 @@ link.setAttribute(
       e
     );
 
+  } finally {
+
+    setIsSavingAppointment(false);
+
   }
 
 };
@@ -4162,6 +4191,10 @@ link.setAttribute(
   const deleteAppointment = async (
   id: string
 ) => {
+
+  if (isDeletingAppointment) return;
+
+  setIsDeletingAppointment(true);
 
   try {
 
@@ -4192,6 +4225,10 @@ link.setAttribute(
       e
     );
 
+  } finally {
+
+    setIsDeletingAppointment(false);
+
   }
 
 };
@@ -4201,6 +4238,8 @@ const saveImageNotObtainable = async () => {
   if (!selectedUnableApp?.firestoreId) return;
 
   try {
+
+    setIsSavingImageStatus(true);
 
     const reason =
       unableReason === "Others"
@@ -4298,6 +4337,10 @@ if (bothNotObtainable) {
   } catch (error) {
 
     console.error(error);
+
+  } finally {
+
+    setIsSavingImageStatus(false);
 
   }
 
@@ -7675,6 +7718,7 @@ setSelectedReviewSummary(app);
               <div className="p-6 overflow-y-auto space-y-6">
                 <form onSubmit={async (e) => {
                   e.preventDefault();
+                  setIsAddingClinic(true);
                   const id = newClinicId.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
                   if (!id || !newClinicName.trim()) return;
                   if (clinics.some(c => c.id === id)) { alert('Clinic ID already exists.'); return; }
@@ -7697,6 +7741,8 @@ setSelectedReviewSummary(app);
                   } catch (error) {
                     console.error('Failed to create clinic', error);
                     alert('Failed to create clinic. Please try again.');
+                  } finally {
+                    setIsAddingClinic(false);
                   }
                 }} className="p-5 rounded-2xl border border-blue-100 bg-blue-50/50">
                   <div className="flex items-center gap-2 mb-4">
@@ -7712,7 +7758,7 @@ setSelectedReviewSummary(app);
                         <option key={color.key} value={color.key}>{color.label}</option>
                       ))}
                     </select>
-                    <button type="submit" className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-widest">Add Clinic</button>
+                    <button type="submit" disabled={isAddingClinic} className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-widest disabled:opacity-50">{isAddingClinic ? 'Saving...' : 'Add Clinic'}</button>
                   </div>
                   <label className="flex items-center gap-2 mt-3 text-xs font-bold text-slate-600 cursor-pointer">
                     <input type="checkbox" checked={newClinicIsFundusProvider} onChange={e => setNewClinicIsFundusProvider(e.target.checked)} />
@@ -7989,6 +8035,8 @@ setSelectedReviewSummary(app);
                 <button 
                   onClick={() => {
 
+  if (isSavingStaff) return;
+
   setShowAdminConsole(false);
 
   setEditingUser(null);
@@ -8193,15 +8241,18 @@ setSelectedReviewSummary(app);
 
     <button
       type="submit"
+      disabled={isSavingStaff}
       className={`${
         editingUser
           ? 'bg-emerald-600 hover:bg-emerald-700'
           : 'bg-blue-600 hover:bg-blue-700'
       } text-white font-black px-5 py-2.5 rounded-xl transition-all shadow-lg active:scale-95 text-[10px] uppercase tracking-widest`}
     >
-      {editingUser
-        ? 'Save Changes'
-        : 'Create Account'}
+      {isSavingStaff
+        ? 'Saving...'
+        : editingUser
+          ? 'Save Changes'
+          : 'Create Account'}
     </button>
 
   </div>
@@ -8637,7 +8688,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={closeForm}
+              onClick={() => !isSavingAppointment && closeForm()}
               className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
             />
             <motion.div 
@@ -8650,7 +8701,7 @@ setSelectedReviewSummary(app);
                 <h2 className="text-lg font-bold text-slate-800">
                   {editingAppointment ? 'Edit Appointment' : 'Create Appointment'}
                 </h2>
-                <button onClick={closeForm} className="text-slate-400 hover:text-slate-600">
+                <button onClick={() => !isSavingAppointment && closeForm()} disabled={isSavingAppointment} className="text-slate-400 hover:text-slate-600 disabled:opacity-50">
                   <XCircle size={24} />
                 </button>
               </div>
@@ -8967,16 +9018,18 @@ setSelectedReviewSummary(app);
                 <div className="flex gap-3 pt-4">
                   <button 
                     type="button"
-                    onClick={closeForm}
+                    onClick={() => !isSavingAppointment && closeForm()}
+                    disabled={isSavingAppointment}
                     className="flex-1 px-4 py-2 border border-slate-200 text-slate-600 rounded-lg font-semibold hover:bg-slate-50 transition-colors"
                   >
                     Cancel
                   </button>
                   <button 
                     type="submit"
+                    disabled={isSavingAppointment}
                     className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors shadow-lg"
                   >
-                    {editingAppointment ? 'Save Changes' : 'Confirm Appointment'}
+                    {isSavingAppointment ? 'Saving...' : editingAppointment ? 'Save Changes' : 'Confirm Appointment'}
                   </button>
                 </div>
               </form>
@@ -8993,7 +9046,7 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setDeletingApp(null)}
+              onClick={() => !isDeletingAppointment && setDeletingApp(null)}
               className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
             />
             <motion.div 
@@ -9013,16 +9066,18 @@ setSelectedReviewSummary(app);
               </p>
               <div className="flex gap-3">
                 <button 
-                  onClick={() => setDeletingApp(null)}
+                  onClick={() => !isDeletingAppointment && setDeletingApp(null)}
+                  disabled={isDeletingAppointment}
                   className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors"
                 >
                   Cancel
                 </button>
                 <button 
                   onClick={() => deletingApp && deleteAppointment(deletingApp.id)}
-                  className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-rose-100 active:scale-95"
+                  disabled={isDeletingAppointment}
+                  className="flex-1 py-2.5 bg-rose-600 disabled:opacity-60 disabled:cursor-not-allowed hover:bg-rose-700 text-white font-bold rounded-xl transition-all shadow-lg shadow-rose-100 active:scale-95"
                 >
-                  Delete Now
+                  {isDeletingAppointment ? 'Deleting...' : 'Delete Now'}
                 </button>
               </div>
             </motion.div>
@@ -9041,7 +9096,7 @@ setSelectedReviewSummary(app);
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        onClick={() => setShowImageNotObtainable(false)}
+        onClick={() => !isSavingImageStatus && setShowImageNotObtainable(false)}
         className="absolute inset-0 bg-slate-900/80 backdrop-blur-md"
       />
 
@@ -9290,7 +9345,8 @@ setSelectedReviewSummary(app);
         <div className="sticky bottom-0 bg-white border-t border-slate-200 p-4 flex gap-3">
 
           <button
-            onClick={() => setShowImageNotObtainable(false)}
+            disabled={isSavingImageStatus}
+            onClick={() => !isSavingImageStatus && setShowImageNotObtainable(false)}
             className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 font-bold text-slate-600 transition hover:bg-slate-50"
           >
             Cancel
@@ -9298,13 +9354,10 @@ setSelectedReviewSummary(app);
 
           <button
   onClick={saveImageNotObtainable}
-  disabled={
-    unableReason === "Others" &&
-    !unableOtherReason.trim()
-  }
+  disabled={isSavingImageStatus || (unableReason === "Others" && !unableOtherReason.trim())}
   className="flex-1 rounded-xl bg-amber-500 hover:bg-amber-600 py-2.5 font-bold text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
 >
-  Save Status
+  {isSavingImageStatus ? 'Saving...' : 'Save Status'}
 </button>
 
         </div>
@@ -11046,6 +11099,8 @@ const imageReason =
         exit={{ opacity: 0 }}
         onClick={() => {
 
+  if (isSavingAccount) return;
+
   setShowAccountSettings(false);
 
   setCurrentPasswordInput('');
@@ -11093,6 +11148,8 @@ const imageReason =
           <button
             onClick={() => {
 
+  if (isSavingAccount) return;
+
   setShowAccountSettings(false);
 
   setCurrentPasswordInput('');
@@ -11102,7 +11159,8 @@ const imageReason =
   setNewDisplayName(currentUser?.displayName || '');
 
 }}
-            className="p-2 rounded-xl hover:bg-slate-200 text-slate-400 transition-all"
+            disabled={isSavingAccount}
+            className="p-2 rounded-xl hover:bg-slate-200 text-slate-400 transition-all disabled:opacity-50"
           >
             <XCircle size={22} />
           </button>
@@ -11233,10 +11291,11 @@ const imageReason =
           {/* Save Button */}
           <button
           onClick={handleAccountUpdate}
+          disabled={isSavingAccount}
             className="w-full py-4 bg-gradient-to-r from-slate-900 to-blue-900 hover:bg-gradient-to-r hover:from-slate-800 hover:to-blue-800 text-white font-black rounded-2xl transition-all uppercase tracking-widest text-xs"
           >
 
-            Save Changes
+            {isSavingAccount ? 'Saving...' : 'Save Changes'}
 
           </button>
 
