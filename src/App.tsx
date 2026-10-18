@@ -73,7 +73,7 @@ import {
 
 import { analyzeFundus } from "./services/aiService";
 
-const APP_VERSION = "v4.0.0-beta.2";
+const APP_VERSION = "v4.1.0-beta.2";
 
 // =====================================================
 // CLINIC / FACILITY MASTER
