@@ -21,6 +21,7 @@ import {
   AlertCircle,
   Users,
   Download,
+  Printer,
   Lock,
   UserPlus,
   ShieldCheck,
@@ -72,7 +73,7 @@ import {
 
 import { analyzeFundus } from "./services/aiService";
 
-const APP_VERSION = "v4.0.0-beta.1";
+const APP_VERSION = "v4.0.0-beta.2";
 
 // =====================================================
 // CLINIC / FACILITY MASTER
@@ -91,6 +92,8 @@ interface Clinic {
   id: string;
   name: string;
   shortName: string;
+  address?: string;
+  phone?: string;
   active: boolean;
   isFundusProvider: boolean;
   //--- Persistent clinic identity color; Super Admin can change this from Clinic Management ---//
@@ -307,6 +310,14 @@ type ImageStatus =
   date: string;
   remarks: string;
 
+  //--- Optional visual acuity recorded during appointment creation ---//
+  rightEyeVAUnaided?: string;
+  leftEyeVAUnaided?: string;
+  rightEyeVAWithGlasses?: string;
+  leftEyeVAWithGlasses?: string;
+  rightEyeVAPinhole?: string;
+  leftEyeVAPinhole?: string;
+
   // =========================
   // Fundus Images
   // =========================
@@ -342,7 +353,7 @@ type ImageStatus =
   
   rightEyeReview?: string;
   rightEyeReviewDetails?: {
-    status: 'Normal' | 'Abnormal' | '';
+    status: 'Normal' | 'Abnormal' | 'Ungradable' | '';
     abnormalTypes?: string[];
     npdrSeverity?: 'mild' | 'moderate' | 'severe' | '';
     othersText?: string;
@@ -351,7 +362,7 @@ type ImageStatus =
 
   leftEyeReview?: string;
   leftEyeReviewDetails?: {
-    status: 'Normal' | 'Abnormal' | '';
+    status: 'Normal' | 'Abnormal' | 'Ungradable' | '';
     abnormalTypes?: string[];
     npdrSeverity?: 'mild' | 'moderate' | 'severe' | '';
     othersText?: string;
@@ -368,6 +379,8 @@ type ImageStatus =
   createdBy: string;
   rightEyeUploadedBy?: string;
   leftEyeUploadedBy?: string;
+  rightEyePhotoUploadedAt?: number;
+  leftEyePhotoUploadedAt?: number;
 
   updatedBy: string;
   createdAt: number;
@@ -447,6 +460,35 @@ const formatDisplayDate = (date: string) => {
 // --- Main Application ---
 
 export default function App() {
+  //--- Read-only V/A summary reused in clinical review and visit-history views ---//
+  const renderVisualAcuity = (record: any) => {
+    if (!record) return null;
+    const rows = [
+      { label: 'Unaided', right: record.rightEyeVAUnaided, left: record.leftEyeVAUnaided },
+      { label: 'With Glasses', right: record.rightEyeVAWithGlasses, left: record.leftEyeVAWithGlasses },
+      { label: 'Pinhole', right: record.rightEyeVAPinhole, left: record.leftEyeVAPinhole },
+    ].filter(row => String(row.right || '').trim() || String(row.left || '').trim());
+
+    if (rows.length === 0) return null;
+
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 p-3 mb-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Visual Acuity (V/A)</p>
+        <div className="grid grid-cols-[minmax(0,1fr)_64px_64px] gap-x-2 gap-y-2 items-center">
+          <span />
+          <span className="text-[9px] font-black uppercase text-slate-400 text-center">RE</span>
+          <span className="text-[9px] font-black uppercase text-slate-400 text-center">LE</span>
+          {rows.map(row => (
+            <React.Fragment key={row.label}>
+              <span className="text-xs font-medium text-slate-600">{row.label}</span>
+              <span className="rounded-lg bg-slate-50 border border-slate-100 px-2 py-1.5 text-xs font-bold text-slate-700 text-center">{row.right || '-'}</span>
+              <span className="rounded-lg bg-slate-50 border border-slate-100 px-2 py-1.5 text-xs font-bold text-slate-700 text-center">{row.left || '-'}</span>
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+    );
+  };
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = sessionStorage.getItem('clinic_current_user');
     if (!saved) return null;
@@ -519,6 +561,12 @@ export default function App() {
   const [newClinicId, setNewClinicId] = useState('');
   const [newClinicName, setNewClinicName] = useState('');
   const [newClinicShortName, setNewClinicShortName] = useState('');
+  const [newClinicAddress, setNewClinicAddress] = useState('');
+  const [newClinicPhone, setNewClinicPhone] = useState('');
+  const [editingClinicAddressId, setEditingClinicAddressId] = useState<string | null>(null);
+  const [clinicAddressDraft, setClinicAddressDraft] = useState('');
+  const [clinicPhoneDraft, setClinicPhoneDraft] = useState('');
+  const [clinicAddressSaving, setClinicAddressSaving] = useState<string | null>(null);
   const [newClinicIsFundusProvider, setNewClinicIsFundusProvider] = useState(false);
   //--- Super Admin clinic color assignment ---//
   const [newClinicColorKey, setNewClinicColorKey] = useState<ClinicColorKey>('pink');
@@ -593,7 +641,6 @@ export default function App() {
   const [formReferringClinicId, setFormReferringClinicId] = useState('');
   const [formFundusProviderClinicId, setFormFundusProviderClinicId] = useState('');
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
-
   //---Default fundus provider follows the current clinic configuration---//
   useEffect(() => {
     if (!isFormOpen || editingAppointment) return;
@@ -668,6 +715,10 @@ export default function App() {
   const [showPatientHistory, setShowPatientHistory] = useState(false);
   const [summaryEye, setSummaryEye] = useState<'right' | 'left'>('right');
   const [selectedReviewSummary, setSelectedReviewSummary] = useState<any>(null);
+  //--- Print-only fields: never persisted to the appointment or Firestore ---//
+  const [printReportApp, setPrintReportApp] = useState<Appointment | null>(null);
+  const [printReportFields, setPrintReportFields] = useState<Record<string, string>>({});
+  const [isGeneratingPatientReport, setIsGeneratingPatientReport] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredReviewId, setHoveredReviewId] = useState<string | null>(null);
 
@@ -676,6 +727,23 @@ export default function App() {
   const [existingPatient, setExistingPatient] = useState<Appointment | null>(null);
   const [duplicatePatient, setDuplicatePatient] = useState<Appointment | null>(null);
   const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
+
+  //--- Show only the V/A examination types selected by the user or already recorded ---//
+  const [visibleVAMethods, setVisibleVAMethods] = useState<string[]>([]);
+  const [vaMethodToAdd, setVaMethodToAdd] = useState('');
+
+  useEffect(() => {
+    if (!isFormOpen) return;
+    const record = editingAppointment || existingPatient;
+    const methods = [
+      { key: 'Unaided', right: record?.rightEyeVAUnaided, left: record?.leftEyeVAUnaided },
+      { key: 'With Glasses', right: record?.rightEyeVAWithGlasses, left: record?.leftEyeVAWithGlasses },
+      { key: 'Pinhole', right: record?.rightEyeVAPinhole, left: record?.leftEyeVAPinhole },
+    ];
+    setVisibleVAMethods(methods.filter(method => method.right || method.left).map(method => method.key));
+    setVaMethodToAdd('');
+  }, [isFormOpen, editingAppointment, existingPatient]);
+
 
   const [showImageNotObtainable, setShowImageNotObtainable] = useState(false);
 const [selectedUnableApp, setSelectedUnableApp] =
@@ -732,7 +800,8 @@ const [unableOtherReason, setUnableOtherReason] =
     !!deletingApp,
     !!userToDelete,
     showDuplicateWarning,
-    showImageNotObtainable
+    showImageNotObtainable,
+    !!printReportApp
   ].filter(Boolean).length;
 
   useEffect(() => {
@@ -774,7 +843,9 @@ const [unableOtherReason, setUnableOtherReason] =
       modalHistoryCountRef.current -= 1;
 
       //--- Close only the currently active/top modal; existing close functions remain untouched ---//
-      if (showImageNotObtainable) {
+      if (printReportApp) {
+        setPrintReportApp(null);
+      } else if (showImageNotObtainable) {
         setShowImageNotObtainable(false);
       } else if (deletingApp) {
         setDeletingApp(null);
@@ -872,7 +943,8 @@ const [unableOtherReason, setUnableOtherReason] =
     !!deletingApp ||
     !!userToDelete ||
     showDuplicateWarning ||
-    showImageNotObtainable;
+    showImageNotObtainable ||
+    !!printReportApp;
 
   if (modalOpen) {
     document.body.style.overflow = 'hidden';
@@ -905,7 +977,8 @@ const [unableOtherReason, setUnableOtherReason] =
   deletingApp,
   userToDelete,
   showDuplicateWarning,
-  showImageNotObtainable
+  showImageNotObtainable,
+  printReportApp
 ]);
 
 const analyzeWithAI = async () => {
@@ -1963,20 +2036,20 @@ const monthlyRetenStats = useMemo(() => {
 // Shared two-eye calculation rule used by Monthly/Yearly/Super Admin summaries.
 const getScreeningOutcome = (
   app: Appointment
-): 'Normal' | 'Abnormal' | 'Not Obtainable' | 'Not Review Yet' => {
+): 'Normal' | 'Abnormal' | 'Ungradable' | 'Not Obtainable' | 'Not Review Yet' => {
 
   const rightNotObtainable = app.rightEyeImageStatus === 'Not Obtainable';
   const leftNotObtainable = app.leftEyeImageStatus === 'Not Obtainable';
 
   const rightStatus =
     app.rightEyeReviewDetails?.status ||
-    (app.rightEyeReview === 'Normal' || app.rightEyeReview === 'Abnormal'
+    (app.rightEyeReview === 'Normal' || app.rightEyeReview === 'Abnormal' || app.rightEyeReview === 'Ungradable'
       ? app.rightEyeReview
       : '');
 
   const leftStatus =
     app.leftEyeReviewDetails?.status ||
-    (app.leftEyeReview === 'Normal' || app.leftEyeReview === 'Abnormal'
+    (app.leftEyeReview === 'Normal' || app.leftEyeReview === 'Abnormal' || app.leftEyeReview === 'Ungradable'
       ? app.leftEyeReview
       : '');
 
@@ -2001,6 +2074,11 @@ const getScreeningOutcome = (
   // One Normal eye + one Not Obtainable eye.
   if (rightNotObtainable || leftNotObtainable) {
     return 'Not Obtainable';
+  }
+
+  // Ungradable is a completed clinical review outcome, distinct from Normal/Abnormal.
+  if (rightStatus === 'Ungradable' || leftStatus === 'Ungradable') {
+    return 'Ungradable';
   }
 
   // Both eyes reviewed and Normal.
@@ -2128,6 +2206,10 @@ normal: monthlyApps.filter(
 
 abnormal: monthlyApps.filter(
   app => getScreeningOutcome(app) === 'Abnormal'
+).length,
+
+ungradable: monthlyApps.filter(
+  app => getScreeningOutcome(app) === 'Ungradable'
 ).length,
 
 notObtainable: monthlyApps.filter(
@@ -2459,19 +2541,19 @@ const departmentStats = availableDepartments.reduce(
 
     const getScreeningOutcomeForDetail = (
       app: Appointment
-    ): 'Normal' | 'Abnormal' | 'Not Obtainable' | 'Not Review Yet' => {
+    ): 'Normal' | 'Abnormal' | 'Ungradable' | 'Not Obtainable' | 'Not Review Yet' => {
       const rightNotObtainable = app.rightEyeImageStatus === 'Not Obtainable';
       const leftNotObtainable = app.leftEyeImageStatus === 'Not Obtainable';
 
       const rightStatus =
         app.rightEyeReviewDetails?.status ||
-        (app.rightEyeReview === 'Normal' || app.rightEyeReview === 'Abnormal'
+        (app.rightEyeReview === 'Normal' || app.rightEyeReview === 'Abnormal' || app.rightEyeReview === 'Ungradable'
           ? app.rightEyeReview
           : '');
 
       const leftStatus =
         app.leftEyeReviewDetails?.status ||
-        (app.leftEyeReview === 'Normal' || app.leftEyeReview === 'Abnormal'
+        (app.leftEyeReview === 'Normal' || app.leftEyeReview === 'Abnormal' || app.leftEyeReview === 'Ungradable'
           ? app.leftEyeReview
           : '');
 
@@ -2482,6 +2564,7 @@ const departmentStats = availableDepartments.reduce(
       if (rightStatus === 'Abnormal' || leftStatus === 'Abnormal') return 'Abnormal';
       if (!rightCompleted || !leftCompleted) return 'Not Review Yet';
       if (rightNotObtainable || leftNotObtainable) return 'Not Obtainable';
+      if (rightStatus === 'Ungradable' || leftStatus === 'Ungradable') return 'Ungradable';
       if (rightStatus === 'Normal' && leftStatus === 'Normal') return 'Normal';
       return 'Abnormal';
     };
@@ -2510,6 +2593,7 @@ const departmentStats = availableDepartments.reduce(
       total: clinicApps.length,
       normal: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Normal').length,
       abnormal: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Abnormal').length,
+      ungradable: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Ungradable').length,
       notObtainable: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Not Obtainable').length,
       notReviewYet: clinicApps.filter(app => getScreeningOutcomeForDetail(app) === 'Not Review Yet').length,
       mildNPDR: clinicApps.filter(app => hasNPDRSeverityForDetail(app, 'mild')).length,
@@ -3445,6 +3529,11 @@ if (rightCompleted && leftCompleted) {
     : 'leftEyeUploadedBy'
   ]: currentUser?.id || 'UNKNOWN',
 
+  [eye === 'right'
+    ? 'rightEyePhotoUploadedAt'
+    : 'leftEyePhotoUploadedAt'
+  ]: Date.now(),
+
   updatedBy: currentUser?.id || 'unknown',
   updatedAt: Date.now()
 };
@@ -3685,6 +3774,372 @@ link.setAttribute(
     }
   };
 
+  //--- Open a print-only completion popup. These values are used for this PDF only. ---//
+  const printPatientReport = (app: Appointment) => {
+    setPrintReportFields({
+      dmDuration: '', hba1c: '', urineAlbumin: '', serumCreatinine: '', history: '',
+      otherDiseases: [...(app.diseaseTypes || []), app.otherDisease].filter(Boolean).join(', '),
+      rightEyeVAUnaided: app.rightEyeVAUnaided || '', leftEyeVAUnaided: app.leftEyeVAUnaided || '',
+      rightEyeVAWithGlasses: app.rightEyeVAWithGlasses || '', leftEyeVAWithGlasses: app.leftEyeVAWithGlasses || '',
+      rightEyeVAPinhole: app.rightEyeVAPinhole || '', leftEyeVAPinhole: app.leftEyeVAPinhole || '',
+      staffName: '', staffDesignation: '', staffStamp: '', staffDate: new Date().toLocaleDateString('en-GB'),
+      ophthalmologyReport: '', ophthalmologyRecommendation: '', ophthalmologyAppointment: '',
+      ophthalmologySignature: '', ophthalmologyStamp: '', ophthalmologyDate: '', referralReason: app.referralComment || ''
+    });
+    setPrintReportApp(app);
+  };
+
+  //--- Generate A4 PDF using saved patient data plus temporary print-only popup values. ---//
+  const generatePatientReport = async (app: Appointment, fields: Record<string, string>) => {
+    setIsGeneratingPatientReport(true);
+    try {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 10;
+      const contentWidth = pageWidth - margin * 2;
+      const navy: [number, number, number] = [20, 48, 88];
+      const blue: [number, number, number] = [44, 105, 180];
+      const paleBlue: [number, number, number] = [220, 234, 248];
+      const lineColor: [number, number, number] = [160, 181, 205];
+      const muted: [number, number, number] = [88, 105, 128];
+      const ink: [number, number, number] = [30, 41, 59];
+      let y = 8;
+
+      const line = (x1: number, y1: number, x2: number, y2: number) => {
+        doc.setDrawColor(...lineColor);
+        doc.setLineWidth(0.22);
+        doc.line(x1, y1, x2, y2);
+      };
+      const valueOrBlank = (value: unknown) => String(value ?? '').trim();
+      const blankField = (label: string, x: number, yy: number, width: number, value?: unknown, lineY = 5.5) => {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7.2);
+        doc.setTextColor(...ink);
+        const labelText = `${label}:`;
+        doc.text(labelText, x, yy);
+        const labelW = Math.min(doc.getTextWidth(labelText) + 1.5, width * 0.46);
+        const val = valueOrBlank(value);
+        if (val) {
+          // Saved details are printed cleanly without an underline beneath them.
+          doc.setFont('helvetica', 'bold');
+          doc.text(doc.splitTextToSize(val, Math.max(5, width - labelW)).slice(0, 2), x + labelW, yy);
+        } else {
+          // Missing details get a handwriting line aligned with the label baseline.
+          line(x + labelW, yy + 0.55, x + width, yy + 0.55);
+        }
+      };
+      const section = (number: number, title: string) => {
+        doc.setFillColor(...paleBlue);
+        doc.roundedRect(margin, y, contentWidth, 7, 1.5, 1.5, 'F');
+        doc.setFillColor(...navy);
+        doc.circle(margin + 4.1, y + 3.5, 2.35, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6.8);
+        doc.text(String(number), margin + 4.1, y + 4.1, { align: 'center' });
+        doc.setTextColor(...navy);
+        doc.setFontSize(7.7);
+        doc.text(title.toUpperCase(), margin + 8, y + 4.6);
+        y += 10;
+      };
+      const eyeFinding = (eye: 'right' | 'left') => {
+        const details = eye === 'right' ? app.rightEyeReviewDetails : app.leftEyeReviewDetails;
+        const review = eye === 'right' ? app.rightEyeReview : app.leftEyeReview;
+        const imageStatus = eye === 'right' ? app.rightEyeImageStatus : app.leftEyeImageStatus;
+        const imageReason = eye === 'right' ? app.rightEyeImageReason : app.leftEyeImageReason;
+        if (imageStatus === 'Not Obtainable') return { status: '', abnormal: false, ungradable: false, types: [] as string[], severity: '', others: imageReason || 'Imej tidak dapat diperoleh', comment: '' };
+        return {
+          status: details?.status || review || '',
+          abnormal: (details?.status || review || '').toLowerCase() === 'abnormal',
+          ungradable: (details?.status || review || '').toLowerCase() === 'ungradable',
+          types: details?.abnormalTypes || [],
+          severity: details?.npdrSeverity || '',
+          others: details?.othersText || '',
+          comment: details?.comment || ''
+        };
+      };
+      const checkbox = (x: number, yy: number, label: string, checked: boolean, labelSize = 6.5) => {
+        doc.setDrawColor(80, 95, 112);
+        doc.setLineWidth(0.25);
+        doc.rect(x, yy - 2.3, 3, 3);
+        if (checked) {
+          doc.setDrawColor(...blue);
+          doc.line(x + 0.5, yy - 0.8, x + 1.2, yy - 0.1);
+          doc.line(x + 1.2, yy - 0.1, x + 2.6, yy - 2);
+        }
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(labelSize);
+        doc.setTextColor(...ink);
+        doc.text(label, x + 4.5, yy);
+      };
+      const logo = await loadPdfImage(roundLogo);
+      const sinarWordmark = await loadPdfImage(textLogo);
+      // Align the PDF header with the popup preview: fixed-width logo column,
+      // undistorted logo assets, and title/clinic details centered in the remaining column.
+      // Match the popup header dimensions in A4 units (popup is laid out in CSS pixels).
+      // Logo column: 76px, gap: 12px, round logo: 48px, wordmark: max 76px x 16px.
+      const pxToMm = (px: number) => px * 25.4 / 96;
+      const headerLogoColW = pxToMm(76);
+      const headerGap = pxToMm(12);
+      const headerTextW = contentWidth - headerLogoColW - headerGap;
+      const headerTextCenterX = margin + headerLogoColW + headerGap + headerTextW / 2;
+      if (logo) {
+        try { doc.addImage(logo, logo.startsWith('data:image/png') ? 'PNG' : 'JPEG', margin + (headerLogoColW - pxToMm(48)) / 2, y, pxToMm(48), pxToMm(48)); } catch { /* continue without logo */ }
+      }
+      if (sinarWordmark) {
+        try {
+          // CSS object-contain equivalent: fit the wordmark inside 76x16px without stretching it.
+          const wordmarkProps = doc.getImageProperties(sinarWordmark);
+          const wordmarkMaxW = pxToMm(76);
+          const wordmarkMaxH = pxToMm(16);
+          const wordmarkScale = Math.min(wordmarkMaxW / wordmarkProps.width, wordmarkMaxH / wordmarkProps.height);
+          const wordmarkW = wordmarkProps.width * wordmarkScale;
+          const wordmarkH = wordmarkProps.height * wordmarkScale;
+          doc.addImage(sinarWordmark, 'PNG', margin + (headerLogoColW - wordmarkW) / 2, y + pxToMm(48 + 4 + (16 - wordmarkH * 96 / 25.4) / 2), wordmarkW, wordmarkH);
+        } catch { /* continue without wordmark */ }
+      }
+      // This text stack mirrors the preview's centered title/name/address/phone block.
+      doc.setTextColor(...navy);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(12); // popup: text-base on desktop
+      doc.text('REKOD PEMERIKSAAN FUNDUS & RUJUKAN', headerTextCenterX, y + 5, { align: 'center' });
+      const reportClinic = getClinicById(clinics, superAdminClinicContext || currentUser?.clinicId) || currentClinic;
+      const reportClinicName = reportClinic?.name || reportClinic?.shortName || reportClinic?.id || '';
+      const reportClinicAddress = String(reportClinic?.address || '').trim();
+      const reportClinicPhone = String(reportClinic?.phone || '').trim();
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5); // popup: 10px
+      doc.setTextColor(...muted);
+      if (reportClinicName) {
+        doc.text(doc.splitTextToSize(reportClinicName, headerTextW).slice(0, 1), headerTextCenterX, y + 9.2, { align: 'center' });
+      }
+      let clinicHeaderY = y + 12.0; // address starts after the same small gap as preview
+      if (reportClinicAddress) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(6.75); // popup: 9px
+        const addressLines = reportClinicAddress.split(/\r?\n/).flatMap(line => doc.splitTextToSize(line.trim(), headerTextW));
+        const visibleAddressLines = addressLines.filter(Boolean); // preserve every address line
+        visibleAddressLines.forEach((addressLine, index) => {
+          doc.text(addressLine, headerTextCenterX, clinicHeaderY + index * pxToMm(11), { align: 'center' });
+        });
+        if (visibleAddressLines.length) clinicHeaderY += visibleAddressLines.length * pxToMm(11);
+      }
+      if (reportClinicPhone) {
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6.75);
+        doc.text(`Tel: ${reportClinicPhone}`, headerTextCenterX, clinicHeaderY, { align: 'center' });
+        clinicHeaderY += pxToMm(13);
+      }
+      // Popup header uses 12px bottom padding and a 3px navy divider.
+      y += Math.max(pxToMm(80), clinicHeaderY - y + pxToMm(8));
+      doc.setDrawColor(...navy);
+      doc.setLineWidth(0.8);
+      doc.line(margin, y, pageWidth - margin, y);
+      doc.setLineWidth(0.22);
+      y += 4;
+
+      // 1. Patient information: fields without saved values deliberately remain blank for handwriting.
+      section(1, 'Maklumat Pesakit');
+      const gap = 5;
+      const colW = (contentWidth - gap) / 2;
+      blankField('Nama Pesakit', margin + 2, y, colW - 2, app.patientName); 
+      blankField('No. K/P', margin + colW + gap, y, colW - 2, app.icNumber); y += 7;
+      blankField('Klinik Kesihatan (Asal)', margin + 2, y, colW - 2, getClinicById(clinics, getReferringClinicId(app))?.name || '');
+      blankField('No. Telefon', margin + colW + gap, y, colW - 2, app.phoneNumber); y += 7;
+      const patientInfoX = margin + 2;
+      const rightInfoX = margin + colW + gap;
+      const compactFieldW = colW * 0.68;
+      blankField('Diabetes Mellitus sejak', patientInfoX, y, compactFieldW, fields.dmDuration);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.2); doc.setTextColor(...ink);
+      blankField('HbA1c', rightInfoX, y, colW - 2, fields.hba1c); y += 7;
+      blankField('Urine Albumin', patientInfoX, y, colW - 2, fields.urineAlbumin);
+      blankField('Serum Creatinine', rightInfoX, y, colW - 2, fields.serumCreatinine); y += 7;
+      blankField('Penyakit Lain', margin + 2, y, colW - 2, fields.otherDiseases || '');
+      blankField('Tarikh Pemeriksaan', rightInfoX, y, colW - 2, app.date ? new Date(app.date).toLocaleDateString('en-GB') : ''); y += 7;
+      blankField('Sejarah ringkas', margin + 2, y, contentWidth - 4, fields.history); y += 7;
+
+      // 2. Visual acuity: show saved values and leave all missing entries writable.
+      section(2, 'Visual Acuity (V/A)');
+      const tx = margin + 2;
+      const tw = contentWidth - 4;
+      const labelW = tw * 0.36;
+      const eyeW = (tw - labelW) / 2;
+      doc.setFillColor(243, 247, 252);
+      doc.rect(tx, y, tw, 6.2, 'F');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(6.7); doc.setTextColor(...navy);
+      doc.text('PEMERIKSAAN', tx + 3, y + 4.1);
+      doc.text('RE (MATA KANAN)', tx + labelW + eyeW / 2, y + 4.1, { align: 'center' });
+      doc.text('LE (MATA KIRI)', tx + labelW + eyeW + eyeW / 2, y + 4.1, { align: 'center' });
+      y += 6.2;
+      const vaRows: [string, unknown, unknown][] = [
+        ['Unaided', fields.rightEyeVAUnaided, fields.leftEyeVAUnaided],
+        ['With Glasses', fields.rightEyeVAWithGlasses, fields.leftEyeVAWithGlasses],
+        ['Pinhole', fields.rightEyeVAPinhole, fields.leftEyeVAPinhole]
+      ];
+      vaRows.forEach(([label, right, left]) => {
+        line(tx, y + 6, tx + tw, y + 6);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...ink);
+        doc.text(label, tx + 3, y + 4);
+        const rv = valueOrBlank(right); const lv = valueOrBlank(left);
+        if (rv) doc.text(rv, tx + labelW + eyeW / 2, y + 4, { align: 'center' }); else line(tx + labelW + 8, y + 4.5, tx + labelW + eyeW - 8, y + 4.5);
+        if (lv) doc.text(lv, tx + labelW + eyeW + eyeW / 2, y + 4, { align: 'center' }); else line(tx + labelW + eyeW + 8, y + 4.5, tx + tw - 8, y + 4.5);
+        y += 6;
+      });
+      // Enclose only the header and three V/A rows; avoid an unnecessary fourth blank row.
+      doc.setDrawColor(...lineColor); doc.rect(tx, y - 18, tw, 18);
+      doc.line(tx + labelW, y - 18, tx + labelW, y);
+      doc.line(tx + labelW + eyeW, y - 18, tx + labelW + eyeW, y);
+      y += 4;
+
+      // 3. Fundus photographs, each with upload date and staff fields.
+      section(3, 'Gambar Fundus');
+      const photoGap = 5;
+      const photoW = (contentWidth - photoGap) / 2;
+      const photoH = 55;
+      const rightPhoto = app.rightEyePhoto ? await loadPdfImage(app.rightEyePhoto) : null;
+      const leftPhoto = app.leftEyePhoto ? await loadPdfImage(app.leftEyePhoto) : null;
+      const photoBoxes = [
+        { x: margin, title: 'MATA KANAN (RE)', data: rightPhoto, uploadedBy: app.rightEyeUploadedBy, uploadedAt: app.rightEyePhotoUploadedAt },
+        { x: margin + photoW + photoGap, title: 'MATA KIRI (LE)', data: leftPhoto, uploadedBy: app.leftEyeUploadedBy, uploadedAt: app.leftEyePhotoUploadedAt }
+      ];
+      photoBoxes.forEach(photo => {
+        doc.setDrawColor(...lineColor); doc.roundedRect(photo.x, y, photoW, photoH + 17, 1.8, 1.8, 'S');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(6.8); doc.setTextColor(...navy);
+        doc.text(photo.title, photo.x + photoW / 2, y + 4.5, { align: 'center' });
+        if (photo.data) {
+          try {
+            const format = photo.data.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+            const imgW = 59; const imgH = 49;
+            doc.addImage(photo.data, format, photo.x + (photoW - imgW) / 2, y + 6, imgW, imgH, undefined, 'FAST');
+          } catch (error) { console.warn('Could not embed fundus photo in PDF', error); }
+        } else {
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...muted);
+          doc.text('Tiada gambar fundus', photo.x + photoW / 2, y + 27, { align: 'center' });
+        }
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(6.2); doc.setTextColor(...ink);
+        const uploadedAtText = photo.uploadedAt ? new Date(photo.uploadedAt).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+        doc.text(`Tarikh / masa imej: ${uploadedAtText || '____ / ____ / ______  ______'}`, photo.x + photoW / 2, y + 60, { align: 'center' });
+        doc.text(`Dimuat naik oleh: ${photo.uploadedBy ? getUserDisplayName(photo.uploadedBy) : '________________'}`, photo.x + photoW / 2, y + 64, { align: 'center' });
+      });
+      y += photoH + 21;
+
+      // 4. Examination findings are kept on page 1 below the fundus photographs.
+      section(4, 'Dapatan Pemeriksaan');
+      const findingGap = 5;
+      const findingW = (contentWidth - findingGap) / 2;
+      const findingY = y;
+      // Wrap the complete clinical notes and size the finding cards to fit them.
+      const getFindingExtra = (eye: 'right' | 'left') => {
+        const f = eyeFinding(eye);
+        return [f.others, f.comment].filter(Boolean).join(' | ');
+      };
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.2);
+      const rightNoteLines = getFindingExtra('right') ? doc.splitTextToSize(getFindingExtra('right'), findingW - 17) : [];
+      const leftNoteLines = getFindingExtra('left') ? doc.splitTextToSize(getFindingExtra('left'), findingW - 17) : [];
+      const maxNoteLines = Math.max(1, rightNoteLines.length, leftNoteLines.length);
+      const findingHeight = Math.max(45, 43 + (maxNoteLines - 1) * 3.2);
+      const drawEyeFinding = (x: number, eye: 'right' | 'left') => {
+        const f = eyeFinding(eye);
+        const eyeTitle = eye === 'right' ? 'MATA KANAN (RE)' : 'MATA KIRI (LE)';
+        doc.setFillColor(243, 247, 252); doc.rect(x, findingY, findingW, 5.5, 'F');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(6.6); doc.setTextColor(...navy); doc.text(eyeTitle, x + 3, findingY + 3.8);
+        let fy = findingY + 9;
+        checkbox(x + 3, fy, 'Normal', f.status === 'Normal', 6.5); fy += 4.1;
+        checkbox(x + 3, fy, 'Abnormal', f.abnormal, 6.5); fy += 4.1;
+        // Abnormal sub-findings stay grouped under Abnormal; Ungradable is a separate final outcome.
+        checkbox(x + 8, fy, 'NPDR (Mild / Moderate / Severe)', f.types.some(t => t.toLowerCase().includes('npdr'))); fy += 4.1;
+        checkbox(x + 8, fy, 'PDR', f.types.some(t => t.toLowerCase().includes('pdr') && !t.toLowerCase().includes('npdr'))); fy += 4.1;
+        checkbox(x + 8, fy, 'Maculopathy', f.types.some(t => t.toLowerCase().includes('maculopathy'))); fy += 4.1;
+        checkbox(x + 8, fy, 'Lain-lain', !!f.others);
+        if (f.severity) { doc.setFontSize(6.2); doc.text(`- ${f.severity}`, x + 29, fy); }
+        fy += 4.1;
+        checkbox(x + 3, fy, 'Ungradable', f.ungradable, 6.5);
+        fy += 4.2;
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(6.2); doc.setTextColor(...ink);
+        const extra = getFindingExtra(eye);
+        doc.text('Catatan: ', x + 3, fy);
+        if (extra) doc.text(doc.splitTextToSize(extra, findingW - 17), x + 16, fy);
+        else line(x + 16, fy + 0.5, x + findingW - 3, fy + 0.5);
+      };
+      doc.setDrawColor(...lineColor); doc.roundedRect(margin, y, contentWidth, findingHeight, 1.2, 1.2, 'S');
+      drawEyeFinding(margin, 'right');
+      drawEyeFinding(margin + findingW + findingGap, 'left');
+      doc.setDrawColor(...lineColor); doc.line(margin + findingW + findingGap / 2, y, margin + findingW + findingGap / 2, y + findingHeight);
+      y += findingHeight + 3; y += 2;
+      // Referral reason: wrap the full text across as many lines as needed (no 2-line truncation).
+      blankField('Kes Dirujuk', margin + 2, y, 38, app.referred === true ? 'Ya' : app.referred === false ? 'Tidak' : '');
+      const referralLabel = 'Jika Ya, nyatakan sebab:';
+      const referralX = margin + 45;
+      const referralTextX = referralX + 34;
+      const referralTextWidth = Math.max(10, margin + contentWidth - referralTextX);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.2);
+      doc.setTextColor(...ink);
+      doc.text(referralLabel, referralX, y);
+      const referralText = valueOrBlank(fields.referralReason);
+      if (referralText) {
+        doc.setFont('helvetica', 'bold');
+        const referralLines = doc.splitTextToSize(referralText, referralTextWidth);
+        doc.text(referralLines, referralTextX, y);
+        // jsPDF's small-font line spacing is approximately 3.2 mm; reserve room for every line.
+        y += Math.max(8, referralLines.length * 3.2 + 3);
+      } else {
+        line(referralTextX, y + 0.55, margin + contentWidth, y + 0.55);
+        y += 8;
+      }
+
+      // Page 1 now contains sections 1–4. Continue with staff verification and specialist fields on page 2.
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(...muted);
+      doc.text(`Dijana oleh SINAR pada ${new Date().toLocaleString('en-GB')}`, pageWidth - margin, pageHeight - 5, { align: 'right' });
+      doc.addPage();
+      y = 12;
+      doc.setTextColor(...navy); doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+      doc.text('SAMBUNGAN REKOD PEMERIKSAAN FUNDUS & RUJUKAN', margin, y);
+      y += 6;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(...muted);
+      doc.text(`Nama: ${app.patientName || ''}    No. K/P: ${app.icNumber || ''}`, margin, y);
+      y += 4;
+      line(margin, y, pageWidth - margin, y);
+      y += 5;
+
+      // 5. Staff verification, preserving blank signature/job-title fields for manual completion.
+      section(5, 'Pengesahan Petugas'); y += 5;
+      const hasReview = !!(app.rightEyeReview || app.leftEyeReview || app.rightEyeReviewDetails?.status || app.leftEyeReviewDetails?.status);
+      blankField('Tandatangan', margin + 2, y, colW - 2, ''); y += 9;
+      blankField('Cop Rasmi', margin + 2, y, fields.staffStamp);
+      blankField('Tarikh', margin + colW + gap, y, colW - 2, fields.staffDate); y += 18;
+
+      // 6. Ophthalmology use: writable fields remain empty in the generated report.
+      section(6, 'Untuk Kegunaan Pakar Oftalmologi'); y += 5;
+      blankField('Laporan', margin + 2, y, contentWidth - 4, fields.ophthalmologyReport); y += 8;
+      line(margin + 2, y, pageWidth - margin - 2, y); y += 7;
+      line(margin + 2, y, pageWidth - margin - 2, y); y += 6; y += 5;
+      blankField('Syor', margin + 2, y, contentWidth - 4, fields.ophthalmologyRecommendation); y += 8;
+      line(margin + 2, y, pageWidth - margin - 2, y); y += 7;
+      line(margin + 2, y, pageWidth - margin - 2, y); y += 6; y += 5;
+      blankField('Temujanji di Klinik Oftalmologi', margin + 2, y, contentWidth - 4, fields.ophthalmologyAppointment); y += 8; y += 5;
+      blankField('Tandatangan', margin + 2, y, colW - 2, fields.ophthalmologySignature); y += 9;
+      blankField('Cop Rasmi', margin + 2, y, fields.ophthalmologyStamp);
+      blankField('Tarikh', margin + colW + gap, y, colW - 2, fields.ophthalmologyDate);
+
+      // The report uses a dedicated second page for findings and referral details; no extra notes page.
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(...muted);
+      doc.text(`Dijana oleh SINAR pada ${new Date().toLocaleString('en-GB')}`, pageWidth - margin, pageHeight - 5, { align: 'right' });
+      const safeName = (app.patientName || 'Patient').replace(/[^a-z0-9-_]/gi, '_');
+      const safeDate = (app.date || new Date().toISOString().slice(0, 10)).replace(/[^0-9-]/g, '');
+      doc.save(`SINAR_Fundus_${safeName}_${safeDate}.pdf`);
+      addActivityLog('Printed Patient Fundus Report', app.patientName || '-');
+      setPrintReportApp(null);
+    } catch (error) {
+      console.error('Failed to generate patient report', error);
+      alert('Tak berjaya jana laporan pesakit. Sila cuba lagi.');
+    } finally {
+      setIsGeneratingPatientReport(false);
+    }
+  };
+
   //--- Generate a real downloadable PDF for the selected month; no browser print dialog required ---//
   const exportToPDF = async () => {
     const month = selectedAnalyticsMonth.getMonth();
@@ -3765,6 +4220,7 @@ link.setAttribute(
     const outcomeRows = [
       ['Normal', monthlyRetenStats.normal],
       ['Abnormal', monthlyRetenStats.abnormal],
+      ['Ungradable', monthlyRetenStats.ungradable],
       ['Not Obtainable', monthlyRetenStats.notObtainable],
       ['Not Review Yet', monthlyRetenStats.notReviewYet]
     ];
@@ -4139,6 +4595,14 @@ link.setAttribute(
         remarks:
           data.remarks || '',
 
+        //--- Optional visual acuity; empty values are allowed ---//
+        rightEyeVAUnaided: data.rightEyeVAUnaided || '',
+        leftEyeVAUnaided: data.leftEyeVAUnaided || '',
+        rightEyeVAWithGlasses: data.rightEyeVAWithGlasses || '',
+        leftEyeVAWithGlasses: data.leftEyeVAWithGlasses || '',
+        rightEyeVAPinhole: data.rightEyeVAPinhole || '',
+        leftEyeVAPinhole: data.leftEyeVAPinhole || '',
+
         status:
           AppointmentStatus.PENDING,
 
@@ -4500,7 +4964,8 @@ const sortedAndFilteredAppointments = useMemo(() => {
         (filterReview === 'Abnormal' &&
           isAbnormal) ||
         (filterReview === 'Normal' &&
-          isNormal);
+          isNormal) ||
+        (filterReview === 'Ungradable' && isUngradable);
 
       return (
         matchesSearch &&
@@ -5987,7 +6452,19 @@ year:'numeric'
                     <h3 className="font-bold text-slate-800 text-[15px] leading-tight truncate">
                       {app.patientName}
                     </h3>
-                  <p className="text-[11px] font-medium text-slate-500 mb-4">{app.icNumber}</p>
+                  <p className="text-[11px] font-medium text-slate-500 mb-2">{app.icNumber}</p>
+
+                  {String(app.remarks || '').trim() && (
+                    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle size={14} className="mt-0.5 shrink-0 text-amber-700" />
+                        <div className="min-w-0">
+                          <p className="text-[9px] font-black uppercase tracking-wider text-amber-800">Remarks</p>
+                          <p className="mt-1 text-xs leading-relaxed text-slate-700 whitespace-pre-wrap break-words">{app.remarks}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="space-y-2 mb-4">
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-tighter mb-1 px-1">Upload Images</p>
@@ -6256,7 +6733,7 @@ year:'numeric'
     <option value="All">All Reviews (Any)</option>
     <option value="Pending">Pending Review</option>
     <option value="Abnormal">Abnormal Findings</option>
-    <option value="Normal">Normal Findings</option>
+    <option value="Normal">Normal Findings</option>\n     <option value="Ungradable">Ungradable</option>
   </select>
 </div>
 
@@ -6785,7 +7262,9 @@ setSelectedReviewSummary(app);
       className={`text-[10px] font-bold uppercase leading-none ${
         details?.status === "Abnormal"
           ? "text-rose-600"
-          : "text-emerald-600"
+          : details?.status === "Ungradable"
+            ? "text-orange-600"
+            : "text-emerald-600"
       }`}
     >
       {details?.status || "Reviewed"}
@@ -6850,6 +7329,18 @@ setSelectedReviewSummary(app);
     return (
       <div className="flex flex-col items-center gap-2">
 
+        <div className="flex items-center gap-2">
+        {isReviewCompleted(app) && (
+          <button
+            onClick={() => void printPatientReport(app)}
+            className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+            title="Print Patient Report (PDF)"
+            aria-label={`Print patient report for ${app.patientName || 'patient'}`}
+          >
+            <Printer size={18} />
+          </button>
+        )}
+
         {/* ADMIN ONLY */}
         {(currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN) && (
           <div className="flex items-center gap-2">
@@ -6875,6 +7366,7 @@ setSelectedReviewSummary(app);
 
           </div>
         )}
+        </div>
 
         {/* REPEAT FUNDUS */}
         <button
@@ -7726,6 +8218,8 @@ setSelectedReviewSummary(app);
                     id,
                     name: newClinicName.trim(),
                     shortName: newClinicShortName.trim() || newClinicName.trim(),
+                    address: newClinicAddress.trim(),
+                    phone: newClinicPhone.trim(),
                     active: true,
                     isFundusProvider: newClinicIsFundusProvider,
                     colorKey: newClinicColorKey,
@@ -7736,6 +8230,8 @@ setSelectedReviewSummary(app);
                     setNewClinicId('');
                     setNewClinicName('');
                     setNewClinicShortName('');
+                    setNewClinicAddress('');
+                    setNewClinicPhone('');
                     setNewClinicIsFundusProvider(false);
                     setNewClinicColorKey('pink');
                   } catch (error) {
@@ -7749,10 +8245,12 @@ setSelectedReviewSummary(app);
                     <Plus size={16} className="text-blue-600" />
                     <p className="text-xs font-black text-slate-800 uppercase tracking-widest">Add New Clinic</p>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
                     <input required value={newClinicId} onChange={e => setNewClinicId(e.target.value)} placeholder="CLINIC_ID" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-blue-500" />
                     <input required value={newClinicName} onChange={e => setNewClinicName(e.target.value)} placeholder="Clinic name" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                     <input value={newClinicShortName} onChange={e => setNewClinicShortName(e.target.value)} placeholder="Short name" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                    <textarea value={newClinicAddress} onChange={e => setNewClinicAddress(e.target.value)} rows={3} placeholder="Full clinic address (one line per row)" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500 md:col-span-2 resize-y" />
+                    <input value={newClinicPhone} onChange={e => setNewClinicPhone(e.target.value)} placeholder="Clinic telephone number" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                     <select value={newClinicColorKey} onChange={e => setNewClinicColorKey(e.target.value as ClinicColorKey)} className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500">
                       {CLINIC_COLORS.map(color => (
                         <option key={color.key} value={color.key}>{color.label}</option>
@@ -7775,6 +8273,33 @@ setSelectedReviewSummary(app);
                           <span className="text-[9px] font-black px-2 py-0.5 rounded bg-slate-100 text-slate-500 uppercase">{clinic.id}</span>
                         </div>
                         <p className="text-xs text-slate-400 mt-1">{clinic.shortName}</p>
+                        {editingClinicAddressId === clinic.id ? (
+                          <div className="mt-3 flex flex-col gap-2 max-w-2xl">
+                            <textarea value={clinicAddressDraft} onChange={e => setClinicAddressDraft(e.target.value)} rows={3} placeholder="Alamat penuh klinik (satu baris untuk setiap baris alamat)" className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
+                            <input value={clinicPhoneDraft} onChange={e => setClinicPhoneDraft(e.target.value)} placeholder="No. telefon klinik" className="w-full sm:max-w-sm px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                            <div className="flex gap-2">
+                              <button type="button" disabled={clinicAddressSaving === clinic.id} onClick={async () => {
+                                setClinicAddressSaving(clinic.id);
+                                try {
+                                  await updateDoc(doc(db, 'clinics', clinic.id), { address: clinicAddressDraft.trim(), phone: clinicPhoneDraft.trim() });
+                                  addActivityLog('Updated Clinic Address and Telephone', clinic.name, currentUser.displayName);
+                                  setEditingClinicAddressId(null);
+                                } catch (error) {
+                                  console.error('Failed to update clinic address', error);
+                                  alert('Failed to update clinic address. Please try again.');
+                                } finally {
+                                  setClinicAddressSaving(null);
+                                }
+                              }} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-black disabled:opacity-50">{clinicAddressSaving === clinic.id ? 'Saving...' : 'Save address'}</button>
+                              <button type="button" disabled={clinicAddressSaving === clinic.id} onClick={() => setEditingClinicAddressId(null)} className="px-3 py-2 rounded-lg border border-slate-200 text-slate-600 text-xs font-bold">Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-2 flex items-start gap-2">
+                            <div className="min-w-0"><p className="text-xs text-slate-500 whitespace-pre-line">{clinic.address || 'Full address not set'}</p><p className="text-xs text-slate-500 mt-1">{clinic.phone ? `Tel: ${clinic.phone}` : 'Telephone not set'}</p></div>
+                            <button type="button" onClick={() => { setEditingClinicAddressId(clinic.id); setClinicAddressDraft(clinic.address || ''); setClinicPhoneDraft(clinic.phone || ''); }} className="shrink-0 px-2 py-1 rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50 text-[10px] font-black">{clinic.address ? 'Edit address' : 'Add address'}</button>
+                          </div>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <div className="flex items-center gap-2">
@@ -8642,6 +9167,10 @@ setSelectedReviewSummary(app);
                     <p className="text-[8px] font-black text-rose-600 uppercase">Abnormal</p>
                     <p className="text-2xl font-black text-rose-600 mt-1">{superAdminClinicMonthlyDetail.abnormal}</p>
                   </div>
+                  <div className="text-center rounded-2xl bg-orange-50 border border-orange-100 p-3">
+                    <p className="text-[8px] font-black text-orange-600 uppercase">Ungradable</p>
+                    <p className="text-2xl font-black text-orange-600 mt-1">{superAdminClinicMonthlyDetail.ungradable}</p>
+                  </div>
                   <div className="text-center rounded-2xl bg-amber-50 border border-amber-100 p-3">
                     <p className="text-[8px] font-black text-amber-600 uppercase">Not Obtainable</p>
                     <p className="text-2xl font-black text-amber-600 mt-1">{superAdminClinicMonthlyDetail.notObtainable}</p>
@@ -8721,6 +9250,12 @@ setSelectedReviewSummary(app);
                       remarks: (formData.get('remarks') as string || '').toUpperCase().trim(),
                       diseaseTypes: selectedDiseases,
                       otherDisease: ((formData.get('otherDisease') as string) || '').toUpperCase().trim(),
+                      rightEyeVAUnaided: ((formData.get('rightEyeVAUnaided') as string) || '').trim(),
+                      leftEyeVAUnaided: ((formData.get('leftEyeVAUnaided') as string) || '').trim(),
+                      rightEyeVAWithGlasses: ((formData.get('rightEyeVAWithGlasses') as string) || '').trim(),
+                      leftEyeVAWithGlasses: ((formData.get('leftEyeVAWithGlasses') as string) || '').trim(),
+                      rightEyeVAPinhole: ((formData.get('rightEyeVAPinhole') as string) || '').trim(),
+                      leftEyeVAPinhole: ((formData.get('leftEyeVAPinhole') as string) || '').trim(),
                     });
                   }}
               >
@@ -8779,7 +9314,8 @@ setSelectedReviewSummary(app);
                       REFERRAL / FUNDUS ROUTING
                       Source clinic and fundus provider are separate fields.
                      ========================================================= */}
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-2 gap-4 items-start">
+                    <div className="min-w-0 space-y-4">
                     {/*--- ASAL / KLINIK PERUJUK ---*/}
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
@@ -8819,6 +9355,56 @@ setSelectedReviewSummary(app);
                       </p>
                     </div>
 
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Medical History</label>
+                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                      {DISEASE_OPTIONS.map(d => (
+                        <label key={d} className="flex items-center gap-2 cursor-pointer group">
+                          <input 
+                            type="checkbox" 
+                            name={`disease_${d}`}
+                            defaultChecked={
+  editingAppointment
+    ? !!editingAppointment.diseaseTypes?.includes(d)
+    : !!existingPatient?.diseaseTypes?.includes(d)
+}
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm font-medium text-slate-700 group-hover:text-blue-600">{d}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex items-center gap-2">
+                       <label className="flex items-center gap-2 min-w-[70px]">
+                        <input 
+                          type="checkbox" 
+                          name="has_other"
+                          defaultChecked={
+  editingAppointment
+    ? !!editingAppointment.otherDisease
+    : !!existingPatient?.otherDisease
+}
+                          onChange={(e) => {
+                            const input = document.getElementById('other-input') as HTMLInputElement;
+                            if (input) input.disabled = !e.target.checked;
+                          }}
+                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-medium text-slate-700">Other</span>
+                      </label>
+                      <input 
+                        id="other-input"
+                        name="otherDisease"
+                        type="text" 
+                        disabled={!(editingAppointment?.otherDisease || existingPatient?.otherDisease)}
+                        defaultValue={editingAppointment?.otherDisease ?? existingPatient?.otherDisease ?? ""}
+                        placeholder="Please specify..."
+                        className="w-28 sm:w-32 max-w-[140px] px-2 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 uppercase disabled:bg-slate-50 disabled:text-slate-400"
+                      />
+                    </div>
+                  </div>
+                    </div>
+                    <div className="min-w-0 space-y-4">
                     {/*--- KLINIK RUJUKAN FUNDUS ---*/}
                     <div>
                       <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
@@ -8869,56 +9455,70 @@ setSelectedReviewSummary(app);
                         Fasiliti yang menjalankan pemeriksaan fundus untuk patient ini.
                       </p>
                     </div>
+
+                  {/*--- Compact Visual Acuity: add only the examination types needed ---*/}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                      Visual Acuity (V/A)
+                    </label>
+                    <select
+                      value={vaMethodToAdd}
+                      onChange={e => {
+                        const method = e.target.value;
+                        if (method) {
+                          setVisibleVAMethods(prev => prev.includes(method) ? prev : [...prev, method]);
+                        }
+                        setVaMethodToAdd('');
+                      }}
+                      className="w-full px-2.5 py-2 border border-slate-200 rounded-lg bg-white text-xs text-slate-600 outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="">+ Add V/A examination</option>
+                      <option value="Unaided" disabled={visibleVAMethods.includes('Unaided')}>Unaided</option>
+                      <option value="With Glasses" disabled={visibleVAMethods.includes('With Glasses')}>With Glasses</option>
+                      <option value="Pinhole" disabled={visibleVAMethods.includes('Pinhole')}>Pinhole</option>
+                    </select>
+
+                    {visibleVAMethods.length > 0 && (
+                      <div className="mt-2 space-y-2">
+                        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2 items-center">
+                          <span />
+                          <span className="text-[10px] sm:text-xs font-bold text-slate-500 text-center">RE (Right Eye)</span>
+                          <span className="text-[10px] sm:text-xs font-bold text-slate-500 text-center">LE (Left Eye)</span>
+                        </div>
+                        {visibleVAMethods.map(method => {
+                          const fields = method === 'Unaided'
+                            ? { right: 'rightEyeVAUnaided', left: 'leftEyeVAUnaided' }
+                            : method === 'With Glasses'
+                              ? { right: 'rightEyeVAWithGlasses', left: 'leftEyeVAWithGlasses' }
+                              : { right: 'rightEyeVAPinhole', left: 'leftEyeVAPinhole' };
+                          const record = editingAppointment || existingPatient;
+                          const rightValue = method === 'Unaided'
+                            ? record?.rightEyeVAUnaided
+                            : method === 'With Glasses'
+                              ? record?.rightEyeVAWithGlasses
+                              : record?.rightEyeVAPinhole;
+                          const leftValue = method === 'Unaided'
+                            ? record?.leftEyeVAUnaided
+                            : method === 'With Glasses'
+                              ? record?.leftEyeVAWithGlasses
+                              : record?.leftEyeVAPinhole;
+                          return (
+                            <div key={method} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] gap-2 items-center">
+                              <div className="flex items-center gap-1 min-w-0">
+                                <span className="text-[11px] text-slate-600 leading-tight">{method}</span>
+                                <button type="button" aria-label={`Remove ${method}`} onClick={() => setVisibleVAMethods(prev => prev.filter(item => item !== method))} className="ml-auto shrink-0 text-slate-400 hover:text-rose-600 text-sm leading-none">×</button>
+                              </div>
+                              <input aria-label={`${method} visual acuity right eye`} name={fields.right} type="text" defaultValue={rightValue ?? ''} className="min-w-0 w-full px-2 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
+                              <input aria-label={`${method} visual acuity left eye`} name={fields.left} type="text" defaultValue={leftValue ?? ''} className="min-w-0 w-full px-2 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Medical History</label>
-                    <div className="flex flex-wrap gap-x-4 gap-y-2">
-                      {DISEASE_OPTIONS.map(d => (
-                        <label key={d} className="flex items-center gap-2 cursor-pointer group">
-                          <input 
-                            type="checkbox" 
-                            name={`disease_${d}`}
-                            defaultChecked={
-  editingAppointment
-    ? !!editingAppointment.diseaseTypes?.includes(d)
-    : !!existingPatient?.diseaseTypes?.includes(d)
-}
-                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                          />
-                          <span className="text-sm font-medium text-slate-700 group-hover:text-blue-600">{d}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <div className="mt-3 flex items-center gap-2">
-                       <label className="flex items-center gap-2 min-w-[70px]">
-                        <input 
-                          type="checkbox" 
-                          name="has_other"
-                          defaultChecked={
-  editingAppointment
-    ? !!editingAppointment.otherDisease
-    : !!existingPatient?.otherDisease
-}
-                          onChange={(e) => {
-                            const input = document.getElementById('other-input') as HTMLInputElement;
-                            if (input) input.disabled = !e.target.checked;
-                          }}
-                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        <span className="text-sm font-medium text-slate-700">Other</span>
-                      </label>
-                      <input 
-                        id="other-input"
-                        name="otherDisease"
-                        type="text" 
-                        disabled={!(editingAppointment?.otherDisease || existingPatient?.otherDisease)}
-                        defaultValue={editingAppointment?.otherDisease ?? existingPatient?.otherDisease ?? ""}
-                        placeholder="Please specify..."
-                        className="flex-1 px-3 py-1.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 uppercase disabled:bg-slate-50 disabled:text-slate-400"
-                      />
-                    </div>
-                  </div>
                   <div className="grid grid-cols-1">
                     <div>
   <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
@@ -9828,7 +10428,15 @@ side === "right"
                         <span className="px-2 py-1 bg-slate-200 text-slate-700 text-[10px] font-bold rounded uppercase">{selectedPhotoApp?.app?.otherDisease}</span>
                       )}
                     </div>
+                    {String(selectedPhotoApp?.app?.remarks || '').trim() && (
+                      <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-800">Remarks</p>
+                        <p className="mt-1 text-xs leading-relaxed text-slate-700 whitespace-pre-wrap break-words">{selectedPhotoApp?.app?.remarks}</p>
+                      </div>
+                    )}
                   </div>
+
+                  {renderVisualAcuity(selectedPhotoApp?.app)}
 
                   <form 
                     className="flex flex-col flex-1 min-h-0"
@@ -9837,7 +10445,7 @@ side === "right"
                       // Generate summary text from details
                       const generateSummary = (details: Appointment['rightEyeReviewDetails']) => {
                         if (!details || !details.status) return '';
-                        let summary = details.status === 'Normal' ? 'NORMAL' : 'ABNORMAL';
+                        let summary = details.status === 'Normal' ? 'NORMAL' : details.status === 'Ungradable' ? 'UNGRADABLE' : 'ABNORMAL';
                         
                         if (details.status === 'Abnormal') {
                           if (details.abnormalTypes && details.abnormalTypes.length > 0) {
@@ -9928,27 +10536,65 @@ const imageReason =
                               ) : (
                                 <div className="space-y-3">
                                   <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Findings Status</label>
-                                  <div className="flex gap-4 p-1 bg-slate-100 rounded-xl">
-                                    {(['Normal', 'Abnormal'] as const).map(status => (
+                                  <div className="space-y-2">
+                                    <div className="grid grid-cols-2 gap-3 p-1 bg-slate-100 rounded-xl">
+                                      {(['Normal', 'Abnormal'] as const).map(status => (
+                                        <button
+                                          key={status}
+                                          type="button"
+                                          onClick={() => setDetails(prev => {
+                                            const current = prev || {
+                                              status: '',
+                                              abnormalTypes: [],
+                                              npdrSeverity: '',
+                                              othersText: '',
+                                              comment: ''
+                                            };
+                                            // Tap the selected status again to return to the initial, unselected state.
+                                            if (current.status === status) {
+                                              return { ...current, status: '', abnormalTypes: [], npdrSeverity: '', othersText: '' };
+                                            }
+                                            // A Normal result must not retain any previous abnormal findings.
+                                            if (status === 'Normal') {
+                                              return { ...current, status, abnormalTypes: [], npdrSeverity: '', othersText: '' };
+                                            }
+                                            return { ...current, status, abnormalTypes: [], npdrSeverity: '', othersText: '' };
+                                          })}
+                                          className={`py-2 px-4 rounded-lg text-xs font-bold transition-all ${
+                                            details?.status === status
+                                              ? (status === 'Normal' ? 'bg-emerald-600 text-white shadow-md' : 'bg-rose-600 text-white shadow-md')
+                                              : 'text-slate-500 hover:bg-slate-200'
+                                          }`}
+                                        >
+                                          {status}
+                                        </button>
+                                      ))}
+                                    </div>
+                                    {(!details?.status || details.status === 'Ungradable') && (
                                       <button
-                                        key={status}
                                         type="button"
-                                        onClick={() => setDetails(prev => ({ ...(prev || {
-                                          status: '',
-                                          abnormalTypes: [],
-                                          npdrSeverity: '',
-                                          othersText: '',
-                                          comment: ''
-                                        }), status }))}
-                                        className={`flex-1 py-2 px-4 rounded-lg text-xs font-bold transition-all ${
-                                          details?.status === status 
-                                            ? (status === 'Normal' ? 'bg-emerald-600 text-white shadow-md' : 'bg-rose-600 text-white shadow-md')
-                                            : 'text-slate-500 hover:bg-slate-200'
+                                        onClick={() => setDetails(prev => {
+                                          const current = prev || {
+                                            status: '',
+                                            abnormalTypes: [],
+                                            npdrSeverity: '',
+                                            othersText: '',
+                                            comment: ''
+                                          };
+                                          if (current.status === 'Ungradable') {
+                                            return { ...current, status: '' };
+                                          }
+                                          return { ...current, status: 'Ungradable', abnormalTypes: [], npdrSeverity: '', othersText: '' };
+                                        })}
+                                        className={`w-full py-2 px-4 rounded-lg text-xs font-bold transition-all ${
+                                          details?.status === 'Ungradable'
+                                            ? 'bg-amber-500 text-white shadow-md'
+                                            : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
                                         }`}
                                       >
-                                        {status}
+                                        Ungradable
                                       </button>
-                                    ))}
+                                    )}
                                   </div>
                                 </div>
                               )}
@@ -10049,7 +10695,7 @@ const imageReason =
                                     othersText: '',
                                     comment: ''
                                   }), comment: e.target.value }))}
-                                  className="w-full p-4 text-xs bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 min-h-[70px] resize-none uppercase shadow-inner"
+                                  className="w-full p-4 text-xs bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 min-h-[120px] resize-y uppercase shadow-inner"
                                 />
                               </div>
                             </div>
@@ -10245,6 +10891,75 @@ const imageReason =
           </button>
 
         </div>
+
+        {/* Compact patient details shown before the fundus upload information */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Patient Name</p>
+            <p className="mt-1 truncate text-xs font-bold text-slate-700" title={selectedHistory.patientName || '-'}>
+              {selectedHistory.patientName || '-'}
+            </p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">IC Number</p>
+            <p className="mt-1 truncate text-xs font-bold text-slate-700" title={selectedHistory.icNumber || '-'}>
+              {selectedHistory.icNumber || '-'}
+            </p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Medical History</p>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {[...(selectedHistory.diseaseTypes || []), ...(selectedHistory.otherDisease ? [selectedHistory.otherDisease] : [])].length > 0 ? (
+                [...(selectedHistory.diseaseTypes || []), ...(selectedHistory.otherDisease ? [selectedHistory.otherDisease] : [])].map((disease, index) => (
+                  <span key={`${disease}-${index}`} className="rounded-md bg-rose-50 px-1.5 py-0.5 text-[9px] font-bold text-rose-600">
+                    {disease}
+                  </span>
+                ))
+              ) : (
+                <span className="text-xs text-slate-500">-</span>
+              )}
+            </div>
+          </div>
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Visual Acuity (V/A)</p>
+            <div className="mt-1 space-y-1.5">
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1.5">
+                <span />
+                <span className="w-10 text-center text-[8px] font-black text-slate-400">RE</span>
+                <span className="w-10 text-center text-[8px] font-black text-slate-400">LE</span>
+              </div>
+              {[
+                { label: 'Unaided', right: selectedHistory.rightEyeVAUnaided, left: selectedHistory.leftEyeVAUnaided },
+                { label: 'With Glasses', right: selectedHistory.rightEyeVAWithGlasses, left: selectedHistory.leftEyeVAWithGlasses },
+                { label: 'Pinhole', right: selectedHistory.rightEyeVAPinhole, left: selectedHistory.leftEyeVAPinhole },
+              ].filter(row => String(row.right || '').trim() || String(row.left || '').trim()).map(row => (
+                <div key={row.label} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-1.5">
+                  <span className="min-w-0 text-[9px] leading-tight text-slate-600">{row.label}</span>
+                  <span className="w-10 rounded-md border border-slate-100 bg-white px-1 py-1 text-center text-[9px] font-bold text-slate-700">{row.right || '-'}</span>
+                  <span className="w-10 rounded-md border border-slate-100 bg-white px-1 py-1 text-center text-[9px] font-bold text-slate-700">{row.left || '-'}</span>
+                </div>
+              ))}
+              {!selectedHistory.rightEyeVAUnaided && !selectedHistory.leftEyeVAUnaided &&
+               !selectedHistory.rightEyeVAWithGlasses && !selectedHistory.leftEyeVAWithGlasses &&
+               !selectedHistory.rightEyeVAPinhole && !selectedHistory.leftEyeVAPinhole && (
+                <span className="text-xs text-slate-500">-</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {String(selectedHistory.remarks || '').trim() && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 mb-4">
+            <div className="flex items-start gap-2">
+              <AlertCircle size={15} className="mt-0.5 shrink-0 text-amber-700" />
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-wider text-amber-800">Remarks for This Visit</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-700 whitespace-pre-wrap break-words">{selectedHistory.remarks}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="bg-slate-50 rounded-2xl p-4 mb-4 text-center">
 
   <p className="text-[9px] uppercase font-black text-slate-400 tracking-wider">
@@ -10340,13 +11055,17 @@ const imageReason =
   </p>
 
   <p className="text-xs font-bold text-slate-700 mt-1">
-    {getUserDisplayName(selectedHistory.updatedBy || '-')}
+    {(selectedHistory.rightEyeReview || selectedHistory.leftEyeReview ||
+      selectedHistory.rightEyeReviewDetails?.status || selectedHistory.leftEyeReviewDetails?.status)
+      ? getUserDisplayName(selectedHistory.updatedBy || '')
+      : ''}
   </p>
 
 </div>
 
         <div className="grid grid-cols-2 gap-4">
 
+          {/* RIGHT EYE REVIEW */}
           <div className="bg-slate-50 rounded-2xl p-4">
             <h3 className="text-xs font-black uppercase text-slate-400 mb-2">
               Right Eye Review
@@ -10354,59 +11073,65 @@ const imageReason =
 
             <p className="text-sm font-bold text-slate-700">
               {selectedHistory.rightEyeImageStatus === "Not Obtainable"
-
-  ? "Not Obtainable"
-
-  : (selectedHistory.rightEyeReviewDetails?.status || "No Review")
-
-}
-              {selectedHistory.rightEyeReviewDetails?.abnormalTypes?.length > 0 && (
-  <p className="text-[10px] text-slate-500 font-bold mt-1 uppercase">
-
-    {selectedHistory.rightEyeReviewDetails.abnormalTypes.join(', ')}
-
-    {selectedHistory.rightEyeReviewDetails.npdrSeverity
-      ? ` - ${selectedHistory.rightEyeReviewDetails.npdrSeverity}`
-      : ''
-    }
-
-    {selectedHistory.rightEyeReviewDetails.othersText
-      ? ` - ${selectedHistory.rightEyeReviewDetails.othersText}`
-      : ''
-    }
-
-  </p>
-)}
+                ? "Not Obtainable"
+                : (selectedHistory.rightEyeReviewDetails?.status || "No Review")}
             </p>
+
+            {selectedHistory.rightEyeReviewDetails?.status?.toLowerCase() === "abnormal" || selectedHistory.rightEyeReviewDetails?.status?.toLowerCase() === "ungradable" && (
+              <div className="text-xs text-slate-600 mt-2 space-y-1">
+                {selectedHistory.rightEyeReviewDetails.abnormalTypes?.length > 0 && (
+                  <p className="font-semibold">
+                    Findings: {selectedHistory.rightEyeReviewDetails.abnormalTypes.join(", ")}
+                  </p>
+                )}
+                {selectedHistory.rightEyeReviewDetails.npdrSeverity && (
+                  <p>Severity: {selectedHistory.rightEyeReviewDetails.npdrSeverity}</p>
+                )}
+                {selectedHistory.rightEyeReviewDetails.othersText && (
+                  <p>Others: {selectedHistory.rightEyeReviewDetails.othersText}</p>
+                )}
+              </div>
+            )}
 
             <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap uppercase">
               {selectedHistory.rightEyeImageStatus === "Not Obtainable"
-
-  ? selectedHistory.rightEyeImageReason
-
-  : (selectedHistory.rightEyeReviewDetails?.comment || "-")
-
-}
+                ? (selectedHistory.rightEyeImageReason || "-")
+                : (selectedHistory.rightEyeReviewDetails?.comment || "-")}
             </p>
           </div>
 
+          {/* LEFT EYE REVIEW */}
           <div className="bg-slate-50 rounded-2xl p-4">
             <h3 className="text-xs font-black uppercase text-slate-400 mb-2">
               Left Eye Review
             </h3>
 
             <p className="text-sm font-bold text-slate-700">
-              {selectedHistory.leftEyeReviewDetails?.status || 'No Review'}
+              {selectedHistory.leftEyeImageStatus === "Not Obtainable"
+                ? "Not Obtainable"
+                : (selectedHistory.leftEyeReviewDetails?.status || "No Review")}
             </p>
+
+            {selectedHistory.leftEyeReviewDetails?.status?.toLowerCase() === "abnormal" || selectedHistory.leftEyeReviewDetails?.status?.toLowerCase() === "ungradable" && (
+              <div className="text-xs text-slate-600 mt-2 space-y-1">
+                {selectedHistory.leftEyeReviewDetails.abnormalTypes?.length > 0 && (
+                  <p className="font-semibold">
+                    Findings: {selectedHistory.leftEyeReviewDetails.abnormalTypes.join(", ")}
+                  </p>
+                )}
+                {selectedHistory.leftEyeReviewDetails.npdrSeverity && (
+                  <p>Severity: {selectedHistory.leftEyeReviewDetails.npdrSeverity}</p>
+                )}
+                {selectedHistory.leftEyeReviewDetails.othersText && (
+                  <p>Others: {selectedHistory.leftEyeReviewDetails.othersText}</p>
+                )}
+              </div>
+            )}
 
             <p className="text-xs text-slate-500 mt-2 whitespace-pre-wrap uppercase">
               {selectedHistory.leftEyeImageStatus === "Not Obtainable"
-
-  ? selectedHistory.leftEyeImageReason
-
-  : (selectedHistory.leftEyeReviewDetails?.comment || "-")
-
-}
+                ? (selectedHistory.leftEyeImageReason || "-")
+                : (selectedHistory.leftEyeReviewDetails?.comment || "-")}
             </p>
           </div>
 
@@ -10692,7 +11417,9 @@ const imageReason =
     </div>
 <div className="lg:flex-1 min-h-0 overflow-visible lg:overflow-y-auto pr-2 space-y-6 summary-scrollbar">
 
-  {/* REVIEWED BY / IMAGE STATUS BY */}
+  {renderVisualAcuity(selectedReviewSummary)}
+
+{/* REVIEWED BY / IMAGE STATUS BY */}
 <div className="bg-white rounded-2xl border border-slate-200 p-4">
 
   <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
@@ -10778,7 +11505,9 @@ const imageReason =
       className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
         selectedReviewSummary.rightEyeReviewDetails?.status === "Abnormal"
           ? "bg-rose-100 text-rose-600"
-          : "bg-emerald-100 text-emerald-600"
+          : selectedReviewSummary.rightEyeReviewDetails?.status === "Ungradable"
+            ? "bg-orange-100 text-orange-700"
+            : "bg-emerald-100 text-emerald-600"
       }`}
     >
       {selectedReviewSummary.rightEyeReviewDetails?.status || "-"}
@@ -10887,7 +11616,9 @@ const imageReason =
       className={`inline-flex px-4 py-2 rounded-xl text-sm font-black uppercase ${
         selectedReviewSummary.leftEyeReviewDetails?.status === "Abnormal"
           ? "bg-rose-100 text-rose-600"
-          : "bg-emerald-100 text-emerald-600"
+          : selectedReviewSummary.leftEyeReviewDetails?.status === "Ungradable"
+            ? "bg-orange-100 text-orange-700"
+            : "bg-emerald-100 text-emerald-600"
       }`}
     >
       {selectedReviewSummary.leftEyeReviewDetails?.status || "-"}
@@ -11470,6 +12201,14 @@ const imageReason =
         </div>
       </div>
 
+      {/* UNGRADABLE */}
+      <div className="bg-orange-50 border border-orange-100 rounded-2xl p-5">
+        <div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-orange-600">◈ Ungradable</p>
+          <p className="text-3xl font-black text-orange-600 mt-1">{monthlyRetenStats.ungradable}</p>
+        </div>
+      </div>
+
       {/* NOT OBTAINABLE */}
       <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5">
         <div>
@@ -11709,7 +12448,94 @@ const imageReason =
 
   )}
 
-</AnimatePresence>
+      </AnimatePresence>
+
+      {/* Print Patient Report: editable A4 form preview; values are only used for this PDF */}
+      <AnimatePresence>
+        {printReportApp && (
+          <div className="fixed inset-0 z-[180] flex flex-col bg-slate-950/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <div className="shrink-0 px-4 sm:px-6 py-3 bg-gradient-to-r from-blue-950 to-blue-800 text-white flex items-center justify-between gap-4 shadow-lg">
+                <div className="min-w-0">
+                  <h2 className="text-base sm:text-lg font-black">Preview Borang Sebelum Cetak</h2>
+                  <p className="text-[11px] sm:text-xs text-blue-100 mt-0.5">Isi terus pada ruangan borang. Perubahan hanya digunakan untuk PDF dan tidak disimpan ke rekod pesakit.</p>
+                </div>
+                <button type="button" onClick={() => !isGeneratingPatientReport && setPrintReportApp(null)} disabled={isGeneratingPatientReport} className="shrink-0 rounded-lg px-3 py-2 text-white hover:bg-white/10 disabled:opacity-50" aria-label="Tutup popup">✕</button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
+                {(() => {
+                  const app = printReportApp;
+                  const inputClass = "min-w-0 w-full border-0 border-b border-dotted border-slate-500 bg-transparent px-1 py-0.5 text-[11px] sm:text-xs text-slate-900 outline-none focus:border-blue-700 focus:ring-0 rounded-none placeholder:text-slate-400";
+                  const labelClass = "shrink-0 text-[10px] sm:text-[11px] font-semibold text-slate-700";
+                  const field = (key: string, label: string, placeholder = '', multiline = false) => (
+                    <label key={key} className="flex min-w-0 items-baseline gap-1.5">
+                      <span className={labelClass}>{label}:</span>
+                      {multiline ? <textarea rows={2} className={inputClass + " resize-y border border-dotted border-slate-400 px-1.5 py-1"} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} /> : <input className={inputClass} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} />}
+                    </label>
+                  );
+                  const section = (n: number, title: string) => <div className="mb-2 flex items-center gap-2 rounded-sm bg-blue-50 px-2 py-1.5 border-l-[3px] border-blue-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-950 text-[10px] font-bold text-white">{n}</span><span className="text-[11px] font-black uppercase tracking-wide text-blue-950">{title}</span></div>;
+                  const eyeInfo = (eye: 'right' | 'left') => {
+                    const d = eye === 'right' ? app.rightEyeReviewDetails : app.leftEyeReviewDetails;
+                    const review = eye === 'right' ? app.rightEyeReview : app.leftEyeReview;
+                    const status = eye === 'right' ? app.rightEyeImageStatus : app.leftEyeImageStatus;
+                    const reason = eye === 'right' ? app.rightEyeImageReason : app.leftEyeImageReason;
+                    const types = d?.abnormalTypes || [];
+                    const text = status === 'Not Obtainable' ? `Not Obtainable${reason ? ` — ${reason}` : ''}` : (d?.status || review || 'Belum direkodkan');
+                    return { text, types: types.join(', '), severity: d?.npdrSeverity || '', notes: [d?.othersText, d?.comment].filter(Boolean).join(' — ') };
+                  };
+                  const miniInput = (key: string, placeholder = 'Isi di sini') => <input aria-label={key} className={inputClass + " text-center"} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} />;
+                  return <div className="mx-auto flex w-full max-w-[900px] flex-col items-center gap-6 text-slate-900">
+                    {/* PAGE 1 — follows the first page of the downloadable PDF */}
+                    <div className="w-full max-w-[794px] bg-white shadow-2xl ring-1 ring-black/10 px-5 py-5 sm:px-8 sm:py-7 aspect-auto min-h-[1000px] text-[11px]">
+                      <div className="grid grid-cols-[76px_minmax(0,1fr)] items-center gap-3 border-b-[3px] border-blue-950 pb-3 mb-3">
+                        <div className="flex flex-col items-center gap-1"><img src={roundLogo} alt="SINAR logo" className="h-12 w-12 object-contain"/><img src={textLogo} alt="SINAR" className="h-4 max-w-[76px] object-contain"/></div>
+                        <div className="text-center"><h3 className="text-sm sm:text-base font-black text-blue-950">REKOD PEMERIKSAAN FUNDUS &amp; RUJUKAN</h3><p className="mt-1 text-[10px] font-bold text-slate-600">{(getClinicById(clinics, superAdminClinicContext || currentUser?.clinicId) || currentClinic)?.name || ''}</p>{(getClinicById(clinics, superAdminClinicContext || currentUser?.clinicId) || currentClinic)?.address && <p className="mt-0.5 text-[9px] leading-tight text-slate-500 whitespace-pre-line">{(getClinicById(clinics, superAdminClinicContext || currentUser?.clinicId) || currentClinic)?.address}</p>}{(getClinicById(clinics, superAdminClinicContext || currentUser?.clinicId) || currentClinic)?.phone && <p className="mt-0.5 text-[9px] font-semibold text-slate-600">Tel: {(getClinicById(clinics, superAdminClinicContext || currentUser?.clinicId) || currentClinic)?.phone}</p>}</div>
+                      </div>
+
+                      {section(1, 'Maklumat Pesakit')}
+                      <div className="space-y-2 px-1 mb-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Nama Pesakit:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-xs font-bold flex-1">{app.patientName || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>No. K/P:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-xs font-bold flex-1">{app.icNumber || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Klinik Kesihatan (Asal):</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{getClinicById(clinics, getReferringClinicId(app))?.name || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>No. Telefon:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{app.phoneNumber || '—'}</span></div></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Diabetes Mellitus sejak:</span>{field('dmDuration', '(tahun)', 'Contoh: 8 tahun')}</div>{field('hba1c', 'HbA1c', 'Keputusan')}</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2">{field('urineAlbumin', 'Urine Albumin', 'Keputusan')}{field('serumCreatinine', 'Serum Creatinine', 'Keputusan')}</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex min-w-0 items-baseline gap-1.5"><span className={labelClass}>Penyakit Lain:</span><input aria-label="Penyakit Lain" className={inputClass + " flex-1 min-w-0"} value={printReportFields.otherDiseases || ''} placeholder="Contoh: DM, HTN, LIPID, CKD" onChange={e => setPrintReportFields(prev => ({ ...prev, otherDiseases: e.target.value }))} /></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tarikh Pemeriksaan:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{app.date ? new Date(app.date).toLocaleDateString('en-GB') : '—'}</span></div></div>
+                        {field('history', 'Sejarah ringkas', 'Masukkan sejarah ringkas', true)}
+                      </div>
+
+                      {section(2, 'Visual Acuity (V/A)')}
+                      <div className="mb-4 overflow-hidden border border-slate-300">
+                        <div className="grid grid-cols-3 bg-blue-50 text-[10px] font-black text-blue-950"><div className="p-2">PEMERIKSAAN</div><div className="p-2 text-center border-l border-slate-300">RE (MATA KANAN)</div><div className="p-2 text-center border-l border-slate-300">LE (MATA KIRI)</div></div>
+                        {[{label:'Unaided',right:'rightEyeVAUnaided',left:'leftEyeVAUnaided'},{label:'With Glasses',right:'rightEyeVAWithGlasses',left:'leftEyeVAWithGlasses'},{label:'Pinhole',right:'rightEyeVAPinhole',left:'leftEyeVAPinhole'}].map(row=><div key={row.label} className="grid grid-cols-3 border-t border-slate-300 min-h-8 items-center"><div className="px-2 py-1 text-[11px]">{row.label}</div><div className="px-2 py-1 border-l border-slate-300">{miniInput(row.right)}</div><div className="px-2 py-1 border-l border-slate-300">{miniInput(row.left)}</div></div>)}
+                      </div>
+
+                      {section(3, 'Gambar Fundus')}
+                      <div className="grid grid-cols-2 gap-3 mb-4">
+                        {[{title:'MATA KANAN (RE)',image:app.rightEyePhoto,uploadedBy:app.rightEyeUploadedBy,uploadedAt:app.rightEyePhotoUploadedAt},{title:'MATA KIRI (LE)',image:app.leftEyePhoto,uploadedBy:app.leftEyeUploadedBy,uploadedAt:app.leftEyePhotoUploadedAt}].map(photo=><div key={photo.title} className="border border-slate-300 rounded-sm p-2"><h4 className="text-center text-[10px] font-black text-blue-950 mb-2">{photo.title}</h4><div className="h-36 sm:h-44 flex items-center justify-center bg-slate-50 border border-slate-200">{photo.image?<img src={photo.image} alt={photo.title} className="max-h-full max-w-full object-contain"/>:<span className="text-[10px] text-slate-400">Tiada gambar fundus</span>}</div><p className="mt-2 text-[9px] text-slate-600">Tarikh / masa imej: {photo.uploadedAt ? new Date(photo.uploadedAt).toLocaleString('en-GB') : '____ / ____ / ______  ______'}</p><p className="text-[9px] text-slate-600">Dimuat naik oleh: {photo.uploadedBy ? getUserDisplayName(photo.uploadedBy) : '________________'}</p></div>)}
+                      </div>
+
+                      {section(4, 'Dapatan Pemeriksaan')}
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        {[{title:'MATA KANAN (RE)',data:eyeInfo('right')},{title:'MATA KIRI (LE)',data:eyeInfo('left')}].map(eye=><div key={eye.title} className="border border-slate-300 rounded-sm overflow-hidden"><h4 className="bg-blue-50 px-2 py-1.5 text-[10px] font-black text-blue-950">{eye.title}</h4><div className="p-2 space-y-1 text-[10px]"><p><b>Status:</b> {eye.data.text}</p><p><b>Jenis abnormaliti:</b> {eye.data.types || '—'}</p><p><b>NPDR severity:</b> {eye.data.severity || '—'}</p><p><b>Catatan:</b> {eye.data.notes || '—'}</p></div></div>)}
+                      </div>
+                      <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-3 px-1"> <div className="flex items-baseline gap-1.5"><span className={labelClass}>Kes Dirujuk:</span><span className="text-[11px] font-bold">{app.referred === true ? 'Ya' : app.referred === false ? 'Tidak' : '—'}</span></div><div className="flex min-w-0 items-baseline gap-1.5"><span className={labelClass}>Jika Ya, nyatakan sebab:</span><input aria-label="Jika Ya, nyatakan sebab" className={inputClass} value={printReportFields.referralReason || ''} placeholder="Tulis sebab rujukan di sini" onChange={e => setPrintReportFields(prev => ({ ...prev, referralReason: e.target.value }))} /></div></div>
+                      <p className="mt-4 text-right text-[8px] text-slate-400">Halaman 1 · Preview borang SINAR</p>
+                    </div>
+
+                  </div>;
+                })()}
+              </div>
+
+              <div className="shrink-0 px-4 sm:px-6 py-3 bg-white border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
+                <p className="text-[10px] text-slate-500">Popup ini memaparkan bahagian 1 hingga 4 sahaja. Borang PDF akan dijana menggunakan maklumat di atas.</p>
+                <div className="flex justify-end gap-2"><button type="button" onClick={() => setPrintReportApp(null)} disabled={isGeneratingPatientReport} className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50 disabled:opacity-50">Batal</button><button type="button" onClick={() => void generatePatientReport(printReportApp, printReportFields)} disabled={isGeneratingPatientReport} className="px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Printer size={16}/>{isGeneratingPatientReport ? 'Sedang menjana PDF...' : 'Jana & Muat Turun PDF'}</button></div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       </>
   );
 }
