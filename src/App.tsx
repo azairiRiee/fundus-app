@@ -43,7 +43,11 @@ import {
   Network,
   Settings2,
   Database,
-  Shield
+  Shield,
+  LayoutDashboard,
+  ClipboardList,
+  Inbox,
+  ClipboardCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -73,7 +77,28 @@ import {
 
 import { analyzeFundus } from "./services/aiService";
 
-const APP_VERSION = "v4.1.0-beta.2";
+const APP_VERSION = "v5.0.0-beta.2";
+
+// ==============================================
+// SINAR SHARED FOOTER — EDIT THESE VALUES ONCE
+// ==============================================
+const APP_FOOTER = {
+  title: "SINAR . Sistem Interpretasi & Nota Awal Retinopati",
+  createdBy: "Azairi - Zikri - Fairuz",
+};
+
+function AppFooter() {
+  return (
+    <footer className="w-full mt-auto pt-5 pb-3 text-center">
+      <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500">
+        {APP_FOOTER.title} · {APP_VERSION}
+      </p>
+      <p className="mt-1 text-[9px] font-semibold tracking-wide text-slate-400">
+        Created by {APP_FOOTER.createdBy}
+      </p>
+    </footer>
+  );
+}
 
 // =====================================================
 // CLINIC / FACILITY MASTER
@@ -88,6 +113,27 @@ const APP_VERSION = "v4.1.0-beta.2";
 //   add new clinics through the app; new clinics are stored in Firestore.
 // =====================================================
 
+interface SpecialistClinic {
+  id: string;
+  name: string;
+  shortName?: string;
+  address?: string;
+  phone?: string;
+  active: boolean;
+  createdAt: number;
+}
+
+interface SpecialistUser {
+  id: string;
+  password?: string;
+  email?: string;
+  displayName: string;
+  clinicId: string;
+  role: 'ADMIN' | 'STAFF' | 'SPECIALIST';
+  active: boolean;
+  createdAt: number;
+}
+
 interface Clinic {
   id: string;
   name: string;
@@ -100,6 +146,8 @@ interface Clinic {
   colorKey?: string;
   //--- Multiple fundus providers allowed for referral routing ---//
   fundusProviderClinicIds?: string[];
+  //--- Specialist clinics explicitly authorized by this clinic for referrals ---//
+  specialistClinicIds?: string[];
   //--- TCA days configured by a provider clinic for each referring clinic ---//
   referralTcaDays?: Record<string, number[]>;
 }
@@ -244,6 +292,8 @@ const getFundusProviderClinics = (clinics: Clinic[]) =>
 
 interface User {
   id: string;
+  firestoreId?: string;
+  email?: string;
   password?: string;
   role: UserRole;
 
@@ -375,6 +425,10 @@ type ImageStatus =
 
   referred?: boolean;
   referralComment?: string;
+  referralSent?: boolean;
+  specialistClinicId?: string;
+  specialistClinicName?: string;
+  referralSentAt?: number;
 
   createdBy: string;
   rightEyeUploadedBy?: string;
@@ -500,7 +554,55 @@ export default function App() {
       return null;
     }
   });
-  
+  // Separate specialist portal session; kept isolated from standard clinic accounts.
+  const [specialistCurrentUser, setSpecialistCurrentUser] = useState<SpecialistUser | null>(() => {
+    const saved = sessionStorage.getItem('specialist_current_user');
+    if (!saved) return null;
+    try { return JSON.parse(saved) as SpecialistUser; }
+    catch (e) { console.error('Failed to parse specialist user session', e); return null; }
+  });
+  const [showSpecialistStaffManagement, setShowSpecialistStaffManagement] = useState(false);
+  const [showSpecialistStaffForm, setShowSpecialistStaffForm] = useState(false);
+  const [editingSpecialistStaffId, setEditingSpecialistStaffId] = useState<string | null>(null);
+  const [specialistStaffIdInput, setSpecialistStaffIdInput] = useState('');
+  const [specialistStaffNameInput, setSpecialistStaffNameInput] = useState('');
+  const [specialistStaffPasswordInput, setSpecialistStaffPasswordInput] = useState('');
+  const [showSpecialistStaffPassword, setShowSpecialistStaffPassword] = useState(false);
+  const [specialistStaffSaving, setSpecialistStaffSaving] = useState(false);
+  const [specialistReferralSearch, setSpecialistReferralSearch] = useState('');
+  const [specialistReferralPageNumber, setSpecialistReferralPageNumber] = useState(1);
+  const [showSpecialistActivityLogs, setShowSpecialistActivityLogs] = useState(false);
+  const [specialistComingSoonFeature, setSpecialistComingSoonFeature] = useState<string | null>(null);
+  const [specialistReferrals, setSpecialistReferrals] = useState<Array<Record<string, any> & { id: string }>>([]);
+  // Specialist-only referral review workspace. This state is isolated from clinic review forms.
+  const [selectedSpecialistReferral, setSelectedSpecialistReferral] = useState<(Record<string, any> & { id: string }) | null>(null);
+  const [specialistReferralPage, setSpecialistReferralPage] = useState<1 | 2>(1);
+  const [specialistReferralSection6, setSpecialistReferralSection6] = useState<Record<string, string>>({});
+  const [specialistReferralSaving, setSpecialistReferralSaving] = useState(false);
+  const [specialistZoomImage, setSpecialistZoomImage] = useState<string | null>(null);
+  const [specialistZoomEye, setSpecialistZoomEye] = useState('');
+  const [specialistImageZoom, setSpecialistImageZoom] = useState(1);
+  const specialistPinchStartDistanceRef = useRef<number | null>(null);
+  const specialistPinchStartZoomRef = useRef(1);
+  const specialistPanStartRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null);
+  const [specialistImagePan, setSpecialistImagePan] = useState({ x: 0, y: 0 });
+  const [specialistAnalyticsMonth, setSpecialistAnalyticsMonth] = useState(new Date());
+
+  // Freeze the page behind specialist dialogs while keeping the dialog's own content scrollable.
+  useEffect(() => {
+    const shouldLock = Boolean(selectedSpecialistReferral || specialistZoomImage || specialistComingSoonFeature);
+    if (!shouldLock) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const previousHtmlOverflow = html.style.overflow;
+    const previousBodyOverflow = body.style.overflow;
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = previousHtmlOverflow;
+      body.style.overflow = previousBodyOverflow;
+    };
+  }, [selectedSpecialistReferral, specialistZoomImage, specialistComingSoonFeature]);
   const [users, setUsers] = useState<User[]>([]);
 
   //---Clinic master is loaded from Firestore; defaults keep the existing app usable during migration---//
@@ -553,11 +655,45 @@ export default function App() {
   const [newStaffRole, setNewStaffRole] = useState<UserRole>(UserRole.STAFF);
   const [newStaffClinicId, setNewStaffClinicId] = useState('LINTANG');
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
+  const [activityLogSearch, setActivityLogSearch] = useState('');
+  const [activityLogActionFilter, setActivityLogActionFilter] = useState('ALL');
+  const [activityLogClinicFilter, setActivityLogClinicFilter] = useState('ALL');
+  const [superAdminSidebarCollapsed, setSuperAdminSidebarCollapsed] = useState(false);
+  const [activeSuperAdminView, setActiveSuperAdminView] = useState<'dashboard' | 'clinics' | 'users' | 'fundus' | 'analytics' | 'logs' | 'settings' | 'specialistClinics' | 'specialistUsers' | 'migration'>('dashboard');
+  const [specialistClinics, setSpecialistClinics] = useState<SpecialistClinic[]>([]);
+  const [specialistUsers, setSpecialistUsers] = useState<SpecialistUser[]>([]);
+  const [specialistClinicSearch, setSpecialistClinicSearch] = useState('');
+  const [specialistUserSearch, setSpecialistUserSearch] = useState('');
+  const [specialistUserClinicFilter, setSpecialistUserClinicFilter] = useState('ALL');
+  const [specialistUserRoleFilter, setSpecialistUserRoleFilter] = useState('ALL');
+  const [selectedSpecialistUsersClinic, setSelectedSpecialistUsersClinic] = useState<string | null>(null);
+  const [showSpecialistClinicForm, setShowSpecialistClinicForm] = useState(false);
+  const [editingSpecialistClinicId, setEditingSpecialistClinicId] = useState<string | null>(null);
+  const [specialistClinicIdInput, setSpecialistClinicIdInput] = useState('');
+  const [specialistClinicNameInput, setSpecialistClinicNameInput] = useState('');
+  const [specialistClinicShortNameInput, setSpecialistClinicShortNameInput] = useState('');
+  const [specialistClinicAddressInput, setSpecialistClinicAddressInput] = useState('');
+  const [specialistClinicPhoneInput, setSpecialistClinicPhoneInput] = useState('');
+  const [showSpecialistUserForm, setShowSpecialistUserForm] = useState(false);
+  const [editingSpecialistUserId, setEditingSpecialistUserId] = useState<string | null>(null);
+  const [specialistUserIdInput, setSpecialistUserIdInput] = useState('');
+  const [specialistUserNameInput, setSpecialistUserNameInput] = useState('');
+  const [specialistUserPasswordInput, setSpecialistUserPasswordInput] = useState('');
+  const [specialistUserClinicInput, setSpecialistUserClinicInput] = useState('');
+  const [specialistUserRoleInput, setSpecialistUserRoleInput] = useState<'ADMIN' | 'STAFF'>('STAFF');
+  const [specialistSaving, setSpecialistSaving] = useState(false);
+  const [superAdminUserSearch, setSuperAdminUserSearch] = useState('');
+  const [superAdminUserClinicFilter, setSuperAdminUserClinicFilter] = useState('ALL');
+  const [superAdminUserRoleFilter, setSuperAdminUserRoleFilter] = useState('ALL');
+  const [selectedSuperAdminUsersClinic, setSelectedSuperAdminUsersClinic] = useState<string | null>(null);
   
 
   //---Super Admin clinic-management form---//
   const [showSuperAdminConsole, setShowSuperAdminConsole] = useState(false);
   const [showClinicManager, setShowClinicManager] = useState(false);
+  const [showNewClinicForm, setShowNewClinicForm] = useState(false);
+  const [clinicStatusSaving, setClinicStatusSaving] = useState<string | null>(null);
+  const [clinicProviderSaving, setClinicProviderSaving] = useState<string | null>(null);
   const [newClinicId, setNewClinicId] = useState('');
   const [newClinicName, setNewClinicName] = useState('');
   const [newClinicShortName, setNewClinicShortName] = useState('');
@@ -715,9 +851,13 @@ export default function App() {
   const [showPatientHistory, setShowPatientHistory] = useState(false);
   const [summaryEye, setSummaryEye] = useState<'right' | 'left'>('right');
   const [selectedReviewSummary, setSelectedReviewSummary] = useState<any>(null);
-  //--- Print-only fields: never persisted to the appointment or Firestore ---//
+  //--- Referral/report fields are persisted with the appointment and copied to the specialist referral ---//
   const [printReportApp, setPrintReportApp] = useState<Appointment | null>(null);
   const [printReportFields, setPrintReportFields] = useState<Record<string, string>>({});
+  const [reportActionMode, setReportActionMode] = useState<'print' | 'refer'>('print');
+  const [showReferralClinicPicker, setShowReferralClinicPicker] = useState(false);
+  const [selectedReferralClinicId, setSelectedReferralClinicId] = useState('');
+  const [isSendingReferral, setIsSendingReferral] = useState(false);
   const [isGeneratingPatientReport, setIsGeneratingPatientReport] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredReviewId, setHoveredReviewId] = useState<string | null>(null);
@@ -801,7 +941,8 @@ const [unableOtherReason, setUnableOtherReason] =
     !!userToDelete,
     showDuplicateWarning,
     showImageNotObtainable,
-    !!printReportApp
+    !!printReportApp,
+    showReferralClinicPicker
   ].filter(Boolean).length;
 
   useEffect(() => {
@@ -843,7 +984,9 @@ const [unableOtherReason, setUnableOtherReason] =
       modalHistoryCountRef.current -= 1;
 
       //--- Close only the currently active/top modal; existing close functions remain untouched ---//
-      if (printReportApp) {
+      if (showReferralClinicPicker) {
+        setShowReferralClinicPicker(false);
+      } else if (printReportApp) {
         setPrintReportApp(null);
       } else if (showImageNotObtainable) {
         setShowImageNotObtainable(false);
@@ -887,6 +1030,14 @@ const [unableOtherReason, setUnableOtherReason] =
         setShowPboaWarning(false);
       } else if (showAdminConsole) {
         setShowAdminConsole(false);
+        setShowStaffForm(false);
+        setEditingUser(null);
+        setNewStaffId('');
+        setNewStaffName('');
+        setNewStaffPass('');
+        setShowStaffPassword(false);
+        setNewStaffRole(UserRole.STAFF);
+        setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
       } else if (showSuperAdminConsole) {
         setShowSuperAdminConsole(false);
       }
@@ -916,7 +1067,9 @@ const [unableOtherReason, setUnableOtherReason] =
     showTCASchedule,
     showPboaWarning,
     showAdminConsole,
-    showSuperAdminConsole
+    showSuperAdminConsole,
+    showReferralClinicPicker,
+    printReportApp
   ]);
 
   useEffect(() => {
@@ -944,7 +1097,8 @@ const [unableOtherReason, setUnableOtherReason] =
     !!userToDelete ||
     showDuplicateWarning ||
     showImageNotObtainable ||
-    !!printReportApp;
+    !!printReportApp ||
+    showReferralClinicPicker;
 
   if (modalOpen) {
     document.body.style.overflow = 'hidden';
@@ -978,7 +1132,8 @@ const [unableOtherReason, setUnableOtherReason] =
   userToDelete,
   showDuplicateWarning,
   showImageNotObtainable,
-  printReportApp
+  printReportApp,
+  showReferralClinicPicker
 ]);
 
 const analyzeWithAI = async () => {
@@ -2746,6 +2901,18 @@ const [filterReview, setFilterReview] = useState<'All' | 'Pending' | 'Abnormal' 
 const [filterDepartment, setFilterDepartment] = useState<'All' | Department>('All');
 const [currentPage, setCurrentPage] = useState(1);
 
+// Always return to the first page when search/filter criteria change.
+useEffect(() => {
+  setCurrentPage(1);
+}, [
+  searchQuery,
+  filterDateFrom,
+  filterDateTo,
+  filterStatus,
+  filterReview,
+  filterDepartment
+]);
+
 const ITEMS_PER_PAGE = 5;
 
   // Load Data
@@ -2927,6 +3094,25 @@ const unsubscribeUsers = onSnapshot(
   }
 );
 
+// Realtime Specialist Master Sync — isolated from screening clinic and staff collections.
+const unsubscribeSpecialistClinics = onSnapshot(
+  collection(db, 'specialistClinics'),
+  snapshot => setSpecialistClinics(snapshot.docs.map(item => ({
+    id: item.id,
+    ...(item.data() as Omit<SpecialistClinic, 'id'>),
+  } as SpecialistClinic))),
+  error => console.warn('Specialist clinic master sync unavailable.', error)
+);
+
+const unsubscribeSpecialistUsers = onSnapshot(
+  collection(db, 'specialistUsers'),
+  snapshot => setSpecialistUsers(snapshot.docs.map(item => ({
+    id: item.id,
+    ...(item.data() as Omit<SpecialistUser, 'id'>),
+  } as SpecialistUser))),
+  error => console.warn('Specialist user master sync unavailable.', error)
+);
+
 // Realtime Activity Logs Sync
 const unsubscribeActivityLogs = onSnapshot(
   query(
@@ -2952,10 +3138,68 @@ return () => {
   unsubscribe();
   unsubscribeUsers();
   unsubscribeActivityLogs();
+  unsubscribeSpecialistClinics();
+  unsubscribeSpecialistUsers();
 };
 
 }, []);
 
+// Specialist referral inbox: subscribe only after a specialist clinic is known.
+// The clinic ID is part of the effect dependencies so logging in/switching sessions
+// cannot leave the listener stuck with the initial null specialistCurrentUser.
+useEffect(() => {
+  const specialistClinicId = specialistCurrentUser?.clinicId;
+
+  if (!specialistClinicId) {
+    setSpecialistReferrals([]);
+    return;
+  }
+
+  const referralsQuery = query(
+    collection(db, 'specialistReferrals'),
+    where('specialistClinicId', '==', specialistClinicId)
+  );
+
+  const unsubscribe = onSnapshot(
+    referralsQuery,
+    snapshot => setSpecialistReferrals(snapshot.docs.map(item => ({
+      id: item.id,
+      ...(item.data() as Record<string, any>),
+    }))),
+    error => {
+      console.warn('Specialist referral inbox sync unavailable.', error);
+      setSpecialistReferrals([]);
+    }
+  );
+
+  return () => unsubscribe();
+}, [specialistCurrentUser?.clinicId]);
+
+
+// Reset transient Super Admin UI when changing sidebar sections.
+// Saved Firestore data is untouched; only open forms, modals, and selections reset.
+useEffect(() => {
+  setShowStaffForm(false);
+  setShowAdminConsole(false);
+  setShowSuperAdminConsole(false);
+  setShowClinicManager(false);
+  setShowFundusNetwork(false);
+  setShowActivityLogs(false);
+  setShowReferralClinicManager(false);
+  setShowDataMigration(false);
+  setShowNewClinicForm(false);
+  setShowSpecialistClinicForm(false);
+  setEditingSpecialistClinicId(null);
+  setShowSpecialistUserForm(false);
+  setEditingSpecialistUserId(null);
+  setEditingUser(null);
+  setUserToDelete(null);
+  setSelectedSpecialistUsersClinic(null);
+  setSpecialistUserClinicFilter('ALL');
+  setSpecialistUserRoleFilter('ALL');
+  setSelectedSuperAdminUsersClinic(null);
+  setSuperAdminUserClinicFilter('ALL');
+}, [activeSuperAdminView]);
 
 // Sync Appointments with localStorage
 /*useEffect(() => {
@@ -3058,6 +3302,10 @@ useEffect(() => {
 
 }, [currentUser]);
 
+useEffect(() => {
+  if (specialistCurrentUser) sessionStorage.setItem('specialist_current_user', JSON.stringify(specialistCurrentUser));
+  else sessionStorage.removeItem('specialist_current_user');
+}, [specialistCurrentUser]);
 
 // AUTO LOGOUT AFTER 1 HOUR IDLE
 useEffect(() => {
@@ -3071,6 +3319,7 @@ useEffect(() => {
     timeout = setTimeout(() => {
 
       sessionStorage.removeItem('clinic_current_user');
+      sessionStorage.removeItem('specialist_current_user');
 
       window.location.reload();
 
@@ -3115,12 +3364,26 @@ useEffect(() => {
     const pass = tempPassword;
 
     const user = users.find(
-      u =>
-        u.id.toLowerCase() === id &&
-        u.password === pass
+      u => u.id.toLowerCase() === id && u.password === pass
+    );
+    const specialistUser = specialistUsers.find(
+      u => u.id.toLowerCase() === id && u.password === pass && u.active !== false
     );
 
-    if (user) {
+    if (specialistUser && !user) {
+      setCurrentUser(null);
+      setSpecialistCurrentUser(specialistUser);
+      sessionStorage.removeItem('clinic_current_user');
+      addDoc(collection(db, 'activityLogs'), {
+        clinicId: `SPECIALIST:${specialistUser.clinicId}`,
+        action: 'Specialist User Logged In',
+        patient: `${specialistUser.displayName} (${specialistUser.id})`,
+        by: specialistUser.displayName,
+        timestamp: Date.now(),
+      }).catch(error => console.warn('Could not write specialist login log', error));
+    } else if (user) {
+      setSpecialistCurrentUser(null);
+      sessionStorage.removeItem('specialist_current_user');
 
       const normalizedUser: User = {
         ...user,
@@ -3157,8 +3420,9 @@ useEffect(() => {
     setTimeout(() => {
 
       sessionStorage.removeItem('clinic_current_user');
-
+      sessionStorage.removeItem('specialist_current_user');
       setCurrentUser(null);
+      setSpecialistCurrentUser(null);
 
       setTempUserId('');
       setTempPassword('');
@@ -3190,7 +3454,7 @@ const addStaffMember = async (e: React.FormEvent) => {
       u => u.id.trim().toLowerCase() === id.toLowerCase()
     )
   ) {
-    alert('User ID already exists');
+    alert(`Staff User ID "${id}" sudah digunakan. Sila pilih ID yang berbeza.`);
     return;
   }
 
@@ -3243,31 +3507,69 @@ const addStaffMember = async (e: React.FormEvent) => {
   
 const updateStaffMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingUser) return;
-    
     if (!editingUser?.firestoreId) return;
 
-    setIsSavingStaff(true);
+    const updatedId = editingUser.id.trim().toUpperCase();
+    const updatedName = editingUser.displayName.trim();
+    if (!updatedId || !updatedName) {
+      alert('Sila isi Staff User ID dan Display Name.');
+      return;
+    }
 
-    try {
-      await updateDoc(
-        doc(db, "users", editingUser.firestoreId),
-        {
-          ...editingUser
-        }
-      );
-
-      addActivityLog('Updated Staff Account', `${editingUser.displayName} (${editingUser.id})`);
-      
-      // If current user is editing themselves, update current user state too
-      if (currentUser && currentUser.id === editingUser.id) {
-        setCurrentUser(editingUser);
+    // Clinic admins may promote/demote users within their own clinic only.
+    // They cannot create or assign Super Admin access, or move accounts between clinics.
+    if (currentUser?.role === UserRole.ADMIN) {
+      if (
+        editingUser.role === UserRole.SUPER_ADMIN ||
+        editingUser.clinicId !== currentUser.clinicId
+      ) {
+        alert('Admin klinik hanya boleh mengurus akaun dalam klinik sendiri dengan role STAFF atau ADMIN.');
+        return;
       }
-      
+    }
+
+    // User IDs must be unique across all clinics, regardless of letter case.
+    const duplicateUser = users.find(
+      u => u.firestoreId !== editingUser.firestoreId &&
+        u.id.trim().toLowerCase() === updatedId.toLowerCase()
+    );
+    if (duplicateUser) {
+      alert(`Staff User ID "${updatedId}" sudah digunakan oleh akaun lain. Sila pilih ID yang berbeza.`);
+      return;
+    }
+
+    setIsSavingStaff(true);
+    try {
+      const oldId = users.find(u => u.firestoreId === editingUser.firestoreId)?.id || editingUser.id;
+      const updatedUserData: any = {
+        id: updatedId,
+        // Only Super Admin can assign Super Admin; clinic admins can assign STAFF/ADMIN within their clinic.
+        role: currentUser?.role === UserRole.SUPER_ADMIN
+          ? editingUser.role
+          : (editingUser.role === UserRole.ADMIN ? UserRole.ADMIN : UserRole.STAFF),
+        clinicId: currentUser?.role === UserRole.SUPER_ADMIN && editingUser.role === UserRole.SUPER_ADMIN
+          ? null
+          : (currentUser?.role === UserRole.ADMIN ? currentUser.clinicId : editingUser.clinicId),
+        displayName: updatedName,
+        ...(editingUser.department ? { department: editingUser.department } : {}),
+        ...(newStaffPass.trim() ? { password: newStaffPass.trim() } : {}),
+      };
+      await updateDoc(doc(db, "users", editingUser.firestoreId), updatedUserData);
+
+      const savedUser: User = { ...editingUser, ...updatedUserData };
+      addActivityLog('Updated Staff Account', `${updatedName} (${updatedId})`);
+
+      if (currentUser && (currentUser.firestoreId === editingUser.firestoreId || currentUser.id === oldId)) {
+        setCurrentUser(savedUser);
+      }
+
       setEditingUser(null);
+      setShowStaffForm(false);
+      setNewStaffPass('');
+      setShowStaffPassword(false);
     } catch (error) {
       console.error('Failed to update staff account', error);
-      alert('Failed to update staff account. Please try again.');
+      alert('Gagal mengemas kini akaun. Sila cuba lagi.');
     } finally {
       setIsSavingStaff(false);
     }
@@ -3776,23 +4078,179 @@ link.setAttribute(
 
   //--- Open a print-only completion popup. These values are used for this PDF only. ---//
   const printPatientReport = (app: Appointment) => {
+    setReportActionMode('print');
+    setShowReferralClinicPicker(false);
     setPrintReportFields({
-      dmDuration: '', hba1c: '', urineAlbumin: '', serumCreatinine: '', history: '',
-      otherDiseases: [...(app.diseaseTypes || []), app.otherDisease].filter(Boolean).join(', '),
+      ...(app.referralFormFields || {}),
+      dmDuration: app.referralFormFields?.dmDuration || '', hba1c: app.referralFormFields?.hba1c || '', urineAlbumin: app.referralFormFields?.urineAlbumin || '', serumCreatinine: app.referralFormFields?.serumCreatinine || '', history: app.referralFormFields?.history || '',
+      otherDiseases: app.referralFormFields?.otherDiseases || [...(app.diseaseTypes || []), app.otherDisease].filter(Boolean).join(', '),
       rightEyeVAUnaided: app.rightEyeVAUnaided || '', leftEyeVAUnaided: app.leftEyeVAUnaided || '',
       rightEyeVAWithGlasses: app.rightEyeVAWithGlasses || '', leftEyeVAWithGlasses: app.leftEyeVAWithGlasses || '',
       rightEyeVAPinhole: app.rightEyeVAPinhole || '', leftEyeVAPinhole: app.leftEyeVAPinhole || '',
-      staffName: '', staffDesignation: '', staffStamp: '', staffDate: new Date().toLocaleDateString('en-GB'),
-      ophthalmologyReport: '', ophthalmologyRecommendation: '', ophthalmologyAppointment: '',
-      ophthalmologySignature: '', ophthalmologyStamp: '', ophthalmologyDate: '', referralReason: app.referralComment || ''
+      staffName: app.referralFormFields?.staffName || '', staffDesignation: app.referralFormFields?.staffDesignation || '', staffStamp: app.referralFormFields?.staffStamp || '', staffDate: app.referralFormFields?.staffDate || new Date().toLocaleDateString('en-GB'),
+      ophthalmologyReport: app.referralFormFields?.ophthalmologyReport || '', ophthalmologyRecommendation: app.referralFormFields?.ophthalmologyRecommendation || '', ophthalmologyAppointment: app.referralFormFields?.ophthalmologyAppointment || '',
+      ophthalmologySignature: app.referralFormFields?.ophthalmologySignature || '', ophthalmologyStamp: app.referralFormFields?.ophthalmologyStamp || '', ophthalmologyDate: app.referralFormFields?.ophthalmologyDate || '', referralReason: app.referralFormFields?.referralReason || app.referralComment || '',
+      // Returned specialist report is authoritative for Section 6 and must override any old blank print fields.
+      ...((app as any).specialistReport || {})
     });
     setPrintReportApp(app);
+  };
+
+  //--- Open the same editable report form in referral mode; this does not change clinical-review saving. ---//
+  const startPatientReferral = (app: Appointment) => {
+    // Specialist referrals are restricted to clinic Admin and Super Admin accounts.
+    if (currentUser?.role !== UserRole.ADMIN && currentUser?.role !== UserRole.SUPER_ADMIN) {
+      alert('Hanya Admin boleh menghantar referral kepada klinik pakar.');
+      return;
+    }
+    if (!isReviewCompleted(app)) {
+      alert('Sila lengkapkan clinical review kedua-dua mata dahulu.');
+      return;
+    }
+    if (app.referred !== true) {
+      alert('Tandakan Kes Dirujuk semasa Clinical Review dan simpan dahulu sebelum menghantar referral.');
+      return;
+    }
+    setReportActionMode('refer');
+    setSelectedReferralClinicId('');
+    setShowReferralClinicPicker(false);
+    setPrintReportFields({
+      ...(app.referralFormFields || {}),
+      dmDuration: app.referralFormFields?.dmDuration || '', hba1c: app.referralFormFields?.hba1c || '', urineAlbumin: app.referralFormFields?.urineAlbumin || '', serumCreatinine: app.referralFormFields?.serumCreatinine || '', history: app.referralFormFields?.history || '',
+      otherDiseases: app.referralFormFields?.otherDiseases || [...(app.diseaseTypes || []), app.otherDisease].filter(Boolean).join(', '),
+      rightEyeVAUnaided: app.rightEyeVAUnaided || '', leftEyeVAUnaided: app.leftEyeVAUnaided || '',
+      rightEyeVAWithGlasses: app.rightEyeVAWithGlasses || '', leftEyeVAWithGlasses: app.leftEyeVAWithGlasses || '',
+      rightEyeVAPinhole: app.rightEyeVAPinhole || '', leftEyeVAPinhole: app.leftEyeVAPinhole || '',
+      staffName: app.referralFormFields?.staffName || '', staffDesignation: app.referralFormFields?.staffDesignation || '', staffStamp: app.referralFormFields?.staffStamp || '', staffDate: app.referralFormFields?.staffDate || new Date().toLocaleDateString('en-GB'),
+      ophthalmologyReport: app.referralFormFields?.ophthalmologyReport || '', ophthalmologyRecommendation: app.referralFormFields?.ophthalmologyRecommendation || '', ophthalmologyAppointment: app.referralFormFields?.ophthalmologyAppointment || '',
+      ophthalmologySignature: app.referralFormFields?.ophthalmologySignature || '', ophthalmologyStamp: app.referralFormFields?.ophthalmologyStamp || '', ophthalmologyDate: app.referralFormFields?.ophthalmologyDate || '', referralReason: app.referralFormFields?.referralReason || app.referralComment || ''
+    });
+    setPrintReportApp(app);
+  };
+
+  const sendPatientReferral = async () => {
+    const app = printReportApp;
+    const targetClinic = specialistClinics.find(clinic => clinic.id === selectedReferralClinicId && clinic.active);
+    if (!app || !targetClinic) {
+      alert('Sila pilih klinik pakar yang aktif.');
+      return;
+    }
+    if (!(currentClinic?.specialistClinicIds || []).includes(targetClinic.id)) {
+      alert('Klinik anda tidak dibenarkan merujuk ke klinik pakar ini. Sila hubungi Super Admin.');
+      return;
+    }
+    if (!currentUser || !currentClinic) {
+      alert('Maklumat klinik asal tidak dapat dikenal pasti. Sila log masuk semula.');
+      return;
+    }
+    setIsSendingReferral(true);
+    try {
+      const appointmentDocId = app.firestoreId || app.id;
+      // Persist the completed referral form against the original appointment first.
+      // These are additive fields; existing clinical-review data is left untouched.
+      if (appointmentDocId) {
+        await updateDoc(doc(db, 'appointments', appointmentDocId), {
+          referralFormFields: { ...printReportFields },
+          referralFormUpdatedAt: Date.now(),
+          referralFormUpdatedBy: currentUser.displayName || currentUser.id,
+          updatedAt: Date.now(),
+        });
+      } else {
+        throw new Error('Appointment Firestore document ID is missing; cannot safely persist referral form.');
+      }
+      const referralPayload = {
+        patientName: app.patientName || '',
+        icNumber: app.icNumber || '',
+        phoneNumber: app.phoneNumber || '',
+        date: app.date || '',
+        appointmentId: app.firestoreId || app.id,
+        referringClinicId: currentClinic.id,
+        referringClinicName: currentClinic.name,
+        fromClinicId: currentClinic.id,
+        fromClinicName: currentClinic.name,
+        specialistClinicId: targetClinic.id,
+        specialistClinicName: targetClinic.name,
+        referralReason: (printReportFields.referralReason || app.referralComment || '').trim(),
+        reason: (printReportFields.referralReason || app.referralComment || '').trim(),
+        notes: (printReportFields.history || '').trim(),
+        formFields: { ...printReportFields },
+        patient: {
+          name: app.patientName || '',
+          icNumber: app.icNumber || '',
+          phoneNumber: app.phoneNumber || '',
+        },
+        appointmentSnapshot: {
+          patientName: app.patientName || '',
+          icNumber: app.icNumber || '',
+          phoneNumber: app.phoneNumber || '',
+          clinicName: currentClinic.name || '',
+          date: app.date || '',
+          referred: app.referred === true,
+          referralComment: (printReportFields.referralReason || app.referralComment || '').trim(),
+          diseaseTypes: app.diseaseTypes || [],
+          otherDisease: app.otherDisease || '',
+          rightEyeVAUnaided: app.rightEyeVAUnaided || '',
+          leftEyeVAUnaided: app.leftEyeVAUnaided || '',
+          rightEyeVAWithGlasses: app.rightEyeVAWithGlasses || '',
+          leftEyeVAWithGlasses: app.leftEyeVAWithGlasses || '',
+          rightEyeVAPinhole: app.rightEyeVAPinhole || '',
+          leftEyeVAPinhole: app.leftEyeVAPinhole || '',
+          rightEyePhoto: app.rightEyePhoto || '',
+          leftEyePhoto: app.leftEyePhoto || '',
+          rightEyeUploadedBy: app.rightEyeUploadedBy || '',
+          leftEyeUploadedBy: app.leftEyeUploadedBy || '',
+          rightEyePhotoUploadedAt: app.rightEyePhotoUploadedAt || null,
+          leftEyePhotoUploadedAt: app.leftEyePhotoUploadedAt || null,
+          rightEyeImageStatus: app.rightEyeImageStatus || '',
+          leftEyeImageStatus: app.leftEyeImageStatus || '',
+          rightEyeImageReason: app.rightEyeImageReason || '',
+          leftEyeImageReason: app.leftEyeImageReason || '',
+          rightEyeReview: app.rightEyeReview || '',
+          leftEyeReview: app.leftEyeReview || '',
+          rightEyeReviewDetails: app.rightEyeReviewDetails || null,
+          leftEyeReviewDetails: app.leftEyeReviewDetails || null,
+        },
+        status: 'New',
+        createdAt: Date.now(),
+        referredAt: Date.now(),
+        referredBy: currentUser.displayName || currentUser.id,
+        updatedAt: Date.now(),
+      };
+      await addDoc(collection(db, 'specialistReferrals'), referralPayload);
+      if (appointmentDocId) {
+        await updateDoc(doc(db, 'appointments', appointmentDocId), {
+          referralSent: true,
+          specialistClinicId: targetClinic.id,
+          specialistClinicName: targetClinic.name,
+          referralSentAt: Date.now(),
+          referralComment: referralPayload.referralReason,
+          updatedAt: Date.now(),
+        });
+      }
+      addActivityLog('Sent Specialist Referral', `${app.patientName || '-'} → ${targetClinic.name}`);
+      setShowReferralClinicPicker(false);
+      setPrintReportApp(null);
+      alert(`Referral berjaya dihantar ke ${targetClinic.name}.`);
+    } catch (error) {
+      console.error('Failed to send specialist referral', error);
+      alert('Referral tidak berjaya dihantar. Sila semak sambungan dan kebenaran Firestore.');
+    } finally {
+      setIsSendingReferral(false);
+    }
   };
 
   //--- Generate A4 PDF using saved patient data plus temporary print-only popup values. ---//
   const generatePatientReport = async (app: Appointment, fields: Record<string, string>) => {
     setIsGeneratingPatientReport(true);
     try {
+      // Specialist findings are saved on the appointment when the referral is returned.
+      // They take precedence over temporary print-popup values for Section 6 only.
+      const returnedSpecialistReport = (app as any).specialistReport || {};
+      const hasDigitalSpecialistReport = Boolean(
+        ((app as any).specialistReportStatus === 'Returned' || (app as any).specialistReportReturnedAt) &&
+        String(returnedSpecialistReport.ophthalmologyDoctorName || '').trim()
+      );
+      fields = { ...fields, ...returnedSpecialistReport };
       const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
       const pageWidth = doc.internal.pageSize.getWidth();
       const pageHeight = doc.internal.pageSize.getHeight();
@@ -3812,7 +4270,19 @@ link.setAttribute(
         doc.line(x1, y1, x2, y2);
       };
       const valueOrBlank = (value: unknown) => String(value ?? '').trim();
-      const blankField = (label: string, x: number, yy: number, width: number, value?: unknown, lineY = 5.5) => {
+      const formatDateDDMMYYYY = (value: unknown) => {
+        const raw = valueOrBlank(value);
+        if (!raw) return '';
+        // Handle HTML date-input values without timezone conversion.
+        const isoDate = raw.match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);
+        if (isoDate) return `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}`;
+        // Preserve Malaysian day/month/year values that are already formatted.
+        const localDate = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (localDate) return `${localDate[1].padStart(2, '0')}/${localDate[2].padStart(2, '0')}/${localDate[3]}`;
+        const parsed = new Date(raw);
+        return Number.isNaN(parsed.getTime()) ? raw : parsed.toLocaleDateString('en-GB');
+      };
+      const blankField = (label: string, x: number, yy: number, width: number, value?: unknown, lineY = 5.5, underlineFilled = false) => {
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(7.2);
         doc.setTextColor(...ink);
@@ -3821,12 +4291,12 @@ link.setAttribute(
         const labelW = Math.min(doc.getTextWidth(labelText) + 1.5, width * 0.46);
         const val = valueOrBlank(value);
         if (val) {
-          // Saved details are printed cleanly without an underline beneath them.
           doc.setFont('helvetica', 'bold');
           doc.text(doc.splitTextToSize(val, Math.max(5, width - labelW)).slice(0, 2), x + labelW, yy);
-        } else {
-          // Missing details get a handwriting line aligned with the label baseline.
-          line(x + labelW, yy + 0.55, x + width, yy + 0.55);
+        }
+        if (!val || underlineFilled) {
+          // Keep a form-style writing line, including beneath prefilled patient/staff values.
+          line(x + labelW, yy + (underlineFilled ? 1.25 : 0.55), x + width, yy + (underlineFilled ? 1.25 : 0.55));
         }
       };
       const section = (number: number, title: string) => {
@@ -3943,21 +4413,19 @@ link.setAttribute(
       section(1, 'Maklumat Pesakit');
       const gap = 5;
       const colW = (contentWidth - gap) / 2;
-      blankField('Nama Pesakit', margin + 2, y, colW - 2, app.patientName); 
-      blankField('No. K/P', margin + colW + gap, y, colW - 2, app.icNumber); y += 7;
-      blankField('Klinik Kesihatan (Asal)', margin + 2, y, colW - 2, getClinicById(clinics, getReferringClinicId(app))?.name || '');
-      blankField('No. Telefon', margin + colW + gap, y, colW - 2, app.phoneNumber); y += 7;
+      blankField('Nama Pesakit', margin + 2, y, colW - 2, app.patientName, 5.5, true); 
+      blankField('No. K/P', margin + colW + gap, y, colW - 2, app.icNumber, 5.5, true); y += 7;
+      blankField('Klinik Kesihatan (Asal)', margin + 2, y, colW - 2, getClinicById(clinics, getReferringClinicId(app))?.name || '', 5.5, true);
+      blankField('No. Telefon', margin + colW + gap, y, colW - 2, app.phoneNumber, 5.5, true); y += 7;
       const patientInfoX = margin + 2;
       const rightInfoX = margin + colW + gap;
       const compactFieldW = colW * 0.68;
-      blankField('Diabetes Mellitus sejak', patientInfoX, y, compactFieldW, fields.dmDuration);
+      blankField('Diabetes Mellitus sejak', patientInfoX, y, compactFieldW, fields.dmDuration, 5.5, true);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(7.2); doc.setTextColor(...ink);
-      blankField('HbA1c', rightInfoX, y, colW - 2, fields.hba1c); y += 7;
-      blankField('Urine Albumin', patientInfoX, y, colW - 2, fields.urineAlbumin);
-      blankField('Serum Creatinine', rightInfoX, y, colW - 2, fields.serumCreatinine); y += 7;
-      blankField('Penyakit Lain', margin + 2, y, colW - 2, fields.otherDiseases || '');
-      blankField('Tarikh Pemeriksaan', rightInfoX, y, colW - 2, app.date ? new Date(app.date).toLocaleDateString('en-GB') : ''); y += 7;
-      blankField('Sejarah ringkas', margin + 2, y, contentWidth - 4, fields.history); y += 7;
+      blankField('HbA1c', rightInfoX, y, colW - 2, fields.hba1c, 5.5, true); y += 7;
+      blankField('Penyakit Lain', margin + 2, y, colW - 2, fields.otherDiseases || '', 5.5, true);
+      blankField('Tarikh Pemeriksaan', rightInfoX, y, colW - 2, formatDateDDMMYYYY(app.date), 5.5, true); y += 7;
+      blankField('Sejarah ringkas', margin + 2, y, contentWidth - 4, fields.history, 5.5, true); y += 7;
 
       // 2. Visual acuity: show saved values and leave all missing entries writable.
       section(2, 'Visual Acuity (V/A)');
@@ -4024,49 +4492,60 @@ link.setAttribute(
       });
       y += photoH + 21;
 
-      // 4. Examination findings are kept on page 1 below the fundus photographs.
+      // 4. Examination findings — match the compact two-card layout in the print preview.
       section(4, 'Dapatan Pemeriksaan');
       const findingGap = 5;
       const findingW = (contentWidth - findingGap) / 2;
-      const findingY = y;
-      // Wrap the complete clinical notes and size the finding cards to fit them.
-      const getFindingExtra = (eye: 'right' | 'left') => {
-        const f = eyeFinding(eye);
-        return [f.others, f.comment].filter(Boolean).join(' | ');
+      const eyeSummary = (eye: 'right' | 'left') => {
+        const details = eye === 'right' ? app.rightEyeReviewDetails : app.leftEyeReviewDetails;
+        const review = eye === 'right' ? app.rightEyeReview : app.leftEyeReview;
+        const imageStatus = eye === 'right' ? app.rightEyeImageStatus : app.leftEyeImageStatus;
+        const imageReason = eye === 'right' ? app.rightEyeImageReason : app.leftEyeImageReason;
+        return {
+          title: eye === 'right' ? 'MATA KANAN (RE)' : 'MATA KIRI (LE)',
+          status: imageStatus === 'Not Obtainable'
+            ? `Not Obtainable${imageReason ? ` — ${imageReason}` : ''}`
+            : (details?.status || review || 'Belum direkodkan'),
+          types: (details?.abnormalTypes || []).join(', '),
+          severity: details?.npdrSeverity || '',
+          notes: [details?.othersText, details?.comment].filter(Boolean).join(' — ')
+        };
       };
+      const rightFinding = eyeSummary('right');
+      const leftFinding = eyeSummary('left');
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(6.2);
-      const rightNoteLines = getFindingExtra('right') ? doc.splitTextToSize(getFindingExtra('right'), findingW - 17) : [];
-      const leftNoteLines = getFindingExtra('left') ? doc.splitTextToSize(getFindingExtra('left'), findingW - 17) : [];
-      const maxNoteLines = Math.max(1, rightNoteLines.length, leftNoteLines.length);
-      const findingHeight = Math.max(45, 43 + (maxNoteLines - 1) * 3.2);
-      const drawEyeFinding = (x: number, eye: 'right' | 'left') => {
-        const f = eyeFinding(eye);
-        const eyeTitle = eye === 'right' ? 'MATA KANAN (RE)' : 'MATA KIRI (LE)';
-        doc.setFillColor(243, 247, 252); doc.rect(x, findingY, findingW, 5.5, 'F');
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(6.6); doc.setTextColor(...navy); doc.text(eyeTitle, x + 3, findingY + 3.8);
-        let fy = findingY + 9;
-        checkbox(x + 3, fy, 'Normal', f.status === 'Normal', 6.5); fy += 4.1;
-        checkbox(x + 3, fy, 'Abnormal', f.abnormal, 6.5); fy += 4.1;
-        // Abnormal sub-findings stay grouped under Abnormal; Ungradable is a separate final outcome.
-        checkbox(x + 8, fy, 'NPDR (Mild / Moderate / Severe)', f.types.some(t => t.toLowerCase().includes('npdr'))); fy += 4.1;
-        checkbox(x + 8, fy, 'PDR', f.types.some(t => t.toLowerCase().includes('pdr') && !t.toLowerCase().includes('npdr'))); fy += 4.1;
-        checkbox(x + 8, fy, 'Maculopathy', f.types.some(t => t.toLowerCase().includes('maculopathy'))); fy += 4.1;
-        checkbox(x + 8, fy, 'Lain-lain', !!f.others);
-        if (f.severity) { doc.setFontSize(6.2); doc.text(`- ${f.severity}`, x + 29, fy); }
-        fy += 4.1;
-        checkbox(x + 3, fy, 'Ungradable', f.ungradable, 6.5);
-        fy += 4.2;
-        doc.setFont('helvetica', 'normal'); doc.setFontSize(6.2); doc.setTextColor(...ink);
-        const extra = getFindingExtra(eye);
-        doc.text('Catatan: ', x + 3, fy);
-        if (extra) doc.text(doc.splitTextToSize(extra, findingW - 17), x + 16, fy);
-        else line(x + 16, fy + 0.5, x + findingW - 3, fy + 0.5);
+      const findingRows = (finding: ReturnType<typeof eyeSummary>) => ([
+        { label: 'Status:', value: finding.status || '—' },
+        { label: 'Jenis abnormaliti:', value: finding.types || '—' },
+        { label: 'NPDR severity:', value: finding.severity || '—' },
+        { label: 'Catatan:', value: finding.notes || '—' }
+      ]);
+      const preparedFindingRows = [findingRows(rightFinding), findingRows(leftFinding)].map(rows =>
+        rows.map(row => ({ ...row, lines: doc.splitTextToSize(row.value, findingW - 30) }))
+      );
+      const findingBodyLines = Math.max(...preparedFindingRows.map(rows => rows.reduce((sum, row) => sum + Math.max(1, row.lines.length), 0)));
+      const findingHeaderH = 5.5;
+      const findingLineH = 3.2;
+      const findingHeight = findingHeaderH + 2 + findingBodyLines * findingLineH + 2;
+      const drawEyeFindingSummary = (x: number, finding: ReturnType<typeof eyeSummary>, rows: typeof preparedFindingRows[number]) => {
+        doc.setFillColor(243, 247, 252);
+        doc.rect(x, y, findingW, findingHeaderH, 'F');
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(6.6); doc.setTextColor(...navy);
+        doc.text(finding.title, x + 3, y + 3.8);
+        let rowY = y + findingHeaderH + 3.2;
+        rows.forEach(row => {
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(6.2); doc.setTextColor(...ink);
+          doc.text(row.label, x + 3, rowY);
+          doc.setFont('helvetica', 'normal');
+          doc.text(row.lines, x + 27, rowY);
+          rowY += Math.max(1, row.lines.length) * findingLineH;
+        });
+        doc.setDrawColor(...lineColor);
+        doc.roundedRect(x, y, findingW, findingHeight, 1.2, 1.2, 'S');
       };
-      doc.setDrawColor(...lineColor); doc.roundedRect(margin, y, contentWidth, findingHeight, 1.2, 1.2, 'S');
-      drawEyeFinding(margin, 'right');
-      drawEyeFinding(margin + findingW + findingGap, 'left');
-      doc.setDrawColor(...lineColor); doc.line(margin + findingW + findingGap / 2, y, margin + findingW + findingGap / 2, y + findingHeight);
+      drawEyeFindingSummary(margin, rightFinding, preparedFindingRows[0]);
+      drawEyeFindingSummary(margin + findingW + findingGap, leftFinding, preparedFindingRows[1]);
       y += findingHeight + 3; y += 2;
       // Referral reason: wrap the full text across as many lines as needed (no 2-line truncation).
       blankField('Kes Dirujuk', margin + 2, y, 38, app.referred === true ? 'Ya' : app.referred === false ? 'Tidak' : '');
@@ -4090,7 +4569,27 @@ link.setAttribute(
         y += 8;
       }
 
-      // Page 1 now contains sections 1–4. Continue with staff verification and specialist fields on page 2.
+      // 5. Referring staff verification — compact block on page 1.
+      // Keep this section short so existing clinical content and fields remain unchanged.
+      doc.setFillColor(...paleBlue);
+      doc.roundedRect(margin, y, contentWidth, 7, 1.5, 1.5, 'F');
+      doc.setFillColor(...navy);
+      doc.circle(margin + 4.1, y + 3.5, 2.35, 'F');
+      doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(6.8);
+      doc.text('5', margin + 4.1, y + 4.1, { align: 'center' });
+      doc.setTextColor(...navy); doc.setFontSize(7.7);
+      doc.text('PENGESAHAN PETUGAS', margin + 8, y + 4.6);
+      y += 11;
+      blankField('Nama Petugas', margin + 2, y, colW - 2, fields.staffName, 5.5, true);
+      blankField('Jawatan', margin + colW + gap, y, colW - 2, fields.staffDesignation, 5.5, true);
+      y += 8;
+      const staffColW = (contentWidth - 8) / 3;
+      blankField('Tandatangan', margin + 2, y, staffColW, '');
+      blankField('Cop Rasmi', margin + 4 + staffColW, y, staffColW, fields.staffStamp);
+      blankField('Tarikh', margin + 6 + staffColW * 2, y, staffColW, fields.staffDate);
+      y += 8;
+
+      // Page 1 now contains sections 1–5. Specialist-only fields continue on page 2.
       doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(...muted);
       doc.text(`Dijana oleh SINAR pada ${new Date().toLocaleString('en-GB')}`, pageWidth - margin, pageHeight - 5, { align: 'right' });
       doc.addPage();
@@ -4104,27 +4603,52 @@ link.setAttribute(
       line(margin, y, pageWidth - margin, y);
       y += 5;
 
-      // 5. Staff verification, preserving blank signature/job-title fields for manual completion.
-      section(5, 'Pengesahan Petugas'); y += 5;
-      const hasReview = !!(app.rightEyeReview || app.leftEyeReview || app.rightEyeReviewDetails?.status || app.leftEyeReviewDetails?.status);
-      blankField('Tandatangan', margin + 2, y, colW - 2, ''); y += 9;
-      blankField('Cop Rasmi', margin + 2, y, fields.staffStamp);
-      blankField('Tarikh', margin + colW + gap, y, colW - 2, fields.staffDate); y += 18;
-
-      // 6. Ophthalmology use: writable fields remain empty in the generated report.
+      // 6. Specialist report: returned text is printed directly above the original dotted writing lines.
       section(6, 'Untuk Kegunaan Pakar Oftalmologi'); y += 5;
-      blankField('Laporan', margin + 2, y, contentWidth - 4, fields.ophthalmologyReport); y += 8;
-      line(margin + 2, y, pageWidth - margin - 2, y); y += 7;
-      line(margin + 2, y, pageWidth - margin - 2, y); y += 6; y += 5;
-      blankField('Syor', margin + 2, y, contentWidth - 4, fields.ophthalmologyRecommendation); y += 8;
-      line(margin + 2, y, pageWidth - margin - 2, y); y += 7;
-      line(margin + 2, y, pageWidth - margin - 2, y); y += 6; y += 5;
-      blankField('Temujanji di Klinik Oftalmologi', margin + 2, y, contentWidth - 4, fields.ophthalmologyAppointment); y += 8; y += 5;
-      blankField('Tandatangan', margin + 2, y, colW - 2, fields.ophthalmologySignature); y += 9;
-      blankField('Cop Rasmi', margin + 2, y, fields.ophthalmologyStamp);
-      blankField('Tarikh', margin + colW + gap, y, colW - 2, fields.ophthalmologyDate);
+      const drawRuledText = (label: string, value: unknown, rows: number) => {
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(7.2); doc.setTextColor(...ink);
+        doc.text(`${label}:`, margin + 2, y);
+        y += 3;
+        const textValue = valueOrBlank(value);
+        const availableW = contentWidth - 4;
+        const wrapped = textValue ? doc.splitTextToSize(textValue, availableW) : [];
+        const lineCount = Math.max(rows, wrapped.length);
+        for (let i = 0; i < lineCount; i++) {
+          if (wrapped[i]) {
+            doc.setFont('helvetica', 'normal'); doc.setFontSize(7.2); doc.setTextColor(...ink);
+            doc.text(wrapped[i], margin + 2, y + 3.1);
+          }
+          line(margin + 2, y + 4.2, pageWidth - margin - 2, y + 4.2);
+          y += 6;
+        }
+        y += 4;
+      };
+      drawRuledText('Laporan', fields.ophthalmologyReport, 3);
+      drawRuledText('Syor', fields.ophthalmologyRecommendation, 3);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(7.2); doc.setTextColor(...ink);
+      doc.text('Temujanji di Klinik Oftalmologi:', margin + 2, y);
+      const appointmentText = formatDateDDMMYYYY(fields.ophthalmologyAppointment);
+      const appointmentX = margin + 48;
+      // Give the ophthalmology appointment date a longer writing/display line.
+      const appointmentW = Math.min(pxToMm(92), contentWidth - 52);
+      if (appointmentText) { doc.setFont('helvetica', 'normal'); doc.text(doc.splitTextToSize(appointmentText, appointmentW), appointmentX, y); }
+      line(appointmentX, y + 0.7, appointmentX + appointmentW, y + 0.7);
+      y += 11;
+      const doctorColGap = 8;
+      const doctorColW = (contentWidth - doctorColGap) / 2;
+      blankField('Nama Doktor', margin + 2, y, doctorColW, fields.ophthalmologyDoctorName);
+      blankField('Jawatan', margin + doctorColW + doctorColGap, y, doctorColW - 2, fields.ophthalmologyDesignation);
+      y += 8;
+      const specialistReturnedAt = (app as any).specialistReportReturnedAt;
+      const specialistReturnedDate = specialistReturnedAt?.toDate ? specialistReturnedAt.toDate().toLocaleDateString('en-GB') : specialistReturnedAt ? new Date(specialistReturnedAt).toLocaleDateString('en-GB') : '';
+      blankField('Tarikh', margin + 2, y, doctorColW, specialistReturnedDate || fields.ophthalmologyDate || '');
 
-      // The report uses a dedicated second page for findings and referral details; no extra notes page.
+      // Only digitally returned specialist reports are exempt from physical signature/stamp.
+      // Walk-in printouts keep the signature/stamp requirement and therefore omit this disclaimer.
+      if (hasDigitalSpecialistReport) {
+        doc.setFont('helvetica', 'italic'); doc.setFontSize(6); doc.setTextColor(...muted);
+        doc.text('Dokumen ini dijana secara digital dan tidak memerlukan tandatangan atau cop rasmi.', margin, pageHeight - 9);
+      }
       doc.setFont('helvetica', 'normal'); doc.setFontSize(6); doc.setTextColor(...muted);
       doc.text(`Dijana oleh SINAR pada ${new Date().toLocaleString('en-GB')}`, pageWidth - margin, pageHeight - 5, { align: 'right' });
       const safeName = (app.patientName || 'Patient').replace(/[^a-z0-9-_]/gi, '_');
@@ -4670,13 +5194,16 @@ link.setAttribute(
 
     if (!appToDelete?.firestoreId) return;
 
-    await deleteDoc(
-      doc(
-        db,
-        "appointments",
-        appToDelete.firestoreId
-      )
-    );
+    // Delete linked specialist referrals first in the same batch so the specialist
+    // inbox cannot retain a referral after its source clinic appointment is removed.
+    const linkedReferrals = await getDocs(query(
+      collection(db, 'specialistReferrals'),
+      where('appointmentId', '==', appToDelete.firestoreId)
+    ));
+    const deleteBatch = writeBatch(db);
+    linkedReferrals.docs.forEach(referralDoc => deleteBatch.delete(referralDoc.ref));
+    deleteBatch.delete(doc(db, 'appointments', appToDelete.firestoreId));
+    await deleteBatch.commit();
 
     addActivityLog('Deleted Appointment', appToDelete.patientName || '-');
 
@@ -5016,6 +5543,11 @@ const paginatedAppointments =
     currentPage * ITEMS_PER_PAGE
   );
 
+// Specialist referral follow-up indicators for the clinic dashboard.
+const isCurrentClinicReferral = (app: Appointment) => currentUser?.role === UserRole.SUPER_ADMIN || (app.referringClinicId || app.clinicId) === (currentUser?.clinicId || 'LINTANG');
+const specialistReviewPendingAppointments = appointments.filter(app => isCurrentClinicReferral(app) && app.referralSent === true && !(app as any).specialistReportStatus && app.specialistClinicId);
+const specialistReportsReturnedAppointments = appointments.filter(app => isCurrentClinicReferral(app) && (app as any).specialistReportStatus === 'Returned');
+
   const allTodayAppointments = useMemo(() => {
 
   return appointments
@@ -5233,9 +5765,906 @@ const tomorrowTCATotal = Object.values(
     }
   };
 
+  // --- Specialist Portal: separate dashboard and staff administration ---
+  const saveSpecialistStaff = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!specialistCurrentUser || specialistCurrentUser.role !== 'ADMIN') return;
+    const id = specialistStaffIdInput.trim().toUpperCase();
+    const displayName = specialistStaffNameInput.trim();
+    if (!id || !displayName || (!editingSpecialistStaffId && !specialistStaffPasswordInput.trim())) return;
+    if (!editingSpecialistStaffId && specialistUsers.some(u => u.id.toLowerCase() === id.toLowerCase())) {
+      alert('User ID already exists.'); return;
+    }
+    setSpecialistStaffSaving(true);
+    try {
+      const existing = specialistUsers.find(u => u.id === editingSpecialistStaffId);
+      const payload: Omit<SpecialistUser, 'id'> = {
+        displayName,
+        clinicId: specialistCurrentUser.clinicId,
+        role: existing?.role || 'STAFF',
+        active: existing?.active ?? true,
+        createdAt: existing?.createdAt || Date.now(),
+        ...(specialistStaffPasswordInput.trim() ? { password: specialistStaffPasswordInput } : {}),
+      };
+      await setDoc(doc(db, 'specialistUsers', editingSpecialistStaffId || id), payload, { merge: !!editingSpecialistStaffId });
+      setShowSpecialistStaffForm(false);
+      setEditingSpecialistStaffId(null);
+      setSpecialistStaffIdInput(''); setSpecialistStaffNameInput(''); setSpecialistStaffPasswordInput('');
+    } catch (error) {
+      console.error('Failed to save specialist staff account', error);
+      alert('Unable to save staff account. Please check Firestore permissions.');
+    } finally { setSpecialistStaffSaving(false); }
+  };
+
+  const specialistLogout = () => {
+    // Keep the specialist logout transition consistent with the clinic dashboard.
+    setIsAuthenticating(true);
+    setAuthMessage('Ending Clinical Session...');
+    setTimeout(() => {
+      setAuthMessage('Protecting Patient Data...');
+      addDoc(collection(db, 'activityLogs'), {
+        clinicId: `SPECIALIST:${specialistCurrentUser?.clinicId || ''}`,
+        action: 'Specialist User Logged Out',
+        patient: `${specialistCurrentUser?.displayName || 'Specialist user'} (${specialistCurrentUser?.id || ''})`,
+        by: specialistCurrentUser?.displayName || 'System',
+        timestamp: Date.now(),
+      }).catch(error => console.warn('Could not write specialist logout log', error));
+      setTimeout(() => {
+        sessionStorage.removeItem('specialist_current_user');
+        setSpecialistCurrentUser(null);
+        setShowSpecialistStaffManagement(false);
+        setTempUserId('');
+        setTempPassword('');
+        setIsAuthenticating(false);
+      }, 1200);
+    }, 1200);
+  };
+
+  const openSpecialistReferral = (referral: Record<string, any> & { id: string }) => {
+    setSelectedSpecialistReferral(referral);
+    setSpecialistReferralPage(1);
+    setSpecialistReferralSection6({
+      ...(referral.specialistSection6 || {}),
+      ophthalmologyReport: referral.specialistSection6?.ophthalmologyReport || '',
+      ophthalmologyRecommendation: referral.specialistSection6?.ophthalmologyRecommendation || '',
+      ophthalmologyAppointment: referral.specialistSection6?.ophthalmologyAppointment || '',
+      ophthalmologyDoctorName: referral.specialistSection6?.ophthalmologyDoctorName || '',
+      ophthalmologyDesignation: referral.specialistSection6?.ophthalmologyDesignation || '',
+      ophthalmologyDate: referral.specialistSection6?.ophthalmologyDate || '',
+    });
+  };
+
+  const saveSpecialistReferral = async (sendBack: boolean) => {
+    if (!selectedSpecialistReferral || !specialistCurrentUser) return;
+    setSpecialistReferralSaving(true);
+    try {
+      const now = Date.now();
+      const referralBatch = writeBatch(db);
+      const returnedSection6 = sendBack
+        ? { ...specialistReferralSection6, ophthalmologyDate: new Date(now).toLocaleDateString('en-GB') }
+        : { ...specialistReferralSection6 };
+      delete (returnedSection6 as Record<string, string>).ophthalmologySignature;
+      delete (returnedSection6 as Record<string, string>).ophthalmologyStamp;
+      referralBatch.update(doc(db, 'specialistReferrals', selectedSpecialistReferral.id), {
+        specialistSection6: returnedSection6,
+        specialistReviewedBy: specialistCurrentUser.displayName || specialistCurrentUser.id,
+        specialistReviewedById: specialistCurrentUser.id,
+        specialistReviewedAt: now,
+        status: sendBack ? 'Returned to Clinic' : 'In Progress',
+        referralStatus: sendBack ? 'Returned to Clinic' : 'In Progress',
+        ...(sendBack ? { returnedAt: now, returnedBy: specialistCurrentUser.displayName || specialistCurrentUser.id } : {}),
+        updatedAt: now,
+      });
+      // Attach the returned report to the original clinic appointment in the same atomic write.
+      // Only new specialist-return fields are added; existing clinic clinical data is untouched.
+      if (sendBack && selectedSpecialistReferral.appointmentId) {
+        referralBatch.update(doc(db, 'appointments', String(selectedSpecialistReferral.appointmentId)), {
+          specialistReport: returnedSection6,
+          specialistReportStatus: 'Returned',
+          specialistReportReturnedAt: now,
+          specialistReportReturnedBy: specialistCurrentUser.displayName || specialistCurrentUser.id,
+          specialistReportClinicId: specialistCurrentUser.clinicId,
+        });
+      }
+      await referralBatch.commit();
+      if (sendBack) {
+        setSelectedSpecialistReferral(null);
+        setSpecialistReferralPage(1);
+        alert('Laporan pakar berjaya dihantar semula ke klinik asal.');
+      } else {
+        alert('Dapatan pakar berjaya disimpan.');
+      }
+    } catch (error) {
+      console.error('Failed to save specialist referral', error);
+      alert('Tidak berjaya menyimpan laporan pakar. Sila cuba lagi.');
+    } finally {
+      setSpecialistReferralSaving(false);
+    }
+  };
+
+  if (specialistCurrentUser && !currentUser) {
+    const specialistClinic = specialistClinics.find(c => c.id === specialistCurrentUser.clinicId);
+    const isSpecialistAdmin = specialistCurrentUser.role === 'ADMIN';
+    const clinicStaff = specialistUsers.filter(u => u.clinicId === specialistCurrentUser.clinicId);
+    const clinicReferrals = specialistReferrals.filter(referral => {
+      const assignedClinicId = referral.specialistClinicId || referral.toSpecialistClinicId || referral.targetClinicId || referral.clinicId;
+      return assignedClinicId === specialistCurrentUser.clinicId;
+    });
+    const referralStatus = (referral: Record<string, any>) => String(referral.status || referral.referralStatus || 'New').toLowerCase();
+    const newReferrals = clinicReferrals.filter(referral => ['new', 'pending', 'referred', 'submitted', 'new referral'].includes(referralStatus(referral)));
+    const currentMonthKey = `${specialistAnalyticsMonth.getFullYear()}-${String(specialistAnalyticsMonth.getMonth() + 1).padStart(2, '0')}`;
+    const monthlyReferrals = clinicReferrals.filter(referral => {
+      const rawDate = referral.createdAt?.toDate ? referral.createdAt.toDate() : new Date(referral.createdAt || referral.referredAt || referral.date || 0);
+      return !Number.isNaN(rawDate.getTime()) && `${rawDate.getFullYear()}-${String(rawDate.getMonth() + 1).padStart(2, '0')}` === currentMonthKey;
+    });
+    // All referrals remain in the specialist history, including reports already returned.
+    // Only the compact active queue above is limited to referrals still awaiting action.
+    const openReferrals = clinicReferrals.filter(referral => {
+      const status = referralStatus(referral).replace(/[_-]+/g, ' ').trim();
+      return ![
+        'returned',
+        'returned to clinic',
+        'sent back',
+        'sent back to clinic',
+        'returned to referring clinic',
+        'completed and returned',
+      ].includes(status);
+    });
+    const filteredClinicReferrals = clinicReferrals.filter(referral => {
+      const query = specialistReferralSearch.trim().toLowerCase();
+      if (!query) return true;
+      const searchable = [
+        referral.patientName,
+        referral.patient?.name,
+        referral.name,
+        referral.icNumber,
+        referral.patientIC,
+        referral.patient?.icNumber,
+        referral.referringClinicName,
+        referral.fromClinicName,
+        referral.sourceClinicName,
+        referral.referringClinicId,
+        referral.referralReason,
+        referral.reason,
+        referral.notes,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return searchable.includes(query);
+    });
+    const SPECIALIST_REFERRALS_PER_PAGE = 10;
+    const specialistReferralTotalPages = Math.max(1, Math.ceil(filteredClinicReferrals.length / SPECIALIST_REFERRALS_PER_PAGE));
+    const safeSpecialistReferralPage = Math.min(specialistReferralPageNumber, specialistReferralTotalPages);
+    const paginatedSpecialistReferrals = filteredClinicReferrals.slice(
+      (safeSpecialistReferralPage - 1) * SPECIALIST_REFERRALS_PER_PAGE,
+      safeSpecialistReferralPage * SPECIALIST_REFERRALS_PER_PAGE
+    );
+    const shiftSpecialistMonth = (delta: number) => setSpecialistAnalyticsMonth(current => {
+      const next = new Date(current.getFullYear(), current.getMonth() + delta, 1);
+      if (next > new Date(new Date().getFullYear(), new Date().getMonth(), 1)) return current;
+      return next;
+    });
+    const formatReferralDate = (referral: Record<string, any>) => {
+      const raw = referral.createdAt?.toDate ? referral.createdAt.toDate() : new Date(referral.createdAt || referral.referredAt || referral.date || 0);
+      return Number.isNaN(raw.getTime()) || raw.getTime() === 0 ? '-' : raw.toLocaleDateString('en-GB');
+    };
+    const formatReferralReturnedDate = (referral: Record<string, any>) => {
+      const value = referral.returnedAt || referral.specialistReportReturnedAt || referral.specialistReviewedAt;
+      if (!value) return '';
+      const date = value?.toDate ? value.toDate() : new Date(value);
+      return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('en-GB');
+    };
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-sky-50 font-sans text-slate-900 flex flex-col">
+        <header className="sticky top-0 z-40 border-b border-slate-200 bg-white shadow-sm">
+          <div className="mx-auto flex w-full max-w-7xl flex-col justify-center gap-3 px-3 py-2 md:min-h-16 md:flex-row md:items-center md:justify-between md:gap-4">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border-2 border-slate-100 bg-white shadow-sm">
+                <img src={roundLogo} alt={`${specialistClinic?.name || 'Specialist Clinic'} Logo`} className="h-full w-full object-cover" />
+              </div>
+              <div className="flex min-w-0 flex-col">
+                <img src={textLogo} alt="SINAR" className="h-6 w-32 object-cover object-left" />
+                <div className="my-1 mt-2 h-px w-auto bg-slate-300" />
+                <span className="mt-0 truncate text-xs font-bold text-slate-700">{specialistClinic?.name || 'Ophthalmology Specialist Clinic'}</span>
+              </div>
+            </div>
+            <div className="flex w-full flex-wrap items-center justify-between gap-2 md:w-auto md:justify-end md:gap-3">
+              {isSpecialistAdmin && (
+                <>
+                  <button onClick={() => setSpecialistComingSoonFeature('Manage Referral Clinic')} title="Coming soon — feature in progress" className="flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-bold text-teal-800 transition-all hover:bg-teal-100">
+                    <Calendar size={15} className="text-teal-700" /><span className="hidden md:inline">Manage Referral Clinic</span><span className="md:hidden">Referrals</span>
+                  </button>
+                  <button onClick={() => {
+                    const willOpen = !showSpecialistStaffManagement;
+                    setShowSpecialistStaffManagement(willOpen);
+                    setShowSpecialistStaffForm(false);
+                    setEditingSpecialistStaffId(null);
+                    setSpecialistStaffIdInput('');
+                    setSpecialistStaffNameInput('');
+                    setSpecialistStaffPasswordInput('');
+                    setShowSpecialistStaffPassword(false);
+                    setShowSpecialistActivityLogs(false);
+                  }} className="flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-bold text-teal-800 transition-all hover:bg-teal-100">
+                    <ShieldCheck size={15} className="text-teal-700" /><span className="hidden md:inline">Staff Management</span><span className="md:hidden">Staff</span>
+                  </button>
+                  <button onClick={() => setSpecialistComingSoonFeature('Monthly Summary')} className="flex items-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-bold text-teal-800 transition-all hover:bg-teal-100">
+                    <BarChart3 size={15} className="text-teal-700" /><span className="hidden md:inline">Monthly Summary</span><span className="md:hidden">Summary</span>
+                  </button>
+                  <button onClick={() => { setShowSpecialistStaffManagement(false); setShowSpecialistActivityLogs(v => !v); }} className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-100 px-2 py-1 text-xs font-bold text-slate-700 transition-all hover:bg-slate-200">
+                    <Activity size={15} className="text-teal-700" /><span className="hidden md:inline">Activity Logs</span><span className="md:hidden">Logs</span>
+                  </button>
+                </>
+              )}
+              <div className="ml-auto text-right">
+                <p className="text-xs font-black uppercase text-slate-800">{specialistCurrentUser.displayName}</p>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-teal-700">{specialistCurrentUser.id}</p>
+                <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400">{isSpecialistAdmin ? 'Admin' : 'Staff'}</p>
+              </div>
+              <button onClick={specialistLogout} title="Log out" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-rose-600"><LogOut size={19}/></button>
+            </div>
+          </div>
+        </header>
+
+        <main className="mx-auto w-full max-w-7xl flex-1 space-y-5 px-4 py-6 sm:py-8">
+          {showSpecialistActivityLogs && isSpecialistAdmin ? (
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-teal-700">Specialist clinic administration</p><h1 className="mt-1 text-2xl font-black">Activity Logs</h1><p className="mt-1 text-sm text-slate-500">Recent activity for this specialist clinic.</p></div>
+                <button onClick={() => setShowSpecialistActivityLogs(false)} className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Back to Dashboard</button>
+              </div>
+              <div className="mt-5 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200">
+                {activityLogs.filter(log => String(log.clinicId || '') === `SPECIALIST:${specialistCurrentUser.clinicId}`).length ? activityLogs.filter(log => String(log.clinicId || '') === `SPECIALIST:${specialistCurrentUser.clinicId}`).map((log, index) => <div key={`${log.timestamp || index}-${index}`} className="flex flex-wrap items-start justify-between gap-2 px-4 py-3"><div><p className="text-sm font-bold text-slate-800">{log.action || 'Activity'}</p><p className="mt-0.5 text-xs text-slate-500">{log.by || log.patient || specialistCurrentUser.displayName}</p></div><p className="text-xs text-slate-400">{log.timestamp ? new Date(log.timestamp).toLocaleString('en-GB') : '-'}</p></div>) : <p className="px-4 py-10 text-center text-sm text-slate-500">No specialist activity logs to display yet.</p>}
+              </div>
+            </section>
+          ) : (
+            <>
+              {/* Practice Summary — mirrors the standard clinic dashboard layout. */}
+              <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm md:p-8">
+                <div className="grid grid-cols-2 items-stretch gap-3 lg:grid-cols-12">
+                  <div className="col-span-2 flex flex-col justify-center lg:col-span-2">
+                    <h1 className="text-xl font-black tracking-tight text-slate-800 md:text-2xl">Practice Summary</h1>
+                    <p className="mt-1 text-2xl font-black leading-none text-slate-300 md:text-3xl">{new Date().getFullYear()}</p>
+                  </div>
+
+                  <div className="min-h-[120px] rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-teal-50 px-3 py-3 lg:col-span-2">
+                    <p className="mb-3 text-center text-xs font-black uppercase tracking-widest text-emerald-700">Total Referrals</p>
+                    <div className="grid grid-cols-[40px_1px_minmax(0,1fr)] items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-lg shadow-emerald-100"><Activity size={20}/></div>
+                      <div className="h-16 w-px bg-slate-300"/>
+                      <p className="text-center text-4xl font-black leading-none text-slate-900 md:text-5xl">{clinicReferrals.length}</p>
+                    </div>
+                  </div>
+
+                  <div className="min-h-[120px] rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50 to-indigo-50 px-3 py-3 lg:col-span-2">
+                    <p className="mb-3 text-center text-xs font-black uppercase tracking-widest text-violet-700">Pending Review</p>
+                    <div className="grid grid-cols-[40px_1px_minmax(0,1fr)] items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600 text-white shadow-lg shadow-violet-100"><Search size={20}/></div>
+                      <div className="h-16 w-px bg-slate-300"/>
+                      <p className="text-center text-4xl font-black leading-none text-slate-900 md:text-5xl">{openReferrals.length}</p>
+                    </div>
+                  </div>
+
+                  <div id="specialist-monthly-summary" className="col-span-2 rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 shadow-sm lg:col-span-6">
+                    <div className="grid grid-cols-1 items-center gap-4 md:grid-cols-[minmax(150px,1fr)_2fr]">
+                      <div>
+                        <h2 className="mb-1 text-sm font-bold uppercase tracking-widest text-teal-700">Monthly Summary</h2>
+                        <div className="mt-2 flex items-center gap-3">
+                          <button onClick={() => shiftSpecialistMonth(-1)} className="rounded-full p-1 hover:bg-slate-200" aria-label="Previous month"><ChevronLeft size={18}/></button>
+                          <p className="min-w-[120px] text-center text-sm font-bold text-slate-600">{specialistAnalyticsMonth.toLocaleString('en-US', {month:'long',year:'numeric'})}</p>
+                          <button onClick={() => shiftSpecialistMonth(1)} disabled={currentMonthKey === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`} className="rounded-full p-1 transition-all hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30" aria-label="Next month"><ChevronRight size={18}/></button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                        <div className="text-center"><p className="text-[10px] font-bold uppercase text-slate-400">Total</p><p className="text-3xl font-black">{monthlyReferrals.length}</p></div>
+                        <div className="text-center"><p className="text-[10px] font-bold uppercase text-teal-700">New</p><p className="text-3xl font-black text-teal-700">{monthlyReferrals.filter(r => ['new','pending','referred','submitted','new referral'].includes(referralStatus(r))).length}</p></div>
+                        <div className="text-center"><p className="text-[10px] font-bold uppercase text-indigo-500">In Progress</p><p className="text-3xl font-black text-indigo-600">{monthlyReferrals.filter(r => ['in progress','in_progress','processing','accepted'].includes(referralStatus(r))).length}</p></div>
+                        <div className="text-center"><p className="text-[10px] font-bold uppercase text-emerald-600">Returned</p><p className="text-3xl font-black text-emerald-600">{monthlyReferrals.filter(r => ['returned','returned to clinic','completed and returned','sent back','sent back to clinic','returned to referring clinic'].includes(referralStatus(r).replace(/[_-]+/g, ' ').trim())).length}</p></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* Active referrals remain visible until the completed report is sent back to the referring clinic. */}
+              <section id="specialist-referrals" className="space-y-4 scroll-mt-24">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Clock size={20} className="text-teal-700"/>
+                    <h2 className="text-lg font-bold tracking-tight text-slate-800">Referrals from Clinics</h2>
+                    <span className="text-sm font-semibold text-slate-500">{new Date().toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'})}</span>
+                    <span className="rounded bg-teal-700 px-2 py-0.5 text-[10px] font-black uppercase tracking-tighter text-white">{openReferrals.length} Active Referrals</span>
+                    <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-tighter text-slate-600">{newReferrals.length} New</span>
+                  </div>
+                </div>
+
+                {/* Specialist referral queue cards — mirrors Today's Queue cards on the clinic dashboard. */}
+                <div className="space-y-3">
+                  {openReferrals.length > 0 ? (
+                    <div className="flex flex-wrap items-start gap-4">
+                      {openReferrals.map(referral => {
+                        const patientName = referral.patientName || referral.patient?.name || referral.name || 'Patient details pending';
+                        const patientIC = referral.icNumber || referral.patientIC || referral.patient?.icNumber || '-';
+                        const referringClinic = referral.referringClinicName || referral.fromClinicName || referral.sourceClinicName || referral.referringClinicId || 'Referring clinic';
+                        const referringClinicId = referral.referringClinicId || referral.fromClinicId || referral.sourceClinicId || referral.referringClinic?.id || '';
+                        const sourceClinic = clinics.find(clinic => clinic.id === referringClinicId) || clinics.find(clinic => clinic.name === referringClinic || clinic.shortName === referringClinic) || null;
+                        const clinicColor = getClinicColor(sourceClinic);
+                        const statusText = String(referral.status || referral.referralStatus || 'New').replace(/[_-]+/g, ' ');
+                        return (
+                          <article key={`queue-${referral.id}`} onClick={() => openSpecialistReferral(referral)} role="button" tabIndex={0} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') openSpecialistReferral(referral); }} className={`w-full max-w-sm cursor-pointer rounded-xl border border-slate-200 border-l-4 ${clinicColor.border} bg-white p-4 shadow-sm transition-shadow hover:shadow-md focus:outline-none focus:ring-2 focus:ring-teal-500`}>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border ${clinicColor.badge}`}><Users size={19}/></div>
+                              <div className="min-w-0 flex-1 text-right">
+                                <span className={`inline-block max-w-full truncate rounded-full border px-2 py-1 text-[10px] font-black uppercase tracking-wide ${clinicColor.badge}`}>{referringClinic}</span>
+                                <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{statusText}</p>
+                              </div>
+                            </div>
+                            <h3 className="mt-3 break-words text-sm font-black uppercase text-slate-800">{patientName}</h3>
+                            <p className="mt-1 text-xs text-slate-500">IC: {patientIC}</p>
+                            <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2">
+                              <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">Referral reason / notes</p>
+                              <p className="mt-1 line-clamp-2 break-words text-xs text-slate-600">{referral.referralReason || referral.reason || referral.notes || 'No reason or notes provided.'}</p>
+                            </div>
+                            <div className="mt-3 flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-semibold text-slate-400">Received: {formatReferralDate(referral)}</span>
+                              <span className="rounded-lg bg-teal-700 px-3 py-2 text-[10px] font-black uppercase text-white">Referral received</span>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex min-h-[108px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white/90 px-4 py-5 text-center">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-50 text-teal-700"><ClipboardCheck size={21}/></div>
+                      <p className="mt-2 text-sm font-bold text-slate-700">No referrals received</p>
+                      <p className="mt-1 text-xs text-slate-500">New referrals from clinics will appear here until the specialist report is completed and returned.</p>
+                    </div>
+                  )}
+                </div>
+
+                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white p-3 md:p-4">
+                    <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-300 px-3 py-2">
+                      <Search size={16} className="shrink-0 text-slate-400"/>
+                      <input
+                        value={specialistReferralSearch}
+                        onChange={event => { setSpecialistReferralSearch(event.target.value); setSpecialistReferralPageNumber(1); }}
+                        placeholder="Search patient name or IC..."
+                        className="w-full min-w-0 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
+                        aria-label="Search referrals by patient name or IC"
+                      />
+                    </div>
+                    <span className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-bold text-teal-800">All referrals ({filteredClinicReferrals.length})</span>
+                  </div>
+
+                  {filteredClinicReferrals.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[850px] text-left">
+                        <thead className="bg-slate-200/80 text-[10px] font-black uppercase tracking-widest text-slate-600">
+                          <tr>
+                            <th className="px-4 py-4">Patient Details</th>
+                            <th className="px-4 py-4">Referring Clinic</th>
+                            <th className="px-4 py-4">Referral Date</th>
+                            <th className="px-4 py-4">Reason / Notes</th>
+                            <th className="px-4 py-4">Status</th>
+                            <th className="px-4 py-4">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {paginatedSpecialistReferrals.map(referral => {
+                            const referringClinic = referral.referringClinicName || referral.fromClinicName || referral.sourceClinicName || referral.referringClinicId || '-';
+                            const referringClinicId = referral.referringClinicId || referral.fromClinicId || referral.sourceClinicId || referral.referringClinic?.id || '';
+                            const sourceClinic = clinics.find(clinic => clinic.id === referringClinicId) || clinics.find(clinic => clinic.name === referringClinic || clinic.shortName === referringClinic) || null;
+                            const clinicColor = getClinicColor(sourceClinic);
+                            return (
+                              <tr key={referral.id} className={`border-l-4 ${clinicColor.border} bg-white transition-colors hover:bg-slate-50`}>
+                                <td className="px-4 py-4">
+                                  <p className="text-sm font-black text-slate-800">{referral.patientName || referral.patient?.name || referral.name || 'Patient details pending'}</p>
+                                  <p className="mt-1 text-xs text-slate-500">IC: {referral.icNumber || referral.patientIC || referral.patient?.icNumber || '-'}</p>
+                                </td>
+                                <td className="px-4 py-4"><span className={`inline-flex max-w-[220px] rounded-full border px-2.5 py-1 text-xs font-bold ${clinicColor.badge}`}>{referringClinic}</span></td>
+                                <td className="px-4 py-4 text-sm text-slate-600">{formatReferralDate(referral)}</td>
+                                <td className="max-w-xs px-4 py-4 text-sm text-slate-600">{referral.referralReason || referral.reason || referral.notes || '-'}</td>
+                                <td className="px-4 py-4">{(() => { const status = String(referral.status || referral.referralStatus || 'New').replace(/[_-]+/g, ' '); const returned = ['returned', 'returned to clinic', 'sent back', 'sent back to clinic', 'returned to referring clinic', 'completed and returned'].includes(status.toLowerCase()); const inProgress = status.toLowerCase() === 'in progress'; const returnedDate = returned ? formatReferralReturnedDate(referral) : ''; return <div className="flex flex-col items-center gap-1.5 text-center"><span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${returned ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : inProgress ? 'border-indigo-200 bg-indigo-50 text-indigo-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>{returned ? 'Returned to Clinic' : status}</span>{returnedDate && <span className="text-[10px] font-medium text-slate-500">Returned: {returnedDate}</span>}</div>; })()}</td>
+                                <td className="px-4 py-4"><button type="button" onClick={() => openSpecialistReferral(referral)} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-bold text-white transition hover:bg-teal-800">{openReferrals.some(item => item.id === referral.id) ? 'Open Referral' : 'View Report'}</button></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="flex min-h-[150px] flex-col items-center justify-center px-4 py-8 text-center">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700"><ClipboardCheck size={23}/></div>
+                      <p className="mt-3 font-bold text-slate-700">{specialistReferralSearch.trim() ? 'No matching referrals found' : 'No referrals to display yet'}</p>
+                      <p className="mx-auto mt-1 max-w-lg text-sm text-slate-500">{specialistReferralSearch.trim() ? 'Try another patient name or IC number.' : 'New referrals sent by clinic users will appear here and remain until the specialist report is sent back to the referring clinic.'}</p>
+                    </div>
+                  )}
+                  {filteredClinicReferrals.length > 0 && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Page {safeSpecialistReferralPage} of {specialistReferralTotalPages} · {SPECIALIST_REFERRALS_PER_PAGE} per page</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" onClick={() => setSpecialistReferralPageNumber(p => Math.max(1, p - 1))} disabled={safeSpecialistReferralPage === 1} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold disabled:opacity-40">Previous</button>
+                        {Array.from({ length: specialistReferralTotalPages }, (_, i) => i + 1).filter(page => page === 1 || page === specialistReferralTotalPages || Math.abs(page - safeSpecialistReferralPage) <= 1).map((page, index, pages) => (
+                          <React.Fragment key={page}>
+                            {index > 0 && page - pages[index - 1] > 1 && <span className="px-1 text-slate-400">…</span>}
+                            <button type="button" onClick={() => setSpecialistReferralPageNumber(page)} className={`h-8 min-w-8 rounded-lg border px-2 text-xs font-black ${page === safeSpecialistReferralPage ? 'border-teal-700 bg-teal-700 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>{page}</button>
+                          </React.Fragment>
+                        ))}
+                        <button type="button" onClick={() => setSpecialistReferralPageNumber(p => Math.min(specialistReferralTotalPages, p + 1))} disabled={safeSpecialistReferralPage === specialistReferralTotalPages} className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold disabled:opacity-40">Next</button>
+                      </div>
+                    </div>
+                  )}
+                </section>
+              </section>
+            </>
+          )}
+        </main>
+        
+        {showSpecialistStaffManagement && isSpecialistAdmin && (
+          <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto overscroll-contain bg-slate-900/40 p-2 backdrop-blur-sm sm:p-5">
+            <button
+              type="button"
+              aria-label="Close Staff Management"
+              onClick={() => {
+                if (specialistStaffSaving) return;
+                setShowSpecialistStaffManagement(false);
+                setShowSpecialistStaffForm(false);
+                setEditingSpecialistStaffId(null);
+                setSpecialistStaffIdInput('');
+                setSpecialistStaffNameInput('');
+                setSpecialistStaffPasswordInput('');
+                setShowSpecialistStaffPassword(false);
+              }}
+              className="absolute inset-0 h-full w-full cursor-default"
+            />
+            <section className="relative my-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-2.5rem)]">
+              <div className="flex items-start justify-between border-b border-slate-100 bg-white p-5 sm:p-7">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-xl bg-teal-700 p-2.5 shadow-sm"><Users size={20} className="text-white" /></div>
+                  <div>
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-[.18em] text-teal-700">Specialist clinic administration</p>
+                    <h2 className="text-2xl font-black leading-tight text-slate-900">Staff Management</h2>
+                    <p className="mt-1 text-sm text-slate-500">Manage staff accounts for {specialistClinic?.name || 'this specialist clinic'}.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close Staff Management"
+                  onClick={() => {
+                    if (specialistStaffSaving) return;
+                    setShowSpecialistStaffManagement(false);
+                    setShowSpecialistStaffForm(false);
+                    setEditingSpecialistStaffId(null);
+                    setSpecialistStaffIdInput('');
+                    setSpecialistStaffNameInput('');
+                    setSpecialistStaffPasswordInput('');
+                    setShowSpecialistStaffPassword(false);
+                  }}
+                  className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100"
+                ><XCircle size={24} /></button>
+              </div>
+
+              <div className="space-y-5 overflow-y-auto bg-white p-5 sm:p-7">
+                <section>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (showSpecialistStaffForm) {
+                        setShowSpecialistStaffForm(false);
+                        setEditingSpecialistStaffId(null);
+                        setSpecialistStaffIdInput('');
+                        setSpecialistStaffNameInput('');
+                        setSpecialistStaffPasswordInput('');
+                        setShowSpecialistStaffPassword(false);
+                      } else {
+                        setEditingSpecialistStaffId(null);
+                        setSpecialistStaffIdInput('');
+                        setSpecialistStaffNameInput('');
+                        setSpecialistStaffPasswordInput('');
+                        setShowSpecialistStaffPassword(false);
+                        setShowSpecialistStaffForm(true);
+                      }
+                    }}
+                    className="mb-4 flex w-full items-center justify-between"
+                  >
+                    <h3 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      {editingSpecialistStaffId ? <Edit2 size={14} className="text-teal-700" /> : <UserPlus size={14} className="text-teal-700" />}
+                      {editingSpecialistStaffId ? `Editing Account: ${editingSpecialistStaffId}` : 'Register New Specialist Staff'}
+                    </h3>
+                    {!editingSpecialistStaffId && <span className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-40">{showSpecialistStaffForm ? <XCircle size={16}/> : <UserPlus size={16}/>} {showSpecialistStaffForm ? 'Close form' : 'Add new user'}</span>}
+                  </button>
+
+                  {(showSpecialistStaffForm || editingSpecialistStaffId) && (
+                    <form onSubmit={saveSpecialistStaff} className="rounded-2xl border border-teal-100 bg-teal-50/50 p-3 md:p-4">
+                      <div className="mb-5 flex items-center justify-between gap-3">
+                        <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-teal-700">New account</p><h4 className="mt-1 text-base font-black text-slate-900">{editingSpecialistStaffId ? 'Edit Specialist User Details' : 'Register New Specialist User'}</h4></div>
+                        <span className="rounded-full bg-white px-3 py-1.5 text-[10px] font-bold text-slate-500">Specialist Admin</span>
+                      </div>
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                        <div className="space-y-1">
+                          <label className="ml-1 text-[9px] font-bold uppercase text-teal-700">Staff User ID</label>
+                          <input type="text" required disabled={!!editingSpecialistStaffId} value={specialistStaffIdInput} onChange={e => setSpecialistStaffIdInput(e.target.value)} placeholder="e.g. OPHSTAFF01" className="w-full rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-teal-600 disabled:bg-slate-100" />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="ml-1 text-[9px] font-bold uppercase text-teal-700">Password</label>
+                          <div className="relative">
+                            <input type={showSpecialistStaffPassword ? 'text' : 'password'} required={!editingSpecialistStaffId} value={specialistStaffPasswordInput} onChange={e => setSpecialistStaffPasswordInput(e.target.value)} placeholder={editingSpecialistStaffId ? 'Leave blank to keep current password' : 'Enter password'} className="w-full rounded-xl border border-teal-200 bg-white px-4 py-2.5 pr-11 text-sm font-medium outline-none focus:ring-2 focus:ring-teal-600" />
+                            <button type="button" onClick={() => setShowSpecialistStaffPassword(v => !v)} aria-label={showSpecialistStaffPassword ? 'Hide password' : 'Show password'} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">{showSpecialistStaffPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="ml-1 text-[9px] font-bold uppercase text-teal-700">Display Name</label>
+                          <input type="text" required value={specialistStaffNameInput} onChange={e => setSpecialistStaffNameInput(e.target.value)} placeholder="e.g. Dr. Johny" className="w-full rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-sm font-medium outline-none focus:ring-2 focus:ring-teal-600" />
+                        </div>
+                      </div>
+                      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div className="space-y-1">
+                          <label className="ml-1 text-[9px] font-bold uppercase text-teal-700">Clinic</label>
+                          <div className="w-full rounded-xl border border-teal-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700">{specialistClinic?.name || specialistCurrentUser.clinicId}</div>
+                          <p className="ml-1 mt-1 text-[9px] text-slate-400">Account is automatically assigned to this specialist clinic.</p>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="ml-1 text-[9px] font-bold uppercase text-teal-700">Role</label>
+                          <div className="w-full rounded-xl border border-teal-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-slate-700">{editingSpecialistStaffId ? (specialistUsers.find(u => u.id === editingSpecialistStaffId)?.role || "STAFF") : "STAFF"}</div>
+                          <p className="ml-1 mt-1 text-[9px] text-slate-400">Specialist Admin manages staff accounts for this clinic.</p>
+                        </div>
+                      </div>
+                      <div className="mt-5 flex justify-end gap-2">
+                        {editingSpecialistStaffId && <button type="button" onClick={() => { setShowSpecialistStaffForm(false); setEditingSpecialistStaffId(null); setSpecialistStaffIdInput(''); setSpecialistStaffNameInput(''); setSpecialistStaffPasswordInput(''); setShowSpecialistStaffPassword(false); }} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel Edit</button>}
+                        <button type="submit" disabled={specialistStaffSaving} className="rounded-xl bg-teal-700 px-5 py-2.5 text-[10px] font-black uppercase tracking-widest text-white shadow-lg transition-all hover:bg-teal-800 disabled:opacity-60">{specialistStaffSaving ? 'Saving…' : editingSpecialistStaffId ? 'Save Changes' : 'Create Account'}</button>
+                      </div>
+                    </form>
+                  )}
+                </section>
+
+                <section className="flex max-h-[420px] flex-col">
+                  <h3 className="mb-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Current Specialist Users ({clinicStaff.length})</h3>
+                  <div className="overflow-y-auto pr-1">
+                    {clinicStaff.length ? clinicStaff.map(staff => (
+                      <div key={staff.id} className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-slate-100 px-4 py-3">
+                        <div className="min-w-0 flex items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600"><Users size={18}/></div>
+                          <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-bold text-slate-800">{staff.displayName}</p><span className={`rounded px-2 py-0.5 text-[9px] font-bold ${staff.role === 'ADMIN' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>{staff.role || 'STAFF'}</span><span className="rounded border border-teal-200 bg-teal-50 px-2 py-0.5 text-[9px] font-bold text-teal-800">{specialistClinic?.name || specialistCurrentUser.clinicId}</span></div><p className="mt-1 text-xs text-slate-400">{staff.id} · {staff.active ? 'Active' : 'Inactive'}</p></div>
+                        </div>
+                        <button type="button" onClick={() => { setEditingSpecialistStaffId(staff.id); setSpecialistStaffIdInput(staff.id); setSpecialistStaffNameInput(staff.displayName); setSpecialistStaffPasswordInput(''); setShowSpecialistStaffPassword(false); setShowSpecialistStaffForm(true); }} className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-teal-800 hover:bg-teal-50"><Edit2 size={13} className="mr-1 inline"/> Edit</button>
+                      </div>
+                    )) : <div className="rounded-2xl border border-slate-200 px-4 py-10 text-center text-sm text-slate-500">No staff accounts have been added for this clinic yet.</div>}
+                  </div>
+                </section>
+              </div>
+              <div className="border-t border-slate-100 bg-slate-50 px-4 py-4 text-center text-[9px] font-bold uppercase tracking-wide text-slate-400">Only specialist administrators can manage these credentials. Keep passwords secure.</div>
+            </section>
+          </div>
+        )}
+{isAuthenticating && (
+          <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/30 backdrop-blur-sm">
+            <div className="flex w-[calc(100vw-1rem)] max-w-[300px] flex-col items-center rounded-2xl border border-white/40 bg-white/95 px-6 py-7 shadow-2xl backdrop-blur-xl">
+              <div className="mb-5 h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-teal-700"></div>
+              <p className="text-center text-sm font-black uppercase tracking-[0.2em] text-slate-800">
+                {authMessage.includes('Protecting') ? 'Protecting Patient Data...' : 'Ending Clinical Session...'}
+              </p>
+              <p className="mt-2 text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">
+                {authMessage.includes('Protecting') ? 'Securely closing specialist access' : 'Please wait'}
+              </p>
+            </div>
+          </div>
+        )}
+        {specialistComingSoonFeature && (
+          <div
+            className="fixed inset-0 z-[500] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
+            onClick={() => setSpecialistComingSoonFeature(null)}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="specialist-coming-soon-title"
+              className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-2xl"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-50 text-amber-600">
+                <Clock size={28} />
+              </div>
+              <span className="inline-flex rounded-full bg-amber-100 px-3 py-1 text-[10px] font-black uppercase tracking-widest text-amber-700">Coming Soon · In Progress</span>
+              <h3 id="specialist-coming-soon-title" className="mt-3 text-lg font-black text-slate-800">{specialistComingSoonFeature}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-slate-500">Ciri ini sedang dalam pembangunan dan akan tersedia dalam kemas kini SINAR yang akan datang.</p>
+              <button
+                onClick={() => setSpecialistComingSoonFeature(null)}
+                className="mt-5 w-full rounded-xl bg-teal-700 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-teal-800"
+              >Close</button>
+            </div>
+          </div>
+        )}
+        {selectedSpecialistReferral && (
+          <div
+            className="fixed inset-0 z-[300] flex flex-col bg-slate-950/70 backdrop-blur-sm"
+            onClick={() => setSelectedSpecialistReferral(null)}
+          >
+            <div
+              className="flex min-h-0 flex-1 flex-col"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Fixed popup header; only the document area scrolls. */}
+              <div className="z-10 flex shrink-0 items-center justify-between gap-3 bg-gradient-to-r from-teal-950 to-teal-800 px-4 py-3 text-white shadow-lg sm:px-6">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-teal-200">SINAR · Specialist Referral Review</p>
+                  <h2 className="truncate text-base font-black sm:text-lg">{selectedSpecialistReferral.patientName || selectedSpecialistReferral.patient?.name || 'Patient Referral'}</h2>
+                  <p className="text-xs text-teal-100">IC: {selectedSpecialistReferral.icNumber || selectedSpecialistReferral.patientIC || selectedSpecialistReferral.patient?.icNumber || '-'}</p>
+                </div>
+                <button type="button" onClick={() => setSelectedSpecialistReferral(null)} className="shrink-0 rounded-lg px-3 py-2 text-lg font-bold hover:bg-white/10" aria-label="Close referral">×</button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4 sm:px-6 sm:py-6">
+                {(() => {
+                  const referral = selectedSpecialistReferral;
+                  const normalizedReferralStatus = String(referral.status || referral.referralStatus || '').toLowerCase().replace(/[_-]+/g, ' ').trim();
+                  const isReturnedReport = ['returned', 'returned to clinic', 'sent back', 'sent back to clinic', 'returned to referring clinic', 'completed and returned'].includes(normalizedReferralStatus);
+                  const snapshot = referral.appointmentSnapshot || {};
+                  const fields = referral.formFields || {};
+                  const referringClinic = clinics.find(c => c.id === referral.referringClinicId);
+                  const clinicName = referral.referringClinicName || referral.fromClinicName || snapshot.clinicName || referringClinic?.name || '';
+                  const inputClass = "min-w-0 w-full border-0 border-b border-dotted border-slate-500 bg-transparent px-1 py-0.5 text-[11px] sm:text-xs text-slate-900 outline-none focus:border-blue-700 focus:ring-0 rounded-none placeholder:text-slate-400";
+                  const labelClass = "shrink-0 text-[10px] sm:text-[11px] font-semibold text-slate-700";
+                  const valueField = (label: string, value: unknown, extraClass = '') => (
+                    <div className="flex min-w-0 items-baseline gap-1.5">
+                      <span className={labelClass}>{label}:</span>
+                      <span className={`min-w-0 flex-1 border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] text-slate-900 ${extraClass}`}>{String(value ?? '').trim() || '—'}</span>
+                    </div>
+                  );
+                  const specialistRuledField = (key: string, label: string, rows = 3) => (
+                    <div key={key} className="min-w-0">
+                      <div className={labelClass + " mb-1 block"}>{label}:</div>
+                      {isReturnedReport ? (
+                        <div aria-readonly="true" className="min-h-[84px] w-full whitespace-pre-wrap break-words rounded-none px-1 py-0 text-[11px] leading-[28px] text-slate-900" style={{ backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0px, transparent 26px, #94a3b8 27px, transparent 28px)', backgroundSize: '100% 28px' }}>{specialistReferralSection6[key] || '—'}</div>
+                      ) : (
+                        <textarea rows={rows} value={specialistReferralSection6[key] || ''} onChange={e => setSpecialistReferralSection6(v => ({...v, [key]: e.target.value}))}
+                          className="block w-full resize-y rounded-none border-0 bg-transparent px-1 py-0 text-[11px] leading-[28px] text-slate-900 outline-none focus:ring-0 placeholder:text-slate-400"
+                          style={{ backgroundImage: 'repeating-linear-gradient(to bottom, transparent 0px, transparent 26px, #94a3b8 27px, transparent 28px)', backgroundSize: '100% 28px' }} />
+                      )}
+                    </div>
+                  );
+                  const section = (n: number, title: string) => (
+                    <div className="mb-2 flex items-center gap-2 rounded-sm border-l-[3px] border-blue-900 bg-blue-50 px-2 py-1.5">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-950 text-[10px] font-bold text-white">{n}</span>
+                      <span className="text-[11px] font-black uppercase tracking-wide text-blue-950">{title}</span>
+                    </div>
+                  );
+                  const eyeInfo = (eye: 'right' | 'left') => {
+                    const details = eye === 'right' ? snapshot.rightEyeReviewDetails : snapshot.leftEyeReviewDetails;
+                    const review = eye === 'right' ? snapshot.rightEyeReview : snapshot.leftEyeReview;
+                    const imageStatus = eye === 'right' ? snapshot.rightEyeImageStatus : snapshot.leftEyeImageStatus;
+                    const imageReason = eye === 'right' ? snapshot.rightEyeImageReason : snapshot.leftEyeImageReason;
+                    return {
+                      text: imageStatus === 'Not Obtainable' ? `Not Obtainable${imageReason ? ` — ${imageReason}` : ''}` : (details?.status || review || 'Belum direkodkan'),
+                      types: (details?.abnormalTypes || []).join(', '),
+                      severity: details?.npdrSeverity || '',
+                      notes: [details?.othersText, details?.comment].filter(Boolean).join(' — ')
+                    };
+                  };
+                  const miniValue = (key: string) => String(snapshot[key] || fields[key] || '').trim() || '—';
+                  return (
+                    <div className="mx-auto flex w-full max-w-[900px] flex-col items-center gap-6 text-slate-900">
+                      {/* PAGE 1 — same structure and styling as SINAR clinic print preview */}
+                      <div className="w-full max-w-[794px] bg-white px-5 py-5 shadow-2xl ring-1 ring-black/10 sm:px-8 sm:py-7 min-h-[1000px] text-[11px]">
+                        <div className="mb-3 grid grid-cols-[76px_minmax(0,1fr)] items-center gap-3 border-b-[3px] border-blue-950 pb-3">
+                          <div className="flex flex-col items-center gap-1">
+                            <img src={roundLogo} alt="SINAR logo" className="h-12 w-12 object-contain"/>
+                            <img src={textLogo} alt="SINAR" className="h-4 max-w-[76px] object-contain"/>
+                          </div>
+                          <div className="text-center">
+                            <h3 className="text-sm font-black text-blue-950 sm:text-base">REKOD PEMERIKSAAN FUNDUS &amp; RUJUKAN</h3>
+                            <p className="mt-1 text-[10px] font-bold text-slate-600">{clinicName}</p>
+                            {referringClinic?.address && <p className="mt-0.5 whitespace-pre-line text-[9px] leading-tight text-slate-500">{referringClinic.address}</p>}
+                            {referringClinic?.phone && <p className="mt-0.5 text-[9px] font-semibold text-slate-600">Tel: {referringClinic.phone}</p>}
+                          </div>
+                        </div>
+
+                        {section(1, 'Maklumat Pesakit')}
+                        <div className="mb-3 space-y-2 px-1">
+                          <div className="grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-2">
+                            {valueField('Nama Pesakit', referral.patientName || referral.patient?.name)}
+                            {valueField('No. K/P', referral.icNumber || referral.patientIC || referral.patient?.icNumber)}
+                            {valueField('Klinik Kesihatan (Asal)', clinicName)}
+                            {valueField('No. Telefon', referral.phoneNumber || referral.patient?.phoneNumber)}
+                          </div>
+                          <div className="grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-2">
+                            {valueField('Diabetes Mellitus sejak', fields.dmDuration)}
+                            {valueField('HbA1c', fields.hba1c)}
+                            {valueField('Penyakit Lain', fields.otherDiseases || (snapshot.diseaseTypes || []).concat(snapshot.otherDisease ? [snapshot.otherDisease] : []).join(', '))}
+                            {valueField('Tarikh Pemeriksaan', referral.date ? new Date(referral.date).toLocaleDateString('en-GB') : '')}
+                          </div>
+                          {valueField('Sejarah ringkas', fields.history)}
+                        </div>
+
+                        {section(2, 'Visual Acuity (V/A)')}
+                        <div className="mb-4 overflow-hidden border border-slate-300">
+                          <div className="grid grid-cols-3 bg-blue-50 text-[10px] font-black text-blue-950">
+                            <div className="p-2">PEMERIKSAAN</div>
+                            <div className="border-l border-slate-300 p-2 text-center">RE (MATA KANAN)</div>
+                            <div className="border-l border-slate-300 p-2 text-center">LE (MATA KIRI)</div>
+                          </div>
+                          {[{label:'Unaided',right:'rightEyeVAUnaided',left:'leftEyeVAUnaided'},{label:'With Glasses',right:'rightEyeVAWithGlasses',left:'leftEyeVAWithGlasses'},{label:'Pinhole',right:'rightEyeVAPinhole',left:'leftEyeVAPinhole'}].map(row => (
+                            <div key={row.label} className="grid min-h-8 grid-cols-3 items-center border-t border-slate-300">
+                              <div className="px-2 py-1 text-[11px]">{row.label}</div>
+                              <div className="border-l border-slate-300 px-2 py-1 text-center text-[11px]">{miniValue(row.right)}</div>
+                              <div className="border-l border-slate-300 px-2 py-1 text-center text-[11px]">{miniValue(row.left)}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {section(3, 'Gambar Fundus')}
+                        <div className="mb-4 grid grid-cols-2 gap-3">
+                          {[{title:'MATA KANAN (RE)',image:snapshot.rightEyePhoto,uploadedBy:snapshot.rightEyeUploadedBy || referral.rightEyeUploadedBy,uploadedAt:snapshot.rightEyePhotoUploadedAt || referral.rightEyePhotoUploadedAt},{title:'MATA KIRI (LE)',image:snapshot.leftEyePhoto,uploadedBy:snapshot.leftEyeUploadedBy || referral.leftEyeUploadedBy,uploadedAt:snapshot.leftEyePhotoUploadedAt || referral.leftEyePhotoUploadedAt}].map(photo => {
+                            const uploadedDate = photo.uploadedAt
+                              ? (typeof (photo.uploadedAt as any)?.toDate === 'function' ? (photo.uploadedAt as any).toDate() : new Date(photo.uploadedAt as any))
+                              : null;
+                            const uploadedByName = photo.uploadedBy ? (getUserDisplayName(photo.uploadedBy) || String(photo.uploadedBy)) : '';
+                            return (
+                              <div key={photo.title} className="rounded-sm border border-slate-300 p-2">
+                                <h4 className="mb-2 text-center text-[10px] font-black text-blue-950">{photo.title}</h4>
+                                <button type="button" onClick={() => { if (photo.image) { setSpecialistZoomImage(photo.image); setSpecialistZoomEye(photo.title); setSpecialistImageZoom(1); } }} className="flex h-36 w-full items-center justify-center border border-slate-200 bg-slate-50">
+                                  {photo.image ? <img src={photo.image} alt={photo.title} className="max-h-full max-w-full object-contain"/> : <span className="text-[10px] text-slate-400">Tiada gambar fundus</span>}
+                                </button>
+                                <p className="mt-2 text-center text-[9px] text-slate-600">Tarikh / masa imej: {uploadedDate && !Number.isNaN(uploadedDate.getTime()) ? uploadedDate.toLocaleString('en-GB') : '—'}</p>
+                                <p className="text-center text-[9px] text-slate-600">Dimuat naik oleh: {uploadedByName || '—'}</p>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {section(4, 'Dapatan Pemeriksaan')}
+                        <div className="mb-3 grid grid-cols-2 gap-3">
+                          {[{title:'MATA KANAN (RE)',data:eyeInfo('right')},{title:'MATA KIRI (LE)',data:eyeInfo('left')}].map(eye => (
+                            <div key={eye.title} className="overflow-hidden rounded-sm border border-slate-300">
+                              <h4 className="bg-blue-50 px-2 py-1.5 text-[10px] font-black text-blue-950">{eye.title}</h4>
+                              <div className="space-y-1 p-2 text-[10px]">
+                                <p><b>Status:</b> {eye.data.text}</p>
+                                <p><b>Jenis abnormaliti:</b> {eye.data.types || '—'}</p>
+                                <p><b>NPDR severity:</b> {eye.data.severity || '—'}</p>
+                                <p><b>Catatan:</b> {eye.data.notes || '—'}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mb-3 grid grid-cols-[100px_minmax(0,1fr)] gap-3 px-1">
+                          <div className="flex items-baseline gap-1.5"><span className={labelClass}>Kes Dirujuk:</span><span className="text-[11px] font-bold">{snapshot.referred === true ? 'Ya' : 'Tidak'}</span></div>
+                          {valueField('Jika Ya, nyatakan sebab', fields.referralReason || referral.referralReason || referral.reason)}
+                        </div>
+
+                        {section(5, 'Pengesahan Petugas')}
+                        <div className="mb-3 space-y-2 px-1">
+                          <div className="grid grid-cols-1 gap-x-5 gap-y-2 sm:grid-cols-2">
+                            {valueField('Nama Petugas', fields.staffName)}
+                            {valueField('Jawatan', fields.staffDesignation)}
+                          </div>
+                          <div className="grid grid-cols-1 gap-x-4 gap-y-2 sm:grid-cols-3">
+                            {valueField('Tandatangan', '')}
+                            {valueField('Cop Rasmi', fields.staffStamp)}
+                            {valueField('Tarikh', fields.staffDate || (referral.date ? new Date(referral.date).toLocaleDateString('en-GB') : ''))}
+                          </div>
+                        </div>
+                        <p className="mt-4 text-right text-[8px] text-slate-400">Halaman 1 · Rekod pemeriksaan fundus SINAR</p>
+                      </div>
+
+                      {/* PAGE 2 — exact continuation layout from the clinic PDF; Section 6 remains editable. */}
+                      <div className="w-full max-w-[794px] bg-white px-5 py-5 shadow-2xl ring-1 ring-black/10 sm:px-8 sm:py-7 min-h-[1000px] text-[11px]">
+                        <h3 className="text-sm font-black text-blue-950 sm:text-base">SAMBUNGAN REKOD PEMERIKSAAN FUNDUS &amp; RUJUKAN</h3>
+                        <div className="mt-2 border-b border-slate-300 pb-3 text-[10px] text-slate-700">
+                          <span className="font-semibold">Nama:</span> {referral.patientName || referral.patient?.name || '—'}
+                          <span className="ml-6 font-semibold">No. K/P:</span> {referral.icNumber || referral.patientIC || '—'}
+                        </div>
+                        <div className="mt-5">
+                          {section(6, 'Untuk Kegunaan Pakar Oftalmologi')}
+                          <div className="space-y-5 px-1 pt-3">
+                            {specialistRuledField('ophthalmologyReport', 'Laporan', 3)}
+                            {specialistRuledField('ophthalmologyRecommendation', 'Syor', 3)}
+                            <div className="pt-1">
+                              <div className={labelClass + " mb-1 block"}>Temujanji di Klinik Oftalmologi:</div>
+                              {isReturnedReport ? (
+                                <div aria-readonly="true" className="w-56 max-w-full border-b border-dotted border-slate-500 px-1 py-1 text-[11px] text-slate-900">{specialistReferralSection6.ophthalmologyAppointment ? new Date(`${specialistReferralSection6.ophthalmologyAppointment}T00:00:00`).toLocaleDateString('en-GB') : '—'}</div>
+                              ) : (
+                                <input type="date" value={specialistReferralSection6.ophthalmologyAppointment || ''} onChange={e => setSpecialistReferralSection6(v => ({...v,ophthalmologyAppointment:e.target.value}))}
+                                  className="w-56 max-w-full rounded-none border-0 border-b border-dotted border-slate-500 bg-transparent px-1 py-1 text-[11px] text-slate-900 outline-none focus:border-blue-700 focus:ring-0" />
+                              )}
+                            </div>
+                            <div className="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-2">
+                              <label className={labelClass + " block"}>Nama Doktor
+                                {isReturnedReport ? (
+                                  <div aria-readonly="true" className="mt-1 min-h-7 w-full border-b border-dotted border-slate-500 px-1 py-1 text-[11px] font-normal text-slate-900">{specialistReferralSection6.ophthalmologyDoctorName || '—'}</div>
+                                ) : (
+                                  <input value={specialistReferralSection6.ophthalmologyDoctorName || ''} onChange={e => setSpecialistReferralSection6(v => ({...v,ophthalmologyDoctorName:e.target.value}))}
+                                    className="mt-1 w-full rounded-none border-0 border-b border-dotted border-slate-500 bg-transparent px-1 py-1 text-[11px] font-normal text-slate-900 outline-none focus:border-blue-700 focus:ring-0" placeholder="" />
+                                )}
+                              </label>
+                              <label className={labelClass + " block"}>Jawatan
+                                {isReturnedReport ? (
+                                  <div aria-readonly="true" className="mt-1 min-h-7 w-full border-b border-dotted border-slate-500 px-1 py-1 text-[11px] font-normal text-slate-900">{specialistReferralSection6.ophthalmologyDesignation || '—'}</div>
+                                ) : (
+                                  <input value={specialistReferralSection6.ophthalmologyDesignation || ''} onChange={e => setSpecialistReferralSection6(v => ({...v,ophthalmologyDesignation:e.target.value}))}
+                                    className="mt-1 w-full rounded-none border-0 border-b border-dotted border-slate-500 bg-transparent px-1 py-1 text-[11px] font-normal text-slate-900 outline-none focus:border-blue-700 focus:ring-0" placeholder="" />
+                                )}
+                              </label>
+                            </div>
+                            <p className="pt-2 text-right text-[9px] text-slate-400">
+                              {isReturnedReport
+                                ? `Tarikh laporan: ${formatReferralReturnedDate(referral) || '—'}`
+                                : 'Tarikh laporan akan dijana secara automatik apabila dihantar semula ke klinik'}
+                            </p>
+                          </div>
+                        </div>
+                        <p className="mt-12 text-right text-[8px] text-slate-400">Halaman 2 · Untuk kegunaan pakar oftalmologi</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.08)] sm:px-6">
+                {(() => {
+                  const status = String(selectedSpecialistReferral.status || selectedSpecialistReferral.referralStatus || '').toLowerCase().replace(/[_-]+/g, ' ').trim();
+                  const readOnlyReturned = ['returned', 'returned to clinic', 'sent back', 'sent back to clinic', 'returned to referring clinic', 'completed and returned'].includes(status);
+                  return readOnlyReturned ? (
+                    <>
+                      <span className="text-xs font-semibold text-emerald-700">Laporan pakar telah dihantar ke klinik — mod paparan sahaja</span>
+                      <button type="button" onClick={() => setSelectedSpecialistReferral(null)} className="rounded-lg bg-teal-800 px-6 py-2 text-xs font-black text-white transition hover:bg-teal-900">Close</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xs text-slate-500">Lengkapkan Section 6 dan simpan laporan pakar</span>
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={() => void saveSpecialistReferral(false)} disabled={specialistReferralSaving} className="rounded-lg border border-teal-700 px-4 py-2 text-xs font-black text-teal-800 disabled:opacity-50">{specialistReferralSaving ? 'Saving...' : 'Save Draft'}</button>
+                        <button type="button" onClick={() => { if (window.confirm('Hantar laporan lengkap ini semula ke klinik yang merujuk? Referral akan dikeluarkan daripada inbox pakar.')) void saveSpecialistReferral(true); }} disabled={specialistReferralSaving} className="rounded-lg bg-teal-800 px-4 py-2 text-xs font-black text-white disabled:opacity-50">{specialistReferralSaving ? 'Processing...' : 'Send Back to Clinic'}</button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+        {specialistZoomImage && (
+          <div className="fixed inset-0 z-[400] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={() => setSpecialistZoomImage(null)}>
+            <div className="relative flex h-[68vh] max-h-[680px] min-h-[320px] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white p-3 shadow-2xl sm:h-[72vh]" onClick={e => e.stopPropagation()}>
+              <div className="mb-2 flex shrink-0 items-center justify-between gap-3">
+                <span className="text-xs font-bold text-slate-600">{specialistZoomEye || 'FUNDUS IMAGE'}</span>
+                <button type="button" onClick={() => setSpecialistZoomImage(null)} className="rounded-lg bg-slate-100 px-3 py-1.5 text-lg font-bold text-slate-700" aria-label="Close image">×</button>
+              </div>
+              <div
+                className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-slate-950 p-2 touch-none select-none ${specialistImageZoom > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in'}`}
+                onWheel={e => {
+                  e.preventDefault(); e.stopPropagation();
+                  const nextZoom = Math.max(1, Math.min(4, specialistImageZoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+                  setSpecialistImageZoom(nextZoom);
+                  if (nextZoom === 1) setSpecialistImagePan({ x: 0, y: 0 });
+                }}
+                onPointerDown={e => {
+                  if (e.pointerType !== 'mouse' || specialistImageZoom <= 1) return;
+                  e.preventDefault();
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  specialistPanStartRef.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, originX: specialistImagePan.x, originY: specialistImagePan.y };
+                }}
+                onPointerMove={e => {
+                  const start = specialistPanStartRef.current;
+                  if (e.pointerType !== 'mouse' || !start || start.pointerId !== e.pointerId || specialistImageZoom <= 1) return;
+                  e.preventDefault();
+                  setSpecialistImagePan({ x: start.originX + e.clientX - start.x, y: start.originY + e.clientY - start.y });
+                }}
+                onPointerUp={e => { if (specialistPanStartRef.current?.pointerId === e.pointerId) specialistPanStartRef.current = null; }}
+                onPointerCancel={() => { specialistPanStartRef.current = null; }}
+                onTouchStart={e => { if (e.touches.length === 2) { const dx = e.touches[0].clientX - e.touches[1].clientX; const dy = e.touches[0].clientY - e.touches[1].clientY; specialistPinchStartDistanceRef.current = Math.hypot(dx, dy); specialistPinchStartZoomRef.current = specialistImageZoom; } }}
+                onTouchMove={e => { if (e.touches.length === 2 && specialistPinchStartDistanceRef.current) { e.preventDefault(); const dx = e.touches[0].clientX - e.touches[1].clientX; const dy = e.touches[0].clientY - e.touches[1].clientY; const distance = Math.hypot(dx, dy); const nextZoom = Math.max(1, Math.min(4, specialistPinchStartZoomRef.current * (distance / specialistPinchStartDistanceRef.current))); setSpecialistImageZoom(nextZoom); if (nextZoom === 1) setSpecialistImagePan({x:0,y:0}); } }}
+                onTouchEnd={() => { specialistPinchStartDistanceRef.current = null; }}
+              >
+                <img src={specialistZoomImage} alt={specialistZoomEye || 'Fundus image'} draggable={false} style={{ transform: `translate(${specialistImagePan.x}px, ${specialistImagePan.y}px) scale(${specialistImageZoom})`, transformOrigin: 'center center', maxWidth: '100%', maxHeight: '100%' }} className="h-full w-full object-contain pointer-events-none" />
+              </div>
+            </div>
+          </div>
+        )}
+        <footer className="mt-auto px-4 pb-5 pt-2 text-center text-[10px] font-bold uppercase tracking-widest text-slate-500">SINAR SPECIALIST PORTAL · {APP_VERSION}</footer>
+      </div>
+    );
+  }
+
   // --- Views ---
 
-  if (!currentUser) {
+  if (!currentUser && !specialistCurrentUser) {
     return (
   <>
   {isAuthenticating && (
@@ -5785,7 +7214,17 @@ const tomorrowTCATotal = Object.values(
 </button>
 
 <button 
-  onClick={() => setShowAdminConsole(true)}
+  onClick={() => {
+    setShowAdminConsole(true);
+    setShowStaffForm(false);
+    setEditingUser(null);
+    setNewStaffId('');
+    setNewStaffName('');
+    setNewStaffPass('');
+    setShowStaffPassword(false);
+    setNewStaffRole(UserRole.STAFF);
+    setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
+  }}
   className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
 >
   <ShieldCheck size={15} className="text-blue-600" />
@@ -5880,7 +7319,741 @@ const tomorrowTCATotal = Object.values(
           The landing page is the PKD multi-clinic console.
          ===================================================== */}
       {currentUser.role === UserRole.SUPER_ADMIN && (
-        <main className="flex-1 max-w-7xl mx-auto px-4 py-8 w-full space-y-8">
+        <main className="flex-1 w-full max-w-[1280px] mx-auto flex flex-col gap-5 px-3 md:px-5 py-4 md:py-6">
+          <div className="min-w-0 flex-1 space-y-6">
+          {activeSuperAdminView !== 'dashboard' && (
+            <section className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">SINAR Super Admin</p><p className="mt-1 text-sm text-slate-500">Manage multi-clinic settings and access.</p></div>
+              <button type="button" onClick={() => { setActiveSuperAdminView('dashboard'); setShowStaffForm(false); setEditingUser(null); setShowDataMigration(false); }} className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-black text-slate-700 transition hover:bg-slate-50 sm:self-auto"><ChevronLeft size={16}/> Back to Dashboard</button>
+            </section>
+          )}
+          {activeSuperAdminView === 'clinics' ? (
+            <div className="space-y-6">
+              <section className="bg-white border border-slate-200 rounded-3xl p-5 md:p-7 shadow-sm">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6">
+                  <div><h1 className="text-2xl font-black text-slate-900">Clinic Management</h1><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Dynamic clinic master · {clinics.length} registered clinics</p></div>
+                  <button type="button" onClick={() => { setNewClinicId(''); setNewClinicName(''); setNewClinicShortName(''); setNewClinicAddress(''); setNewClinicPhone(''); setNewClinicIsFundusProvider(false); setNewClinicColorKey('pink'); setShowNewClinicForm(v => !v); }} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white hover:bg-violet-700"><Plus size={16}/> {showNewClinicForm ? 'Cancel' : 'Add clinic'}</button>
+                </div>
+                {showNewClinicForm && <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  const id = newClinicId.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+                  if (!id || !newClinicName.trim()) return;
+                  if (clinics.some(c => c.id === id)) { alert('Clinic ID already exists.'); return; }
+                  setIsAddingClinic(true);
+                  const clinic: Clinic = { id, name: newClinicName.trim(), shortName: newClinicShortName.trim() || newClinicName.trim(), address: newClinicAddress.trim(), phone: newClinicPhone.trim(), active: true, isFundusProvider: newClinicIsFundusProvider, colorKey: newClinicColorKey };
+                  try {
+                    await setDoc(doc(db, 'clinics', clinic.id), clinic);
+                    addActivityLog('Created Clinic', `${clinic.name} (${clinic.id})`, currentUser.displayName);
+                    setNewClinicId(''); setNewClinicName(''); setNewClinicShortName(''); setNewClinicAddress(''); setNewClinicPhone(''); setNewClinicIsFundusProvider(false); setNewClinicColorKey('pink'); setShowNewClinicForm(false);
+                  } catch (error) { console.error('Failed to create clinic', error); alert('Failed to create clinic. Please try again.'); }
+                  finally { setIsAddingClinic(false); }
+                }} className="mb-6 rounded-2xl border border-violet-100 bg-violet-50/40 p-4 md:p-5">
+                  <p className="mb-4 text-xs font-black uppercase tracking-widest text-slate-700">Add new clinic</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                    <input required value={newClinicId} onChange={e => setNewClinicId(e.target.value)} placeholder="CLINIC_ID" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-violet-500" />
+                    <input required value={newClinicName} onChange={e => setNewClinicName(e.target.value)} placeholder="Clinic name" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
+                    <input value={newClinicShortName} onChange={e => setNewClinicShortName(e.target.value)} placeholder="Short name" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
+                    <textarea value={newClinicAddress} onChange={e => setNewClinicAddress(e.target.value)} rows={2} placeholder="Full clinic address" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500 xl:col-span-2" />
+                    <input value={newClinicPhone} onChange={e => setNewClinicPhone(e.target.value)} placeholder="Clinic telephone number" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
+                    <select value={newClinicColorKey} onChange={e => setNewClinicColorKey(e.target.value as ClinicColorKey)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-500">{CLINIC_COLORS.map(color => <option key={color.key} value={color.key}>{color.label}</option>)}</select>
+                    <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600"><input type="checkbox" checked={newClinicIsFundusProvider} onChange={e => setNewClinicIsFundusProvider(e.target.checked)} /> Fundus provider</label>
+                    <button type="submit" disabled={isAddingClinic} className="rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white hover:bg-violet-700 disabled:opacity-50">{isAddingClinic ? 'Saving...' : 'Save clinic'}</button>
+                  </div>
+                </form>}
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+                  {clinics.map(clinic => <div key={clinic.id} className="flex min-w-0 flex-col gap-4 rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 md:p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-lg">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-slate-900">{clinic.name}</h2><span className="rounded-md bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{clinic.id}</span></div>
+                      <p className="mt-1 text-xs text-slate-400">{clinic.shortName}</p>
+                      {editingClinicAddressId === clinic.id ? <div className="mt-3 flex max-w-2xl flex-col gap-2"><textarea value={clinicAddressDraft} onChange={e => setClinicAddressDraft(e.target.value)} rows={2} placeholder="Full clinic address" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"/><input value={clinicPhoneDraft} onChange={e => setClinicPhoneDraft(e.target.value)} placeholder="Clinic phone" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm sm:max-w-sm"/><div className="flex gap-2"><button type="button" disabled={clinicAddressSaving === clinic.id} onClick={async () => { setClinicAddressSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { address: clinicAddressDraft.trim(), phone: clinicPhoneDraft.trim() }); addActivityLog('Updated Clinic Address and Telephone', clinic.name, currentUser.displayName); setEditingClinicAddressId(null); } catch (error) { console.error('Failed to update clinic address', error); alert('Failed to update clinic address. Please try again.'); } finally { setClinicAddressSaving(null); } }} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50">{clinicAddressSaving === clinic.id ? 'Saving...' : 'Save'}</button><button type="button" disabled={clinicAddressSaving === clinic.id} onClick={() => setEditingClinicAddressId(null)} className="rounded-lg border px-3 py-2 text-xs font-bold">Cancel</button></div></div> : <div className="mt-2 flex flex-wrap items-start gap-3"><div className="min-w-0"><p className="whitespace-pre-line text-xs text-slate-500">{clinic.address || 'Full address not set'}</p><p className="mt-1 text-xs text-slate-500">{clinic.phone ? `Tel: ${clinic.phone}` : 'Telephone not set'}</p></div><button type="button" onClick={() => { setEditingClinicAddressId(clinic.id); setClinicAddressDraft(clinic.address || ''); setClinicPhoneDraft(clinic.phone || ''); }} className="rounded-lg border border-violet-200 px-2 py-1 text-[10px] font-black text-violet-700 hover:bg-violet-50">{clinic.address ? 'Edit address' : 'Add address'}</button></div>}
+                    </div>
+                    <div className="mt-auto border-t border-slate-100 pt-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[8px] font-black uppercase text-slate-500">Color</span>
+                        <select value={getClinicColor(clinic).key} disabled={clinicColorSaving === clinic.id} onChange={e => handleClinicColorChange(clinic, e.target.value as ClinicColorKey)} className="h-9 min-w-[100px] rounded-lg border border-slate-200 bg-white px-2 text-xs font-bold" aria-label={`Choose color for ${clinic.name}`}>{CLINIC_COLORS.map(color => <option key={color.key} value={color.key}>{color.label}</option>)}</select>
+                        <button type="button" disabled={clinicStatusSaving === clinic.id} onClick={async () => { const nextActive = !clinic.active; setClinicStatusSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { active: nextActive }); addActivityLog(nextActive ? 'Activated Clinic' : 'Deactivated Clinic', clinic.name, currentUser.displayName); } catch (error) { console.error('Failed to update clinic status', error); alert('Failed to update clinic status. Please try again.'); } finally { setClinicStatusSaving(null); } }} className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase transition disabled:opacity-50 ${clinic.active ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`} title="Click to toggle clinic status">{clinicStatusSaving === clinic.id ? 'Saving...' : clinic.active ? 'Active' : 'Inactive'}</button>
+                        <button type="button" disabled={clinicProviderSaving === clinic.id} onClick={async () => { const nextProvider = !clinic.isFundusProvider; setClinicProviderSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { isFundusProvider: nextProvider }); addActivityLog(nextProvider ? 'Enabled Fundus Provider' : 'Changed to Referral Clinic', clinic.name, currentUser.displayName); } catch (error) { console.error('Failed to update clinic provider status', error); alert('Failed to update clinic provider status. Please try again.'); } finally { setClinicProviderSaving(null); } }} className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase transition disabled:cursor-not-allowed disabled:opacity-50 ${clinic.isFundusProvider ? 'bg-blue-50 text-blue-700 hover:bg-blue-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} title={!clinic.active && clinic.isFundusProvider ? 'Inactive provider is unavailable for referral routing' : 'Click to toggle provider/referral status'}>{clinicProviderSaving === clinic.id ? 'Saving...' : clinic.isFundusProvider ? 'Fundus Provider' : 'Referral Clinic'}</button>
+                        <button type="button" onClick={() => handleDeleteClinic(clinic)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[9px] font-black uppercase text-rose-600 hover:bg-rose-100" title={`Delete ${clinic.name}`}><Trash2 size={13}/>Delete</button>
+                      </div>
+                    </div>
+                  </div>)}
+                </div>
+              </section>
+            </div>
+          ) : activeSuperAdminView === 'users' ? (
+            <section className="space-y-5">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 md:p-7 shadow-sm">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">Administration</p><h1 className="mt-1 text-2xl font-black text-slate-900">User Management</h1><p className="mt-1 text-sm text-slate-500">Find accounts by name, staff ID, clinic or role.</p></div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="rounded-2xl bg-violet-50 px-4 py-3"><p className="text-xs font-bold text-violet-700">Registered users</p><p className="text-2xl font-black text-violet-800">{users.length}</p></div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingUser(null);
+                        setNewStaffId('');
+                        setNewStaffName('');
+                        setNewStaffPass('');
+                        setShowStaffPassword(false);
+                        setNewStaffRole(UserRole.STAFF);
+                        setNewStaffClinicId(superAdminUserClinicFilter !== 'ALL' ? superAdminUserClinicFilter : (clinics[0]?.id || 'LINTANG'));
+                        setShowStaffForm(prev => !prev);
+                      }}
+                      className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black text-white shadow-sm transition hover:bg-violet-700"
+                      aria-expanded={showStaffForm}
+                    >
+                      {showStaffForm ? <XCircle size={16} /> : <UserPlus size={16} />} {showStaffForm ? 'Close form' : 'Add new user'}
+                    </button>
+                  </div>
+                </div>
+                {showStaffForm && (
+                  <form onSubmit={addStaffMember} className="mt-6 rounded-2xl border border-violet-100 bg-violet-50/50 p-4 md:p-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-black uppercase tracking-[.16em] text-violet-600">New account</p>
+                        <h2 className="mt-1 text-base font-black text-slate-800">Register New Clinic User</h2>
+                      </div>
+                      <span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold text-slate-500">Super Admin</span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                      <label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Staff User ID</span><input required value={newStaffId} onChange={e => setNewStaffId(e.target.value)} placeholder="e.g. STAFF001" className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300" /></label>
+                      <label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Password</span><div className="relative"><input required type={showStaffPassword ? 'text' : 'password'} value={newStaffPass} onChange={e => setNewStaffPass(e.target.value)} placeholder="Enter password" className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 pr-11 text-sm outline-none focus:ring-2 focus:ring-violet-300" /><button type="button" onClick={() => setShowStaffPassword(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" aria-label={showStaffPassword ? 'Hide password' : 'Show password'}>{showStaffPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></label>
+                      <label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Display Name</span><input required value={newStaffName} onChange={e => setNewStaffName(e.target.value)} placeholder="e.g. Dr. Johny" className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-300" /></label>
+                    </div>
+                    <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Clinic</span><select required value={newStaffClinicId} onChange={e => setNewStaffClinicId(e.target.value)} className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300"><option value="">Select clinic</option>{clinics.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><span className="ml-1 text-[10px] text-slate-400">Assign this account to a clinic.</span></label>
+                      <label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Role</span><select value={newStaffRole} onChange={e => setNewStaffRole(e.target.value as UserRole)} className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300"><option value={UserRole.STAFF}>STAFF</option><option value={UserRole.ADMIN}>ADMIN</option></select><span className="ml-1 text-[10px] text-slate-400">Choose the account's access level.</span></label>
+                    </div>
+                    <div className="mt-5 flex flex-wrap justify-end gap-2">
+                      <button type="button" onClick={() => { setShowStaffForm(false); setNewStaffId(''); setNewStaffName(''); setNewStaffPass(''); setShowStaffPassword(false); setNewStaffRole(UserRole.STAFF); }} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
+                      <button type="submit" disabled={isSavingStaff} className="rounded-xl bg-violet-600 px-5 py-2.5 text-xs font-black uppercase tracking-wider text-white shadow-sm hover:bg-violet-700 disabled:opacity-50">{isSavingStaff ? 'Creating account...' : 'Create account'}</button>
+                    </div>
+                  </form>
+                )}
+                {editingUser && (
+                  <div
+                    className="fixed inset-0 z-[130] flex items-center justify-center overflow-y-auto bg-slate-900/65 p-4 backdrop-blur-sm"
+                    onMouseDown={e => { if (e.target === e.currentTarget) { setEditingUser(null); setNewStaffPass(''); } }}
+                  >
+                    <form
+                      onSubmit={updateStaffMember}
+                      className="my-auto w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="edit-clinic-user-title"
+                    >
+                      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/80 px-6 py-5">
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white"><UserCog size={19}/></div>
+                          <div className="min-w-0">
+                            <h2 id="edit-clinic-user-title" className="text-lg font-black text-slate-800">Edit User Details</h2>
+                            <p className="mt-0.5 text-[10px] font-black uppercase tracking-wider text-slate-400">Account: {editingUser.id}</p>
+                          </div>
+                        </div>
+                        <button type="button" aria-label="Close edit user details" onClick={() => { setEditingUser(null); setNewStaffPass(''); }} className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"><XCircle size={23}/></button>
+                      </div>
+                      <div className="space-y-5 px-6 py-6">
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          <label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">User ID</span><input value={editingUser.id} disabled className="w-full rounded-xl border border-blue-100 bg-slate-100 px-4 py-3 text-sm font-bold text-slate-500"/></label>
+                          <label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Password</span><input type="password" autoComplete="new-password" value={newStaffPass} onChange={e => setNewStaffPass(e.target.value)} placeholder="Leave blank to keep current" className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm outline-none transition focus:ring-2 focus:ring-blue-100"/></label>
+                          <label className="space-y-1.5 sm:col-span-2"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Display Name</span><input required value={editingUser.displayName} onChange={e => setEditingUser(prev => prev ? {...prev, displayName: e.target.value} : prev)} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm outline-none transition focus:ring-2 focus:ring-blue-100"/></label>
+                          <label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Clinic</span><select required disabled={editingUser.role === UserRole.SUPER_ADMIN} value={editingUser.clinicId || ''} onChange={e => setEditingUser(prev => prev ? {...prev, clinicId: e.target.value || null} : prev)} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"><option value="">Select clinic</option>{clinics.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+                          <label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Role</span><select disabled={editingUser.role === UserRole.SUPER_ADMIN} value={editingUser.role} onChange={e => setEditingUser(prev => prev ? {...prev, role: e.target.value as UserRole, clinicId: e.target.value === UserRole.SUPER_ADMIN ? null : (prev.clinicId || clinics[0]?.id || 'LINTANG')} : prev)} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"><option value={UserRole.STAFF}>STAFF</option><option value={UserRole.ADMIN}>ADMIN</option><option value={UserRole.SUPER_ADMIN}>SUPER ADMIN</option></select></label>
+                        </div>
+                        <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+                          <button type="button" onClick={() => { setEditingUser(null); setNewStaffPass(''); }} className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-500 transition hover:bg-slate-50">Cancel</button>
+                          <button type="submit" disabled={isSavingStaff} className="rounded-xl bg-emerald-600 px-5 py-3 text-[10px] font-black uppercase tracking-wider text-white shadow-lg transition hover:bg-emerald-700 disabled:opacity-50">{isSavingStaff ? 'Saving...' : 'Save Changes'}</button>
+                        </div>
+                      </div>
+                      <div className="border-t border-slate-100 bg-slate-50 px-5 py-3 text-center text-[9px] font-black uppercase tracking-wide text-slate-400">Authorized administrators only. Keep passwords secure.</div>
+                    </form>
+                  </div>
+                )}
+                <div className="mt-6 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_180px]">
+                  <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-400"><Search size={17}/><input value={superAdminUserSearch} onChange={e => setSuperAdminUserSearch(e.target.value)} className="min-w-0 flex-1 outline-none text-slate-700 placeholder:text-slate-400" placeholder="Search name or staff ID..." aria-label="Search users by name or staff ID" /></label>
+                  <select value={superAdminUserClinicFilter} onChange={e => { setSuperAdminUserClinicFilter(e.target.value); setSelectedSuperAdminUsersClinic(e.target.value === 'ALL' ? null : e.target.value); }} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-600" aria-label="Filter users by clinic"><option value="ALL">All clinics</option>{clinics.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+                  <select value={superAdminUserRoleFilter} onChange={e => setSuperAdminUserRoleFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-600" aria-label="Filter users by role"><option value="ALL">All roles</option><option value={UserRole.ADMIN}>Admin</option><option value={UserRole.STAFF}>Staff</option><option value={UserRole.SUPER_ADMIN}>Super Admin</option></select>
+                </div>
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-bold text-slate-500">{users.filter(u => { const q = superAdminUserSearch.trim().toLowerCase(); const clinic = clinics.find(c => c.id === u.clinicId); const matchesSearch = !q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q); const matchesClinic = superAdminUserClinicFilter === 'ALL' || u.clinicId === superAdminUserClinicFilter; const matchesRole = superAdminUserRoleFilter === 'ALL' || u.role === superAdminUserRoleFilter; return matchesSearch && matchesClinic && matchesRole; }).length} matching accounts</p><button type="button" onClick={() => { setSuperAdminUserSearch(''); setSuperAdminUserClinicFilter('ALL'); setSuperAdminUserRoleFilter('ALL'); setSelectedSuperAdminUsersClinic(null); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Reset filters</button></div>
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {clinics.filter(c => superAdminUserClinicFilter === 'ALL' || c.id === superAdminUserClinicFilter).map(c => {
+                    return <button type="button" key={c.id} onClick={() => { setSelectedSuperAdminUsersClinic(selectedSuperAdminUsersClinic === c.id ? null : c.id); setSuperAdminUserClinicFilter(selectedSuperAdminUsersClinic === c.id ? 'ALL' : c.id); }} className={`rounded-2xl border p-4 text-left transition ${selectedSuperAdminUsersClinic === c.id || superAdminUserClinicFilter === c.id ? 'border-violet-300 bg-violet-50 ring-1 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/40'}`}><div className="flex items-center justify-between gap-2"><Building2 size={20} className="text-violet-600"/><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{c.id}</span></div><p className="mt-3 font-black text-slate-800">{c.name}</p><p className="mt-1 text-xs text-slate-500">{users.filter(u => u.clinicId === c.id).length} registered {users.filter(u => u.clinicId === c.id).length === 1 ? 'user' : 'users'}</p><p className="mt-3 text-xs font-bold text-violet-700">{superAdminUserClinicFilter === c.id ? 'Viewing this clinic' : 'Click to view users'} →</p></button>;
+                  })}
+                </div>
+                {(superAdminUserClinicFilter !== 'ALL' || superAdminUserSearch.trim().length > 0) ? (
+                <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
+                  <div className="flex flex-col gap-1 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><h2 className="font-black text-slate-800">{superAdminUserClinicFilter !== 'ALL' ? `Users · ${clinics.find(c => c.id === superAdminUserClinicFilter)?.name || superAdminUserClinicFilter}` : 'Search results'}</h2><p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Account directory</p></div>
+                  <div className="divide-y divide-slate-100">
+                    {users.filter(u => { const q = superAdminUserSearch.trim().toLowerCase(); const clinic = clinics.find(c => c.id === u.clinicId); const matchesSearch = !q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q); const matchesClinic = superAdminUserClinicFilter === 'ALL' || u.clinicId === superAdminUserClinicFilter; const matchesRole = superAdminUserRoleFilter === 'ALL' || u.role === superAdminUserRoleFilter; return matchesSearch && matchesClinic && matchesRole; }).map(u => { const clinic = clinics.find(c => c.id === u.clinicId); return <div key={u.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex min-w-0 items-center gap-3"><div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${u.role === UserRole.SUPER_ADMIN ? 'bg-slate-900 text-white' : 'bg-violet-50 text-violet-600'}`}>{u.role === UserRole.SUPER_ADMIN ? <Shield size={17}/> : <Users size={17}/>}</div><div className="min-w-0"><p className="truncate font-bold text-slate-800">{u.displayName}</p><p className="truncate text-xs text-slate-500">{u.id}</p></div></div><div className="flex flex-wrap items-center gap-2 sm:justify-end">
+  <span className="rounded-lg bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{u.role}</span>
+  <span className="rounded-lg bg-violet-50 px-2 py-1 text-[9px] font-black uppercase text-violet-700">{clinic?.shortName || clinic?.name || u.department || 'Unassigned'}</span>
+  {u.id.toLowerCase() !== 'admin' && u.role !== UserRole.SUPER_ADMIN && (
+    <div className="flex items-center gap-1 border-l border-slate-200 pl-2 ml-1">
+      <button
+        type="button"
+        onClick={() => {
+          setShowStaffForm(false);
+          setNewStaffPass('');
+          setEditingUser(u);
+          setShowStaffPassword(false);
+        }}
+        className="inline-flex items-center gap-1 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100"
+        title={`Edit ${u.displayName}`}
+      >
+        <Edit2 size={13} /> Edit
+      </button>
+      <button
+        type="button"
+        onClick={() => setUserToDelete(u)}
+        className="inline-flex items-center gap-1 rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-1.5 text-[10px] font-bold text-rose-700 transition hover:bg-rose-100"
+        title={`Delete ${u.displayName}`}
+      >
+        <Trash2 size={13} /> Delete
+      </button>
+    </div>
+  )}
+</div></div>; })}
+                    {users.filter(u => { const q = superAdminUserSearch.trim().toLowerCase(); const clinic = clinics.find(c => c.id === u.clinicId); return (!q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q)) && (superAdminUserClinicFilter === 'ALL' || u.clinicId === superAdminUserClinicFilter) && (superAdminUserRoleFilter === 'ALL' || u.role === superAdminUserRoleFilter); }).length === 0 && <div className="px-4 py-10 text-center"><Search size={25} className="mx-auto text-slate-300"/><p className="mt-2 font-bold text-slate-600">No users found</p><p className="mt-1 text-sm text-slate-400">Try a different search or filter.</p></div>}
+                  </div>
+                </div>
+                ) : (
+                  <div className="mt-6 rounded-2xl border border-dashed border-violet-200 bg-violet-50/50 px-5 py-10 text-center">
+                    <Building2 size={30} className="mx-auto text-violet-400"/>
+                    <p className="mt-3 font-black text-slate-700">Choose a clinic or search for a user</p>
+                    <p className="mt-1 text-sm text-slate-500">User accounts will appear here after you select a clinic card or enter a name or staff ID in the search box.</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          ) : activeSuperAdminView === 'fundus' ? (
+            <section className="space-y-5">
+              <div className="overflow-hidden rounded-3xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-white to-teal-50 shadow-sm">
+                <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:p-7">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-lg shadow-emerald-200"><Network size={24}/></div>
+                    <div><p className="text-[10px] font-black uppercase tracking-[.2em] text-emerald-700">Network administration</p><h1 className="mt-1 text-2xl font-black text-slate-900 md:text-3xl">Fundus Network</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Urus klinik penyedia fundus dan tetapkan klinik rujukan yang boleh menghantar pesakit. Perubahan disimpan terus ke sistem.</p></div>
+                  </div>
+                  <div className="rounded-2xl border border-emerald-100 bg-white/90 px-4 py-3"><p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Active providers</p><p className="mt-1 text-3xl font-black text-emerald-700">{getFundusProviderClinics(clinics).length}</p></div>
+                </div>
+                <div className="grid grid-cols-1 gap-2 border-t border-emerald-100 bg-white/70 p-4 sm:grid-cols-2 xl:grid-cols-4 md:p-5">
+                  <div className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/80 p-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700"><Network size={19}/></div><div><p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Fundus providers</p><p className="text-xl font-black text-emerald-900">{getFundusProviderClinics(clinics).length}</p></div></div>
+                  <div className="flex items-center gap-3 rounded-2xl border border-blue-100 bg-blue-50/80 p-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Building2 size={19}/></div><div><p className="text-[10px] font-bold uppercase tracking-wide text-blue-700">Active clinics</p><p className="text-xl font-black text-blue-900">{clinics.filter(c => c.active).length}</p></div></div>
+                  <div className="flex items-center gap-3 rounded-2xl border border-violet-100 bg-violet-50/80 p-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-100 text-violet-700"><Building2 size={19}/></div><div><p className="text-[10px] font-bold uppercase tracking-wide text-violet-700">Registered clinics</p><p className="text-xl font-black text-violet-900">{clinics.length}</p></div></div>
+                  <div className="flex items-center gap-3 rounded-2xl border border-fuchsia-100 bg-fuchsia-50/80 p-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-fuchsia-100 text-fuchsia-700"><Building2 size={19}/></div><div><p className="text-[10px] font-bold uppercase tracking-wide text-fuchsia-700">Specialist clinics</p><p className="text-xl font-black text-fuchsia-900">{specialistClinics.filter(c => c.active).length}</p></div></div>
+                </div>
+              </div>
+
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.18em] text-emerald-600">01 · Provider setup</p><h2 className="mt-1 text-lg font-black text-slate-900">Fundus Provider Clinics</h2><p className="mt-1 text-sm text-slate-500">Aktifkan atau nyahaktifkan perkhidmatan fundus bagi setiap klinik aktif.</p></div><span className="w-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-emerald-700">{getFundusProviderClinics(clinics).length} active providers</span></div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  {clinics.filter(c => c.active).map(clinic => <article key={clinic.id} className="group rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md">
+                    <div className="flex items-start gap-3"><div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><Building2 size={21}/></div><div className="min-w-0 flex-1"><h3 className="font-black leading-snug text-slate-900">{clinic.name}</h3><p className="mt-1 truncate text-[10px] font-bold uppercase tracking-widest text-slate-400">{clinic.shortName} · {clinic.id}</p></div></div>
+                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-slate-100 pt-3"><span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}><span className={`h-1.5 w-1.5 rounded-full ${clinic.isFundusProvider ? 'bg-emerald-500' : 'bg-slate-400'}`}/>{clinic.isFundusProvider ? 'Provider enabled' : 'Referral clinic'}</span>
+                    <button type="button" disabled={fundusNetworkSaving === `provider:${clinic.id}`} onClick={async () => { const nextValue = !clinic.isFundusProvider; if (!nextValue && getFundusProviderClinics(clinics).length <= 1) { alert('At least one active fundus provider clinic is required.'); return; } const savingKey = `provider:${clinic.id}`; setFundusNetworkSaving(savingKey); const previousClinics = clinics; pendingFundusProviderRef.current[clinic.id] = nextValue; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, isFundusProvider: nextValue } : !nextValue ? { ...c, fundusProviderClinicIds: (c.fundusProviderClinicIds || []).filter(id => id !== clinic.id) } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { isFundusProvider: nextValue }, { merge: true }); if (!nextValue) { const referralClinics = previousClinics.filter(c => c.active && !c.isFundusProvider && c.id !== clinic.id); await Promise.all(referralClinics.filter(c => (c.fundusProviderClinicIds || []).includes(clinic.id)).map(c => setDoc(doc(db, 'clinics', c.id), { fundusProviderClinicIds: (c.fundusProviderClinicIds || []).filter(id => id !== clinic.id) }, { merge: true }))); } addActivityLog(nextValue ? 'Enabled Fundus Provider' : 'Disabled Fundus Provider', `${clinic.name} (${clinic.id})`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus provider status', error); delete pendingFundusProviderRef.current[clinic.id]; setClinics(previousClinics); const code = (error as any)?.code || 'unknown'; alert(`Failed to update ${clinic.shortName}. Firestore error: ${code}`); } finally { setFundusNetworkSaving(null); } }} className={`rounded-xl px-3 py-2 text-[10px] font-black transition disabled:cursor-wait disabled:opacity-50 ${clinic.isFundusProvider ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>{fundusNetworkSaving === `provider:${clinic.id}` ? 'Saving…' : clinic.isFundusProvider ? 'Turn off' : 'Enable provider'}</button></div>
+                  </article>)}
+                  {clinics.filter(c => c.active).length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">No active clinics available.</div>}
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-50/70 to-white p-5 shadow-sm md:p-6">
+                <div className="mb-5"><p className="text-[10px] font-black uppercase tracking-[.18em] text-blue-600">02 · Referral setup</p><h2 className="mt-1 text-lg font-black text-slate-900">Referral Routing</h2><p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">Pilih satu atau lebih klinik penyedia fundus bagi setiap klinik rujukan. Hanya provider yang aktif tersedia untuk dipilih.</p></div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  {clinics.filter(c => c.active && !c.isFundusProvider).map(clinic => { const providers = getFundusProviderClinics(clinics); const selectedProviders = clinic.fundusProviderClinicIds || []; return <article key={clinic.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/80 p-4"><div className="flex items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Network size={19}/></div><div><h3 className="font-black text-slate-900">{clinic.name}</h3><p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">{clinic.shortName} · referral clinic</p></div></div><span className="shrink-0 rounded-full bg-blue-100 px-2.5 py-1 text-[9px] font-black uppercase text-blue-700">{selectedProviders.length} selected</span></div><div className="space-y-2 p-4">{providers.length === 0 ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">No active fundus provider is available. Enable a provider above first.</div> : providers.map(provider => { const checked = selectedProviders.includes(provider.id); return <label key={provider.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition ${checked ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-slate-50'} ${fundusNetworkSaving === `routing:${clinic.id}:${provider.id}` ? 'opacity-60' : ''}`}><input type="checkbox" checked={checked} disabled={!provider.active || fundusNetworkSaving === `routing:${clinic.id}:${provider.id}`} onChange={async e => { const savingKey = `routing:${clinic.id}:${provider.id}`; const checkedNow = e.currentTarget.checked; setFundusNetworkSaving(savingKey); const previousQueue = fundusRoutingWriteQueueRef.current[clinic.id] || Promise.resolve(); const queuedWrite = previousQueue.then(async () => { const latestClinic = clinicsRef.current.find(c => c.id === clinic.id); const currentProviders = latestClinic?.fundusProviderClinicIds || []; const nextProviders = checkedNow ? Array.from(new Set([...currentProviders, provider.id])) : currentProviders.filter(id => id !== provider.id); pendingFundusRoutingRef.current[clinic.id] = nextProviders; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, fundusProviderClinicIds: nextProviders } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { fundusProviderClinicIds: nextProviders }, { merge: true }); addActivityLog('Updated Fundus Routing', `${clinic.shortName} → ${nextProviders.length ? nextProviders.map(id => getClinicById(clinicsRef.current, id)?.shortName || id).join(', ') : 'No provider selected'}`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus routing', error); delete pendingFundusRoutingRef.current[clinic.id]; const code = (error as any)?.code || 'unknown'; alert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`); } }); const queuedSafe = queuedWrite.catch(() => undefined); fundusRoutingWriteQueueRef.current[clinic.id] = queuedSafe; try { await queuedWrite; } finally { if (fundusRoutingWriteQueueRef.current[clinic.id] === queuedSafe) { delete fundusRoutingWriteQueueRef.current[clinic.id]; setFundusNetworkSaving(null); } } }} className="h-4 w-4 accent-blue-600"/><div className="min-w-0 flex-1"><p className={`text-sm font-bold ${checked ? 'text-blue-800' : 'text-slate-700'}`}>{provider.name}</p><p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">{provider.shortName} · {provider.id}</p></div>{checked && <CheckCircle2 size={18} className="shrink-0 text-blue-600"/>}</label>; })}</div></article>; })}
+                  {clinics.filter(c => c.active && !c.isFundusProvider).length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-blue-200 bg-white p-8 text-center"><CheckCircle2 size={28} className="mx-auto text-emerald-500"/><p className="mt-2 font-bold text-slate-700">All active clinics are fundus providers</p><p className="mt-1 text-sm text-slate-500">No referral routing is required until a clinic is set as a referral clinic.</p></div>}
+                </div>
+              </section>
+
+              <section className="rounded-3xl border border-fuchsia-100 bg-gradient-to-br from-fuchsia-50/70 to-white p-5 shadow-sm md:p-6">
+                <div className="mb-5">
+                  <p className="text-[10px] font-black uppercase tracking-[.18em] text-fuchsia-600">03 · Specialist referral setup</p>
+                  <h2 className="mt-1 text-lg font-black text-slate-900">Specialist Referral Routing</h2>
+                  <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">Tandakan klinik yang dibenarkan menghantar rujukan kepada setiap klinik pakar. Hanya klinik yang dipilih akan nampak klinik pakar tersebut dalam pilihan rujukan SINAR.</p>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  {specialistClinics.filter(c => c.active).map(specialistClinic => {
+                    const authorizedClinics = clinics.filter(c => (c.specialistClinicIds || []).includes(specialistClinic.id));
+                    return (
+                      <article key={specialistClinic.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <div className="flex items-start justify-between gap-2 border-b border-slate-100 bg-fuchsia-50/70 p-3">
+                          <div className="flex min-w-0 items-start gap-2">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-fuchsia-100 text-fuchsia-700"><Building2 size={18}/></div>
+                            <div className="min-w-0"><h3 className="text-sm font-black leading-snug text-slate-900">{specialistClinic.name}</h3><p className="mt-1 truncate text-[9px] font-bold uppercase tracking-wider text-slate-400">{specialistClinic.shortName || specialistClinic.id}</p></div>
+                          </div>
+                          <span className="shrink-0 rounded-full bg-fuchsia-100 px-2 py-1 text-[9px] font-black text-fuchsia-700">{authorizedClinics.length} selected</span>
+                        </div>
+                        <div className="space-y-1.5 p-3">
+                          {clinics.filter(c => c.active).length === 0 ? <p className="text-xs text-slate-500">Tiada klinik aktif.</p> : clinics.filter(c => c.active).map(clinic => {
+                            const checked = (clinic.specialistClinicIds || []).includes(specialistClinic.id);
+                            const savingKey = `specialist-routing:${clinic.id}:${specialistClinic.id}`;
+                            return (
+                              <label key={clinic.id} className={`flex cursor-pointer items-center gap-2 rounded-xl border p-2 transition ${checked ? 'border-fuchsia-200 bg-fuchsia-50' : 'border-slate-200 hover:border-fuchsia-200 hover:bg-slate-50'} ${fundusNetworkSaving === savingKey ? 'opacity-60' : ''}`}>
+                                <input type="checkbox" checked={checked} disabled={fundusNetworkSaving === savingKey} onChange={async e => {
+                                  const checkedNow = e.currentTarget.checked;
+                                  setFundusNetworkSaving(savingKey);
+                                  const latestClinic = clinicsRef.current.find(c => c.id === clinic.id) || clinic;
+                                  const currentIds = latestClinic.specialistClinicIds || [];
+                                  const nextIds = checkedNow ? Array.from(new Set([...currentIds, specialistClinic.id])) : currentIds.filter(id => id !== specialistClinic.id);
+                                  setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, specialistClinicIds: nextIds } : c));
+                                  try {
+                                    await setDoc(doc(db, 'clinics', clinic.id), { specialistClinicIds: nextIds }, { merge: true });
+                                    addActivityLog('Updated Specialist Referral Routing', `${clinic.shortName} → ${specialistClinic.shortName || specialistClinic.name}`, currentUser.displayName);
+                                  } catch (error) {
+                                    console.error('Failed to update specialist referral routing', error);
+                                    setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, specialistClinicIds: currentIds } : c));
+                                    alert(`Gagal menyimpan routing untuk ${clinic.shortName}. Sila cuba lagi.`);
+                                  } finally {
+                                    setFundusNetworkSaving(null);
+                                  }
+                                }} className="h-4 w-4 accent-fuchsia-600"/>
+                                <span className="min-w-0 flex-1"><span className="block truncate text-xs font-bold text-slate-700">{clinic.name}</span><span className="block truncate text-[9px] font-semibold uppercase tracking-wide text-slate-400">{clinic.shortName} · {clinic.id}</span></span>
+                                {checked && <CheckCircle2 size={16} className="shrink-0 text-fuchsia-600"/>}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </article>
+                    );
+                  })}
+                  {specialistClinics.filter(c => c.active).length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-fuchsia-200 bg-white p-8 text-center"><Building2 size={28} className="mx-auto text-fuchsia-400"/><p className="mt-2 font-bold text-slate-700">No active specialist clinics</p><p className="mt-1 text-sm text-slate-500">Daftarkan klinik pakar dahulu sebelum menetapkan routing.</p></div>}
+                </div>
+              </section>
+            </section>
+          ) : activeSuperAdminView === 'analytics' ? (
+            <section className="space-y-5">
+              <div className="overflow-hidden rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-violet-50 shadow-sm">
+                <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:p-7">
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-200"><BarChart3 size={24}/></div>
+                    <div><p className="text-[10px] font-black uppercase tracking-[.2em] text-blue-700">Performance overview</p><h1 className="mt-1 text-2xl font-black text-slate-900 md:text-3xl">Analytics &amp; Reports</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Ringkasan prestasi saringan untuk bulan dipilih. Pengiraan menggunakan statistik bulanan SINAR sedia ada.</p></div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 rounded-2xl border border-blue-100 bg-white/90 p-2 sm:justify-center">
+                    <button type="button" onClick={() => changeAnalyticsMonth(-1)} className="rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-50" aria-label="Previous month"><ChevronLeft size={18}/></button>
+                    <div className="min-w-[135px] text-center"><p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Reporting period</p><p className="mt-1 font-black text-slate-800">{selectedAnalyticsMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p></div>
+                    <button type="button" onClick={() => changeAnalyticsMonth(1)} disabled={isCurrentMonth} className={`rounded-xl border border-slate-200 p-2 ${isCurrentMonth ? 'cursor-not-allowed border-slate-100 text-slate-300 bg-slate-50' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`} aria-label="Next month" title={isCurrentMonth ? 'Future reporting months are not available yet' : 'Next month'}><ChevronRight size={18}/></button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-3 border-t border-blue-100 bg-white/70 p-4 sm:grid-cols-2 xl:grid-cols-4 md:p-5">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4"><p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total screenings</p><p className="mt-2 text-3xl font-black text-slate-900">{monthlyRetenStats.total}</p><p className="mt-1 text-xs text-slate-500">Eligible appointments this month</p></div>
+                  <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Need fundus</p><p className="mt-2 text-3xl font-black text-blue-700">{monthlyStats.fundusPending}</p><p className="mt-1 text-xs text-slate-500">Cases awaiting image capture</p></div>
+                  <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-violet-600">Need review</p><p className="mt-2 text-3xl font-black text-violet-700">{monthlyStats.reviewPending}</p><p className="mt-1 text-xs text-slate-500">Fundus complete, review pending</p></div>
+                  <div className="rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4"><p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Completed</p><p className="mt-2 text-3xl font-black text-emerald-700">{Math.max(0, monthlyStats.total - monthlyStats.totalPending)}</p><p className="mt-1 text-xs text-slate-500">Fundus and review completed</p></div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                  <div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-widest text-blue-600">01 · Screening outcome</p><h2 className="mt-1 text-lg font-black text-slate-900">Clinical outcomes</h2></div><span className="rounded-full bg-slate-100 px-3 py-1 text-[10px] font-bold text-slate-500">{monthlyRetenStats.total} cases</span></div>
+                  <div className="mt-5 space-y-4">
+                    {[{label:'Normal',value:monthlyRetenStats.normal,color:'bg-emerald-500',text:'text-emerald-700'},{label:'Abnormal',value:monthlyRetenStats.abnormal,color:'bg-rose-500',text:'text-rose-700'},{label:'Ungradable',value:monthlyRetenStats.ungradable,color:'bg-amber-500',text:'text-amber-700'},{label:'Not Obtainable',value:monthlyRetenStats.notObtainable,color:'bg-slate-400',text:'text-slate-700'},{label:'Not Review Yet',value:monthlyRetenStats.notReviewYet,color:'bg-violet-500',text:'text-violet-700'}].map(item => { const pct = monthlyRetenStats.total > 0 ? Math.round((item.value / monthlyRetenStats.total) * 100) : 0; return <div key={item.label}><div className="mb-1.5 flex items-center justify-between gap-3"><span className="text-sm font-semibold text-slate-700">{item.label}</span><span className={`text-sm font-black ${item.text}`}>{item.value} <span className="text-xs font-semibold text-slate-400">({pct}%)</span></span></div><div className="h-2.5 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${item.color} transition-all`} style={{width:`${pct}%`}}/></div></div>; })}
+                  </div>
+                </section>
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                  <div><p className="text-[10px] font-black uppercase tracking-widest text-violet-600">02 · Clinical findings</p><h2 className="mt-1 text-lg font-black text-slate-900">Abnormal findings overview</h2><p className="mt-1 text-sm text-slate-500">Counts use the current monthly clinical review summary.</p></div>
+                  <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {[{label:'Mild NPDR',value:monthlyRetenStats.mildNPDR},{label:'Moderate NPDR',value:monthlyRetenStats.moderateNPDR},{label:'Severe NPDR',value:monthlyRetenStats.severeNPDR},{label:'PDR',value:monthlyRetenStats.pdr},{label:'Maculopathy',value:monthlyRetenStats.maculopathy},{label:'ADED',value:monthlyRetenStats.aded},{label:'Cataract',value:monthlyRetenStats.cataract},{label:'Others',value:monthlyRetenStats.others}].map(item => <div key={item.label} className="flex items-center justify-between gap-2 rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3"><span className="text-sm font-semibold text-slate-600">{item.label}</span><span className="text-lg font-black text-slate-900">{item.value}</span></div>)}
+                  </div>
+                  <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3"><p className="text-xs leading-5 text-amber-800">These are summary counts, not a substitute for reviewing individual patient records.</p></div>
+                </section>
+              </div>
+              <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">03 · Referral summary</p><h2 className="mt-1 text-lg font-black text-slate-900">Referral &amp; workload status</h2><p className="mt-1 text-sm text-slate-500">High-level indicators for the selected month.</p></div><div className="rounded-xl bg-emerald-50 px-4 py-2"><p className="text-[9px] font-black uppercase tracking-widest text-emerald-700">Referred cases</p><p className="text-2xl font-black text-emerald-800">{monthlyRetenStats.referred}</p></div></div>
+                <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3"><div className="rounded-2xl border border-slate-200 p-4"><p className="text-xs font-semibold text-slate-500">Photographs taken</p><p className="mt-1 text-2xl font-black text-slate-900">{monthlyRetenStats.photographs}</p></div><div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4"><p className="text-xs font-semibold text-blue-700">Pending fundus</p><p className="mt-1 text-2xl font-black text-blue-800">{monthlyStats.fundusPending}</p></div><div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4"><p className="text-xs font-semibold text-violet-700">Pending review</p><p className="mt-1 text-2xl font-black text-violet-800">{monthlyStats.reviewPending}</p></div></div>
+              </section>
+            </section>
+          ) : activeSuperAdminView === 'logs' ? (
+            <section className="space-y-5">
+              <div className="overflow-hidden rounded-3xl border border-amber-100 bg-gradient-to-br from-amber-50 via-white to-orange-50 shadow-sm">
+                <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:p-7">
+                  <div className="flex items-start gap-4"><div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-500 text-white shadow-lg shadow-amber-200"><Activity size={24}/></div><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-amber-700">System audit trail</p><h1 className="mt-1 text-2xl font-black text-slate-900 md:text-3xl">Activity Logs</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Semak aktiviti yang direkodkan merentas klinik. Gunakan carian dan penapis untuk mencari rekod dengan lebih cepat.</p></div></div>
+                  <div className="rounded-2xl border border-amber-100 bg-white/90 px-5 py-3"><p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Matching records</p><p className="mt-1 text-2xl font-black text-amber-700">{activityLogs.filter(log => { const q = activityLogSearch.trim().toLowerCase(); const matchesSearch = !q || [log.action, log.patient, log.by, log.clinicId || ''].some(v => String(v).toLowerCase().includes(q)); const matchesAction = activityLogActionFilter === 'ALL' || log.action === activityLogActionFilter; const matchesClinic = activityLogClinicFilter === 'ALL' || (log.clinicId || 'LEGACY') === activityLogClinicFilter; return matchesSearch && matchesAction && matchesClinic; }).length}</p><p className="text-xs text-slate-500">of {visibleActivityLogs.length} visible records</p></div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <label className="md:col-span-1"><span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-500">Search activity</span><div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5"><Search size={16} className="text-slate-400"/><input value={activityLogSearch} onChange={e => setActivityLogSearch(e.target.value)} placeholder="Action, user, patient, clinic..." className="w-full bg-transparent text-sm outline-none"/></div></label>
+                <label><span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-500">Action type</span><select value={activityLogActionFilter} onChange={e => setActivityLogActionFilter(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option value="ALL">All actions</option>{Array.from(new Set(visibleActivityLogs.map(log => log.action).filter(Boolean))).sort().map(action => <option key={action} value={action}>{action}</option>)}</select></label>
+                <label><span className="mb-1.5 block text-[10px] font-black uppercase tracking-widest text-slate-500">Clinic</span><select value={activityLogClinicFilter} onChange={e => setActivityLogClinicFilter(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"><option value="ALL">All clinics</option>{Array.from(new Set(visibleActivityLogs.map(log => log.clinicId || 'LEGACY'))).sort().map(id => <option key={id} value={id}>{id === 'LEGACY' ? 'Legacy / no clinic ID' : (clinics.find(c => c.id === id)?.name || id)}</option>)}</select></label>
+              </div>
+              <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4"><div><h2 className="font-black text-slate-900">Audit history</h2><p className="mt-1 text-xs text-slate-500">Newest activity first</p></div><button type="button" onClick={() => { setActivityLogSearch(''); setActivityLogActionFilter('ALL'); setActivityLogClinicFilter('ALL'); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Reset filters</button></div>
+                <div className="divide-y divide-slate-100">
+                  {visibleActivityLogs.filter(log => { const q = activityLogSearch.trim().toLowerCase(); const matchesSearch = !q || [log.action, log.patient, log.by, log.clinicId || ''].some(v => String(v).toLowerCase().includes(q)); const matchesAction = activityLogActionFilter === 'ALL' || log.action === activityLogActionFilter; const matchesClinic = activityLogClinicFilter === 'ALL' || (log.clinicId || 'LEGACY') === activityLogClinicFilter; return matchesSearch && matchesAction && matchesClinic; }).slice().sort((a,b) => Number(b.timestamp || 0) - Number(a.timestamp || 0)).map((log,index) => <article key={`${log.timestamp}-${log.action}-${log.by}-${index}`} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between hover:bg-slate-50/80"><div className="flex min-w-0 items-start gap-3"><div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-700"><Activity size={17}/></div><div className="min-w-0"><p className="break-words text-sm font-black text-slate-800">{log.action || 'Activity recorded'}</p><p className="mt-1 break-words text-sm text-slate-600">{log.patient || 'System activity'}</p><div className="mt-2 flex flex-wrap items-center gap-2"><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600">By {log.by || 'Unknown user'}</span><span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700">{clinics.find(c => c.id === log.clinicId)?.name || log.clinicId || 'Legacy / no clinic ID'}</span></div></div></div><time className="shrink-0 text-xs font-semibold text-slate-400 sm:text-right">{log.timestamp ? new Date(log.timestamp).toLocaleString('en-GB') : 'Time unavailable'}</time></article>)}
+                  {visibleActivityLogs.filter(log => { const q = activityLogSearch.trim().toLowerCase(); const matchesSearch = !q || [log.action, log.patient, log.by, log.clinicId || ''].some(v => String(v).toLowerCase().includes(q)); const matchesAction = activityLogActionFilter === 'ALL' || log.action === activityLogActionFilter; const matchesClinic = activityLogClinicFilter === 'ALL' || (log.clinicId || 'LEGACY') === activityLogClinicFilter; return matchesSearch && matchesAction && matchesClinic; }).length === 0 && <div className="px-5 py-14 text-center"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400"><Search size={22}/></div><p className="mt-3 font-bold text-slate-700">No matching activity</p><p className="mt-1 text-sm text-slate-500">Cuba ubah kata carian atau reset penapis.</p></div>}
+                </div>
+              </div>
+            </section>
+          ) : activeSuperAdminView === 'specialistClinics' ? (
+            <section className="space-y-4 sm:space-y-5">
+              <div className="rounded-2xl sm:rounded-3xl border border-violet-100 bg-white p-3 sm:p-5 md:p-7 shadow-sm min-w-0">
+                <div className="flex flex-col gap-3 sm:gap-4 md:flex-row md:items-center md:justify-between">
+                  <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">Specialist network</p><h1 className="mt-1 text-2xl font-black text-slate-900">Specialist Clinics</h1><p className="mt-2 text-sm text-slate-500">Manage specialist referral destinations separately from screening clinics.</p></div>
+                  <button type="button" onClick={() => { if (showSpecialistClinicForm) { setShowSpecialistClinicForm(false); setEditingSpecialistClinicId(null); } else { setEditingSpecialistClinicId(null); setSpecialistClinicIdInput(''); setSpecialistClinicNameInput(''); setSpecialistClinicShortNameInput(''); setSpecialistClinicAddressInput(''); setSpecialistClinicPhoneInput(''); setShowSpecialistClinicForm(true); } }} className="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white hover:bg-violet-700"><Plus size={16}/>{showSpecialistClinicForm ? 'Cancel' : 'Add Specialist Clinic'}</button>
+                </div>
+                {showSpecialistClinicForm && !editingSpecialistClinicId && <form className="mb-5 mt-4 sm:mt-5 rounded-2xl border border-violet-100 bg-violet-50/40 p-3 sm:p-4 md:p-5 min-w-0" onSubmit={async e => { e.preventDefault(); if (currentUser?.role !== UserRole.SUPER_ADMIN) { alert('Only Super Admin can manage specialist clinics.'); return; } const id = specialistClinicIdInput.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_'); const name = specialistClinicNameInput.trim(); if (!id || !name) return; if (!editingSpecialistClinicId && specialistClinics.some(c => c.id === id)) { alert('Specialist Clinic ID already exists.'); return; } setSpecialistSaving(true); try { const payload: Omit<SpecialistClinic, 'id'> = { name, shortName: specialistClinicShortNameInput.trim() || name, address: specialistClinicAddressInput.trim(), phone: specialistClinicPhoneInput.trim(), active: editingSpecialistClinicId ? (specialistClinics.find(c => c.id === editingSpecialistClinicId)?.active ?? true) : true, createdAt: editingSpecialistClinicId ? (specialistClinics.find(c => c.id === editingSpecialistClinicId)?.createdAt || Date.now()) : Date.now() }; await setDoc(doc(db, 'specialistClinics', editingSpecialistClinicId || id), payload, { merge: !!editingSpecialistClinicId }); addActivityLog(editingSpecialistClinicId ? 'Updated Specialist Clinic' : 'Created Specialist Clinic', `${name} (${editingSpecialistClinicId || id})`, currentUser.displayName); setShowSpecialistClinicForm(false); setEditingSpecialistClinicId(null); setSpecialistClinicIdInput(''); setSpecialistClinicNameInput(''); setSpecialistClinicShortNameInput(''); setSpecialistClinicAddressInput(''); setSpecialistClinicPhoneInput(''); } catch (error) { console.error('Failed to save specialist clinic', error); alert('Could not save specialist clinic. Check Firestore permissions and try again.'); } finally { setSpecialistSaving(false); } }}>
+                  <p className="mb-4 text-xs font-black uppercase tracking-widest text-slate-700">{editingSpecialistClinicId ? 'Edit Specialist Clinic' : 'Add New Specialist Clinic'}</p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <label className="block text-xs font-bold text-slate-600">Clinic ID<input required disabled={!!editingSpecialistClinicId} value={specialistClinicIdInput} onChange={e => setSpecialistClinicIdInput(e.target.value)} placeholder="SPECIALIST_CLINIC_ID" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-violet-500 disabled:bg-slate-100"/></label>
+                    <label className="block text-xs font-bold text-slate-600">Clinic name<input required value={specialistClinicNameInput} onChange={e => setSpecialistClinicNameInput(e.target.value)} placeholder="Specialist clinic / hospital name" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/></label>
+                    <label className="block text-xs font-bold text-slate-600">Short name<input value={specialistClinicShortNameInput} onChange={e => setSpecialistClinicShortNameInput(e.target.value)} placeholder="Short name" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/></label>
+                    <label className="block text-xs font-bold text-slate-600 xl:col-span-2">Full clinic address<textarea value={specialistClinicAddressInput} onChange={e => setSpecialistClinicAddressInput(e.target.value)} rows={2} placeholder="Full clinic address" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/></label>
+                    <label className="block text-xs font-bold text-slate-600">Clinic telephone number<input value={specialistClinicPhoneInput} onChange={e => setSpecialistClinicPhoneInput(e.target.value)} placeholder="Clinic telephone number" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/></label>
+                    <div className="flex w-full flex-col-reverse gap-2 pt-1 sm:flex-row sm:items-center sm:justify-end xl:col-span-3"><button type="button" onClick={() => { setShowSpecialistClinicForm(false); setEditingSpecialistClinicId(null); setSpecialistClinicIdInput(''); setSpecialistClinicNameInput(''); setSpecialistClinicShortNameInput(''); setSpecialistClinicAddressInput(''); setSpecialistClinicPhoneInput(''); }} className="w-full sm:w-auto rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={specialistSaving} className="w-full sm:w-auto rounded-xl bg-violet-600 px-5 py-2.5 text-xs font-black uppercase tracking-widest text-white hover:bg-violet-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : editingSpecialistClinicId ? 'Save changes' : 'Save clinic'}</button></div>
+                  </div>
+                </form>}
+                <div className="mt-4 sm:mt-5 flex min-w-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5"><Search size={16} className="shrink-0 text-slate-400"/><input value={specialistClinicSearch} onChange={e => setSpecialistClinicSearch(e.target.value)} placeholder="Search clinic ID, name, address..." className="w-full min-w-0 bg-transparent text-sm outline-none"/></div>
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
+                  {specialistClinics.filter(c => [c.id, c.name, c.shortName || '', c.address || '', c.phone || ''].some(v => v.toLowerCase().includes(specialistClinicSearch.trim().toLowerCase()))).map(clinic => (
+                    <article key={clinic.id} className="flex min-w-0 flex-col gap-4 rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md sm:p-5">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-start gap-2">
+                          <h3 className="break-words font-black leading-snug text-slate-900">{clinic.name}</h3>
+                          <span className="rounded-md bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{clinic.shortName || clinic.id}</span>
+                        </div>
+                        <p className="mt-1 break-all text-xs text-slate-400">{clinic.id}</p>
+                        <p className="mt-2 whitespace-pre-line break-words text-xs text-slate-500">{clinic.address || 'Full address not set'}</p>
+                        <p className="mt-1 break-words text-xs text-slate-500">{clinic.phone ? `Tel: ${clinic.phone}` : 'Telephone not set'}</p>
+                      </div>
+                      {editingSpecialistClinicId === clinic.id && (
+                        <form className="rounded-xl border border-violet-200 bg-violet-50/70 p-3 sm:p-4" onSubmit={async e => {
+                          e.preventDefault();
+                          if (currentUser?.role !== UserRole.SUPER_ADMIN) { alert('Only Super Admin can manage specialist clinics.'); return; }
+                          const id = specialistClinicIdInput.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+                          const name = specialistClinicNameInput.trim();
+                          if (!id || !name) return;
+                          setSpecialistSaving(true);
+                          try {
+                            const payload: Omit<SpecialistClinic, 'id'> = {
+                              name,
+                              shortName: specialistClinicShortNameInput.trim() || name,
+                              address: specialistClinicAddressInput.trim(),
+                              phone: specialistClinicPhoneInput.trim(),
+                              active: clinic.active,
+                              createdAt: clinic.createdAt || Date.now()
+                            };
+                            await setDoc(doc(db, 'specialistClinics', clinic.id), payload, { merge: true });
+                            addActivityLog('Updated Specialist Clinic', `${name} (${clinic.id})`, currentUser.displayName);
+                            setEditingSpecialistClinicId(null);
+                            setSpecialistClinicIdInput('');
+                            setSpecialistClinicNameInput('');
+                            setSpecialistClinicShortNameInput('');
+                            setSpecialistClinicAddressInput('');
+                            setSpecialistClinicPhoneInput('');
+                          } catch (error) {
+                            console.error('Failed to save specialist clinic', error);
+                            alert('Could not save specialist clinic. Check Firestore permissions and try again.');
+                          } finally {
+                            setSpecialistSaving(false);
+                          }
+                        }}>
+                          <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-violet-700">Edit specialist clinic</p>
+                          <div className="grid grid-cols-1 gap-3">
+                            <label className="block text-xs font-bold text-slate-600">Clinic ID
+                              <input value={clinic.id} disabled className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2.5 text-sm font-bold text-slate-500"/>
+                            </label>
+                            <label className="block text-xs font-bold text-slate-600">Clinic name
+                              <input required value={specialistClinicNameInput} onChange={e => setSpecialistClinicNameInput(e.target.value)} placeholder="Specialist clinic / hospital name" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                            </label>
+                            <label className="block text-xs font-bold text-slate-600">Short name
+                              <input value={specialistClinicShortNameInput} onChange={e => setSpecialistClinicShortNameInput(e.target.value)} placeholder="Short name" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                            </label>
+                            <label className="block text-xs font-bold text-slate-600">Full clinic address
+                              <textarea value={specialistClinicAddressInput} onChange={e => setSpecialistClinicAddressInput(e.target.value)} rows={2} placeholder="Full clinic address" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                            </label>
+                            <label className="block text-xs font-bold text-slate-600">Clinic telephone number
+                              <input value={specialistClinicPhoneInput} onChange={e => setSpecialistClinicPhoneInput(e.target.value)} placeholder="Clinic telephone number" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                            </label>
+                            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+                              <button type="button" onClick={() => { setEditingSpecialistClinicId(null); setSpecialistClinicIdInput(''); setSpecialistClinicNameInput(''); setSpecialistClinicShortNameInput(''); setSpecialistClinicAddressInput(''); setSpecialistClinicPhoneInput(''); }} className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
+                              <button type="submit" disabled={specialistSaving} className="rounded-lg bg-violet-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white hover:bg-violet-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : 'Save changes'}</button>
+                            </div>
+                          </div>
+                        </form>
+                      )}
+                      <div className="mt-auto border-t border-slate-100 pt-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button type="button" onClick={async () => { try { await updateDoc(doc(db, 'specialistClinics', clinic.id), { active: !clinic.active }); addActivityLog(clinic.active ? 'Deactivated Specialist Clinic' : 'Activated Specialist Clinic', `${clinic.name} (${clinic.id})`, currentUser?.displayName); } catch (error) { console.error('Failed to update specialist clinic status', error); alert('Could not update specialist clinic status.'); } }} className={`rounded-lg px-2 py-1.5 text-[9px] font-black uppercase transition ${clinic.active ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`} title="Click to toggle specialist clinic status">{clinic.active ? 'Active' : 'Inactive'}</button>
+                          <button type="button" onClick={() => { setEditingSpecialistClinicId(clinic.id); setSpecialistClinicIdInput(clinic.id); setSpecialistClinicNameInput(clinic.name); setSpecialistClinicShortNameInput(clinic.shortName || ''); setSpecialistClinicAddressInput(clinic.address || ''); setSpecialistClinicPhoneInput(clinic.phone || ''); setShowSpecialistClinicForm(false); }} className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-white px-3 py-2 text-[9px] font-black uppercase text-violet-700 hover:bg-violet-50"><Edit2 size={13}/> Edit</button>
+                          <button type="button" onClick={async () => { if (specialistUsers.some(u => u.clinicId === clinic.id)) { alert('Cannot delete this clinic while specialist users are assigned to it. Set it inactive instead.'); return; } if (!window.confirm(`Delete specialist clinic ${clinic.name}?`)) return; try { await deleteDoc(doc(db, 'specialistClinics', clinic.id)); addActivityLog('Deleted Specialist Clinic', `${clinic.name} (${clinic.id})`, currentUser?.displayName); } catch (error) { console.error('Failed to delete specialist clinic', error); alert('Could not delete specialist clinic.'); } }} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[9px] font-black uppercase text-rose-600 transition-colors hover:bg-rose-100"><Trash2 size={13}/> Delete</button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                  {specialistClinics.filter(c => [c.id, c.name, c.shortName || '', c.address || '', c.phone || ''].some(v => v.toLowerCase().includes(specialistClinicSearch.trim().toLowerCase()))).length === 0 && <div className="rounded-2xl border border-dashed border-slate-300 px-5 py-12 text-center sm:col-span-2 2xl:col-span-3"><Building2 size={26} className="mx-auto text-slate-300"/><p className="mt-3 font-bold text-slate-700">No specialist clinics yet</p><p className="mt-1 text-sm text-slate-500">Add a specialist clinic to begin.</p></div>}
+                </div>
+              </div>
+            </section>
+          ) : activeSuperAdminView === 'specialistUsers' ? (
+            <section className="min-w-0 rounded-2xl sm:rounded-3xl border border-violet-100 bg-white p-3 sm:p-5 md:p-7 shadow-sm">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">Administration</p><h1 className="mt-1 text-2xl font-black text-slate-900">Specialist User Management</h1><p className="mt-1 text-sm text-slate-500">Manage specialist accounts and assign each profile to a specialist clinic.</p></div>
+                <div className="flex flex-wrap items-center gap-3"><div className="rounded-2xl bg-violet-50 px-4 py-3"><p className="text-xs font-bold text-violet-700">Registered users</p><p className="text-2xl font-black text-violet-800">{specialistUsers.length}</p></div><button type="button" onClick={() => { if (showSpecialistUserForm) { setShowSpecialistUserForm(false); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } else { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(specialistClinics.find(c => c.active)?.id || ''); setSpecialistUserRoleInput('STAFF'); setShowSpecialistUserForm(true); } }} disabled={!specialistClinics.some(c => c.active)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-40">{showSpecialistUserForm ? <XCircle size={16}/> : <UserPlus size={16}/>} {showSpecialistUserForm ? 'Close form' : 'Add new user'}</button></div>
+              </div>
+              {showSpecialistUserForm && !editingSpecialistUserId && <form className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/50 p-4 md:p-5" onSubmit={async e => { e.preventDefault(); if (currentUser?.role !== UserRole.SUPER_ADMIN) { alert('Only Super Admin can manage specialist users.'); return; } const id = specialistUserIdInput.trim().toUpperCase(); const name = specialistUserNameInput.trim(); if (!id || !name || !specialistUserClinicInput || (!editingSpecialistUserId && !specialistUserPasswordInput.trim())) return; if (!editingSpecialistUserId && specialistUsers.some(u => u.id.toLowerCase() === id.toLowerCase())) { alert('Specialist user ID already exists.'); return; } if (!specialistClinics.some(c => c.id === specialistUserClinicInput && c.active)) { alert('Please assign the user to an active specialist clinic.'); return; } setSpecialistSaving(true); try { const existing = specialistUsers.find(u => u.id === editingSpecialistUserId); const payload: Omit<SpecialistUser, 'id'> = { ...(specialistUserPasswordInput.trim() ? { password: specialistUserPasswordInput } : {}), displayName: name, clinicId: specialistUserClinicInput, role: specialistUserRoleInput, active: existing?.active ?? true, createdAt: existing?.createdAt || Date.now() }; await setDoc(doc(db, 'specialistUsers', editingSpecialistUserId || id), payload, { merge: !!editingSpecialistUserId }); addActivityLog(editingSpecialistUserId ? 'Updated Specialist User' : 'Created Specialist User', `${name} (${editingSpecialistUserId || id})`, currentUser.displayName); setShowSpecialistUserForm(false); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } catch (error) { console.error('Failed to save specialist user', error); alert('Could not save specialist user. Check Firestore permissions and try again.'); } finally { setSpecialistSaving(false); } }}>
+                <div className="mb-4 flex items-center justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[.16em] text-violet-600">{editingSpecialistUserId ? 'Edit account' : 'New account'}</p><h2 className="mt-1 text-base font-black text-slate-800">{editingSpecialistUserId ? 'Edit Specialist User' : 'Register New Specialist User'}</h2></div><span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold text-slate-500">Super Admin</span></div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">User ID</span><input required disabled={!!editingSpecialistUserId} value={specialistUserIdInput} onChange={e => setSpecialistUserIdInput(e.target.value)} placeholder="e.g. OPH001" className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300 disabled:bg-slate-100"/></label><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Display Name</span><input required value={specialistUserNameInput} onChange={e => setSpecialistUserNameInput(e.target.value)} placeholder="e.g. Dr. Johny" className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-300"/></label><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Password {editingSpecialistUserId ? "(leave blank to keep current)" : ""}</span><input type="password" autoComplete="new-password" required={!editingSpecialistUserId} value={specialistUserPasswordInput} onChange={e => setSpecialistUserPasswordInput(e.target.value)} placeholder={editingSpecialistUserId ? "Enter new password to reset" : "Set login password"} className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-300"/></label><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Role</span><select required value={specialistUserRoleInput} onChange={e => setSpecialistUserRoleInput(e.target.value as 'ADMIN' | 'STAFF')} className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300"><option value="STAFF">STAFF</option><option value="ADMIN">ADMIN</option></select></label></div>
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2"><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Specialist Clinic</span><select required value={specialistUserClinicInput} onChange={e => setSpecialistUserClinicInput(e.target.value)} className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300"><option value="">Select specialist clinic</option>{specialistClinics.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><span className="ml-1 text-[10px] text-slate-400">Assign this profile to an active specialist clinic.</span></label><div className="flex items-end"><p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">Specialist ID + password will be used to sign in. Keep passwords confidential.</p></div></div>
+                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><button type="button" onClick={() => { setShowSpecialistUserForm(false); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); }} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={specialistSaving} className="rounded-xl bg-violet-600 px-5 py-2.5 text-xs font-black uppercase tracking-wider text-white shadow-sm hover:bg-violet-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : editingSpecialistUserId ? 'Save changes' : 'Create account profile'}</button></div>
+              </form>}
+              <div className="mt-6 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_180px]"><label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-400"><Search size={17}/><input value={specialistUserSearch} onChange={e => setSpecialistUserSearch(e.target.value)} className="min-w-0 flex-1 outline-none text-slate-700 placeholder:text-slate-400" placeholder="Search name or ID..." aria-label="Search specialist users"/></label><select value={specialistUserClinicFilter} onChange={e => { setSpecialistUserClinicFilter(e.target.value); setSelectedSpecialistUsersClinic(e.target.value === 'ALL' ? null : e.target.value); }} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-600" aria-label="Filter by specialist clinic"><option value="ALL">All specialist clinics</option>{specialistClinics.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><select value={specialistUserRoleFilter} onChange={e => setSpecialistUserRoleFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-600" aria-label="Filter by role"><option value="ALL">All roles</option><option value="ADMIN">Admin</option><option value="STAFF">Staff</option></select></div>
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-bold text-slate-500">{specialistUsers.filter(u => { const q = specialistUserSearch.trim().toLowerCase(); const clinic = specialistClinics.find(c => c.id === u.clinicId); return (!q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q)) && (specialistUserClinicFilter === 'ALL' || u.clinicId === specialistUserClinicFilter) && (specialistUserRoleFilter === 'ALL' || u.role === specialistUserRoleFilter); }).length} matching accounts</p><button type="button" onClick={() => { setSpecialistUserSearch(''); setSpecialistUserClinicFilter('ALL'); setSpecialistUserRoleFilter('ALL'); setSelectedSpecialistUsersClinic(null); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Reset filters</button></div>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">{specialistClinics.filter(c => specialistUserClinicFilter === 'ALL' || c.id === specialistUserClinicFilter).map(c => <button type="button" key={c.id} onClick={() => { const next = selectedSpecialistUsersClinic === c.id ? null : c.id; setSelectedSpecialistUsersClinic(next); setSpecialistUserClinicFilter(next || 'ALL'); }} className={`rounded-2xl border p-4 text-left transition ${selectedSpecialistUsersClinic === c.id || specialistUserClinicFilter === c.id ? 'border-violet-300 bg-violet-50 ring-1 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/40'}`}><div className="flex items-center justify-between gap-2"><Building2 size={20} className="text-violet-600"/><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{c.shortName || c.id}</span></div><p className="mt-3 break-words font-black text-slate-800">{c.name}</p><p className="mt-1 text-xs text-slate-500">{specialistUsers.filter(u => u.clinicId === c.id).length} registered {specialistUsers.filter(u => u.clinicId === c.id).length === 1 ? 'user' : 'users'}</p><p className="mt-2 text-xs font-bold text-violet-600">Click to view users →</p></button>)}</div>
+              {(specialistUserClinicFilter !== 'ALL' || specialistUserSearch.trim().length > 0) ? (
+                <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
+                  <div className="flex flex-col gap-1 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h2 className="font-black text-slate-800">{specialistUserClinicFilter !== 'ALL' ? `Users · ${specialistClinics.find(c => c.id === specialistUserClinicFilter)?.name || specialistUserClinicFilter}` : 'Search results'}</h2>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Specialist account directory</p>
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {specialistUsers.filter(u => { const q = specialistUserSearch.trim().toLowerCase(); const clinic = specialistClinics.find(c => c.id === u.clinicId); return (!q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q)) && (specialistUserClinicFilter === 'ALL' || u.clinicId === specialistUserClinicFilter) && (specialistUserRoleFilter === 'ALL' || u.role === specialistUserRoleFilter); }).map(user => { const clinic = specialistClinics.find(c => c.id === user.clinicId); return <div key={user.id} className="px-4 py-3"><div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div className="flex min-w-0 items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600"><UserCog size={17}/></div><div className="min-w-0"><p className="truncate font-bold text-slate-800">{user.displayName}</p><p className="truncate text-xs text-slate-500">{user.id}</p><p className="truncate text-xs text-slate-400">{clinic?.name || user.clinicId}</p></div></div><div className="flex flex-wrap items-center gap-2 sm:justify-end"><span className="rounded-lg bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{user.role}</span><span className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase ${user.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{user.active ? 'Active' : 'Inactive'}</span><div className="flex items-center gap-1 border-l border-slate-200 pl-2 ml-1"><button type="button" onClick={() => { setEditingSpecialistUserId(user.id); setSpecialistUserIdInput(user.id); setSpecialistUserNameInput(user.displayName); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(user.clinicId); setSpecialistUserRoleInput(user.role === 'ADMIN' ? 'ADMIN' : 'STAFF'); setShowSpecialistUserForm(false); }} className="inline-flex items-center gap-1 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100"><Edit2 size={13}/> Edit</button><button type="button" onClick={async () => { if (!window.confirm(`Delete specialist user ${user.displayName}?`)) return; try { await deleteDoc(doc(db, 'specialistUsers', user.id)); addActivityLog('Deleted Specialist User', `${user.displayName} (${user.id})`, currentUser?.displayName); } catch (error) { console.error(error); alert('Could not delete specialist user.'); } }} className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[10px] font-bold text-rose-600 transition hover:bg-rose-100"><Trash2 size={13}/> Delete</button></div><button type="button" onClick={async () => { try { await updateDoc(doc(db, 'specialistUsers', user.id), { active: !user.active }); addActivityLog(user.active ? 'Deactivated Specialist User' : 'Activated Specialist User', `${user.displayName} (${user.id})`, currentUser?.displayName); } catch (error) { console.error(error); alert('Could not update specialist user status.'); } }} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-50">{user.active ? 'Deactivate' : 'Activate'}</button></div></div>
+                    {editingSpecialistUserId === user.id && <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-slate-900/65 backdrop-blur-sm p-4" onMouseDown={e => { if (e.target === e.currentTarget) { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } }}><form className="my-auto w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl" onSubmit={async e => { e.preventDefault(); if (currentUser?.role !== UserRole.SUPER_ADMIN) { alert('Only Super Admin can manage specialist users.'); return; } const name = specialistUserNameInput.trim(); if (!name || !specialistUserClinicInput) { alert('Please complete all fields.'); return; } if (!specialistClinics.some(c => c.id === specialistUserClinicInput && c.active)) { alert('Please assign the user to an active specialist clinic.'); return; } setSpecialistSaving(true); try { await setDoc(doc(db, 'specialistUsers', user.id), { ...(specialistUserPasswordInput.trim() ? { password: specialistUserPasswordInput } : {}), displayName: name, clinicId: specialistUserClinicInput, role: specialistUserRoleInput }, { merge: true }); addActivityLog('Updated Specialist User', `${name} (${user.id})`, currentUser.displayName); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); setShowSpecialistUserForm(false); } catch (error) { console.error('Failed to update specialist user', error); alert('Could not update specialist user. Check Firestore permissions and try again.'); } finally { setSpecialistSaving(false); } }}>
+                      <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/80 px-6 py-5"><div className="flex min-w-0 items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white"><UserCog size={19}/></div><div><h2 className="text-lg font-black text-slate-800">Edit User Details</h2><p className="mt-0.5 text-[10px] font-black uppercase tracking-wider text-slate-400">Account: {user.id}</p></div></div><button type="button" aria-label="Close edit user details" onClick={() => { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); }} className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"><XCircle size={23}/></button></div>
+                      <div className="space-y-5 px-6 py-6"><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">User ID</span><input value={specialistUserIdInput} disabled className="w-full rounded-xl border border-blue-100 bg-slate-100 px-4 py-3 text-sm font-bold text-slate-500"/></label><label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Password</span><div className="relative"><input type="password" autoComplete="new-password" value={specialistUserPasswordInput} onChange={e => setSpecialistUserPasswordInput(e.target.value)} placeholder="Leave blank to keep current" className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 pr-4 text-sm outline-none transition focus:ring-2 focus:ring-blue-100"/></div></label><label className="space-y-1.5 sm:col-span-2"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Display Name</span><input required value={specialistUserNameInput} onChange={e => setSpecialistUserNameInput(e.target.value)} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm outline-none transition focus:ring-2 focus:ring-blue-100"/></label><label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Specialist Clinic</span><select required value={specialistUserClinicInput} onChange={e => setSpecialistUserClinicInput(e.target.value)} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"><option value="">Select specialist clinic</option>{specialistClinics.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Role</span><select required value={specialistUserRoleInput} onChange={e => setSpecialistUserRoleInput(e.target.value as 'ADMIN' | 'STAFF')} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"><option value="STAFF">STAFF</option><option value="ADMIN">ADMIN</option></select></label></div><div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); }} className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-500 transition hover:bg-slate-50">Cancel</button><button type="submit" disabled={specialistSaving} className="rounded-xl bg-emerald-600 px-5 py-3 text-[10px] font-black uppercase tracking-wider text-white shadow-lg transition hover:bg-emerald-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : 'Save Changes'}</button></div></div><div className="border-t border-slate-100 bg-slate-50 px-5 py-3 text-center text-[9px] font-black uppercase tracking-wide text-slate-400">Authorized administrators only. Keep passwords secure.</div>
+                    </form></div>}
+                  </div>; })}
+                    {specialistUsers.filter(u => { const q = specialistUserSearch.trim().toLowerCase(); const clinic = specialistClinics.find(c => c.id === u.clinicId); return (!q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q)) && (specialistUserClinicFilter === 'ALL' || u.clinicId === specialistUserClinicFilter) && (specialistUserRoleFilter === 'ALL' || u.role === specialistUserRoleFilter); }).length === 0 && <div className="px-5 py-10 text-center"><Users size={25} className="mx-auto text-slate-300"/><p className="mt-3 font-bold text-slate-700">No specialist users found</p><p className="mt-1 text-sm text-slate-500">Try another clinic or search term.</p></div>}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-6 rounded-2xl border border-dashed border-violet-200 bg-violet-50/50 px-5 py-12 text-center">
+                  <Building2 size={28} className="mx-auto text-violet-400"/>
+                  <p className="mt-3 font-bold text-slate-700">Choose a specialist clinic or search for a user</p>
+                  <p className="mt-1 text-sm text-slate-500">Specialist accounts will appear here after you select a clinic card or enter a name or specialist user ID in the search box.</p>
+                </div>
+              )}
+              <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800"><strong>Important:</strong> These are specialist directory profiles only. Password setup will be handled through secure account provisioning and is not stored in this profile. Specialist login, dashboard access and referral-level security must be completed before patient records are exposed.</p>
+            </section>
+          ) : activeSuperAdminView === 'settings' ? (
+            <section className="rounded-3xl border border-slate-200 bg-white p-5 md:p-7 shadow-sm"><p className="text-[10px] font-black uppercase tracking-[.18em] text-slate-500">System administration</p><h1 className="mt-1 text-2xl font-black text-slate-900">System Configuration</h1><p className="mt-2 text-sm text-slate-500">Global settings and maintenance tools for Super Admin.</p><div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2"><button type="button" onClick={() => { setActiveSuperAdminView('migration'); void scanMigrationData(); }} className="rounded-2xl border border-cyan-100 bg-cyan-50 p-5 text-left transition hover:bg-cyan-100"><Database size={23} className="text-cyan-700"/><p className="mt-3 font-black text-slate-800">Data &amp; Migration</p><p className="mt-1 text-sm text-slate-600">Review legacy records and migrate clinic structure safely.</p></button><button type="button" onClick={() => setActiveSuperAdminView('logs')} className="rounded-2xl border border-amber-100 bg-amber-50 p-5 text-left transition hover:bg-amber-100"><Activity size={23} className="text-amber-600"/><p className="mt-3 font-black text-slate-800">Global Activity Logs</p><p className="mt-1 text-sm text-slate-600">Audit activity across all facilities.</p></button><div className="rounded-2xl border border-slate-200 bg-slate-50 p-5"><Settings2 size={23} className="text-slate-600"/><p className="mt-3 font-black text-slate-800">Global configuration</p><p className="mt-1 text-sm text-slate-600">General SINAR settings and maintenance.</p></div></div></section>
+          ) : activeSuperAdminView === 'migration' ? (
+            <section className="rounded-3xl border border-cyan-100 bg-white p-4 shadow-sm md:p-6">
+              <div className="mb-5 flex items-center gap-3 border-b border-slate-100 pb-5"><div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-600 text-white"><Database size={22}/></div><div><p className="text-[10px] font-black uppercase tracking-widest text-cyan-700">System Configuration</p><h1 className="text-2xl font-black text-slate-900">Data &amp; Migration</h1><p className="text-sm text-slate-500">Legacy data → multiclinic structure</p></div></div>
+                <div className="rounded-2xl border border-cyan-100 bg-cyan-50/50 p-4">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="text-cyan-600 shrink-0 mt-0.5" size={19} />
+                    <div>
+                      <p className="font-black text-slate-900">Safe migration policy</p>
+                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                        Migration only fills the new clinic structure. The legacy <b>department</b> field is preserved and existing provider assignments are never overwritten.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {migrationStats ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Appointments</p>
+                      <p className="text-2xl font-black text-slate-900 mt-1">{migrationStats.appointmentsTotal}</p>
+                      <p className="text-[11px] text-slate-500 mt-1">total records</p>
+                    </div>
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Clinic migration</p>
+                      <p className="text-2xl font-black text-amber-900 mt-1">{migrationStats.appointmentsNeedsClinicMigration}</p>
+                      <p className="text-[11px] text-amber-700 mt-1">appointments</p>
+                    </div>
+                    <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-violet-700">Referral migration</p>
+                      <p className="text-2xl font-black text-violet-900 mt-1">{migrationStats.appointmentsNeedsReferralMigration}</p>
+                      <p className="text-[11px] text-violet-700 mt-1">appointments</p>
+                    </div>
+                    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Missing provider</p>
+                      <p className="text-2xl font-black text-rose-900 mt-1">{migrationStats.appointmentsMissingProvider}</p>
+                      <p className="text-[11px] text-rose-700 mt-1">appointments</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-center">
+                    <p className="text-sm font-bold text-slate-600">Scan Firestore to view migration status.</p>
+                  </div>
+                )}
+
+                {/* =====================================================
+                    CLINIC MASTER SYNCHRONIZATION
+                    Creates only missing DEFAULT_CLINICS in Firestore.
+                    Existing clinic documents are never overwritten.
+                   ===================================================== */}
+                <section className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-5">
+                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm shrink-0">
+                        <Building2 size={19} />
+                      </div>
+                      <div>
+                        <h3 className="font-black text-slate-900">Clinic Master Synchronization</h3>
+                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                          Create missing default clinic documents in Firestore. Existing clinics and their
+                          provider, referral routing and TCA settings will not be changed.
+                        </p>
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {DEFAULT_CLINICS.map(clinic => (
+                            <span
+                              key={clinic.id}
+                              className="px-2.5 py-1 rounded-lg bg-white border border-emerald-100 text-[10px] font-black text-slate-600"
+                            >
+                              {clinic.shortName}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={clinicMasterSyncRunning || migrationRunning || migrationScanning}
+                      onClick={syncMissingClinicMaster}
+                      className="shrink-0 px-5 py-3 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
+                    >
+                      {clinicMasterSyncRunning ? 'Syncing...' : 'Sync Missing Clinic Master'}
+                    </button>
+                  </div>
+
+                  {clinicMasterSyncMessage && (
+                    <div className="mt-4 rounded-xl border border-emerald-100 bg-white px-4 py-3 text-[11px] font-semibold text-emerald-700">
+                      {clinicMasterSyncMessage}
+                    </div>
+                  )}
+                </section>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-black text-slate-900">1. Clinic Structure</h3>
+                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                          Fill <b>clinicId</b> and <b>referringClinicId</b> for legacy appointments, and <b>clinicId</b> for legacy users.
+                        </p>
+                      </div>
+                      <ShieldCheck className="text-emerald-500 shrink-0" size={21} />
+                    </div>
+                    <button
+                      disabled={migrationRunning || migrationScanning}
+                      onClick={migrateClinicStructure}
+                      className="mt-5 w-full py-3 rounded-xl bg-cyan-600 text-white font-black text-sm hover:bg-cyan-700 disabled:opacity-50"
+                    >
+                      Migrate Clinic Structure
+                    </button>
+                  </section>
+
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-black text-slate-900">2. Missing Fundus Provider</h3>
+                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                          For old appointments without a provider field, choose the clinic that actually handled those legacy fundus cases.
+                        </p>
+                      </div>
+                      <Network className="text-emerald-500 shrink-0" size={21} />
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-rose-100 bg-rose-50/60 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Legacy source breakdown</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Assign the historical fundus provider by legacy source. Existing provider assignments are never overwritten.
+                      </p>
+
+                      <div className="mt-3 space-y-2">
+                        {Object.entries(migrationStats?.missingProviderByLegacyDepartment || {})
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([department, count]) => {
+                            const selectedProviderId = migrationProviderByLegacyDepartment[department] || '';
+                            const selectedProvider = clinics.find(clinic => clinic.id === selectedProviderId);
+                            const mappedClinic =
+                              department === 'OPD KKL'
+                                ? 'LINTANG'
+                                : department === 'PBOA'
+                                  ? 'PBOA'
+                                  : department === 'HSS'
+                                    ? 'HSS'
+                                    : '';
+
+                            return (
+                              <div key={department} className="rounded-xl border border-white bg-white p-3 shadow-sm">
+                                <div className="flex flex-col xl:flex-row xl:items-center gap-3">
+                                  <div className="min-w-0 xl:w-[28%]">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-xs font-black text-slate-800">{department}</span>
+                                      <span className="text-sm font-black text-rose-700">{count}</span>
+                                    </div>
+                                    {mappedClinic && (
+                                      <p className="text-[10px] font-bold text-slate-400 mt-1">Legacy clinic → {mappedClinic}</p>
+                                    )}
+                                  </div>
+
+                                  <div className="flex-1 flex flex-col sm:flex-row gap-2">
+                                    <select
+                                      value={selectedProviderId}
+                                      onChange={(e) =>
+                                        setMigrationProviderByLegacyDepartment(prev => ({
+                                          ...prev,
+                                          [department]: e.target.value,
+                                        }))
+                                      }
+                                      disabled={migrationRunning || migrationScanning || count <= 0}
+                                      className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-200 disabled:opacity-50"
+                                    >
+                                      <option value="">Select fundus provider...</option>
+                                      {getFundusProviderClinics(clinics).map(provider => (
+                                        <option key={provider.id} value={provider.id}>
+                                          {provider.name}
+                                        </option>
+                                      ))}
+                                    </select>
+
+                                    <button
+                                      type="button"
+                                      disabled={migrationRunning || migrationScanning || count <= 0 || !selectedProviderId}
+                                      onClick={() => migrateMissingProvidersByLegacyDepartment(department, selectedProviderId)}
+                                      className="sm:min-w-[150px] px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:opacity-50"
+                                    >
+                                      Assign Provider
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {selectedProvider && (
+                                  <p className="text-[10px] font-semibold text-emerald-700 mt-2">
+                                    Selected: {selectedProvider.shortName}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 p-3">
+                      <p className="text-xs font-black text-amber-900">Safe historical assignment</p>
+                      <p className="text-[11px] text-amber-800 mt-1 leading-relaxed">
+                        Each legacy source is migrated separately. Review the source and provider before confirming; no record from another source will be changed.
+                      </p>
+                    </div>
+                  </section>
+                </div>
+
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-1">
+                  <div className="text-xs font-semibold text-slate-500 min-h-[18px]">
+                    {migrationScanning ? 'Scanning...' : migrationRunning ? 'Migration in progress...' : migrationMessage}
+                  </div>
+                  <button
+                    disabled={migrationScanning || migrationRunning}
+                    onClick={scanMigrationData}
+                    className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-black text-xs hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Refresh Scan
+                  </button>
+                </div>
+
+                {migrationStats && (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <p>Users: <b className="text-slate-900">{migrationStats.usersTotal}</b> total · <b className="text-amber-700">{migrationStats.usersNeedsClinicMigration}</b> need clinic mapping</p>
+                      <p>Appointments with clinicId: <b className="text-slate-900">{migrationStats.appointmentsWithClinicId}</b> / {migrationStats.appointmentsTotal}</p>
+                    </div>
+                  </div>
+                )}
+            </section>
+          ) : (
+          <>
           {/*--- Console Header ---*/}
           <section className="bg-white border border-violet-100 rounded-3xl p-5 md:p-7 shadow-sm">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -5902,47 +8075,14 @@ const tomorrowTCATotal = Object.values(
             </div>
           </section>
 
-          {/*--- Console Action Tiles ---*/}
-          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            <button onClick={() => setShowClinicManager(true)} className="group text-left p-5 rounded-2xl border border-blue-100 bg-blue-50 hover:bg-blue-100 transition-all">
-              <Building2 className="text-blue-600 mb-4" size={25} />
-              <p className="font-black text-slate-900">Clinic Management</p>
-              <p className="text-xs text-slate-500 mt-1">Add, activate and configure standalone clinics.</p>
-            </button>
-            <button onClick={() => setShowAdminConsole(true)} className="text-left p-5 rounded-2xl border border-violet-100 bg-violet-50 hover:bg-violet-100 transition-all">
-              <Users className="text-violet-600 mb-4" size={25} />
-              <p className="font-black text-slate-900">User Management</p>
-              <p className="text-xs text-slate-500 mt-1">Create and manage admins and staff by clinic.</p>
-            </button>
-            <button onClick={() => setShowFundusNetwork(true)} className="text-left p-5 rounded-2xl border border-emerald-100 bg-emerald-50 hover:bg-emerald-100 transition-all">
-              <Network className="text-emerald-600 mb-4" size={25} />
-              <p className="font-black text-slate-900">Fundus Network</p>
-              <p className="text-xs text-slate-500 mt-1">Configure fundus provider clinics and referral routing.</p>
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                //--- Open Data & Migration directly from the Super Admin home dashboard ---//
-                e.stopPropagation();
-                setShowDataMigration(true);
-                void scanMigrationData();
-              }}
-              className="text-left p-5 rounded-2xl border border-cyan-100 bg-cyan-50 hover:bg-cyan-100 transition-all cursor-pointer"
-            >
-              <Database className="text-cyan-600 mb-4" size={25} />
-              <p className="font-black text-slate-900">Data &amp; Migration</p>
-              <p className="text-xs text-slate-500 mt-1">Review legacy records and migration status.</p>
-            </button>
-            <button onClick={() => setShowActivityLogs(true)} className="text-left p-5 rounded-2xl border border-amber-100 bg-amber-50 hover:bg-amber-100 transition-all">
-              <Activity className="text-amber-600 mb-4" size={25} />
-              <p className="font-black text-slate-900">Global Activity Logs</p>
-              <p className="text-xs text-slate-500 mt-1">Audit activity across all facilities.</p>
-            </button>
-            <button className="text-left p-5 rounded-2xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all">
-              <Settings2 className="text-slate-600 mb-4" size={25} />
-              <p className="font-black text-slate-900">System Configuration</p>
-              <p className="text-xs text-slate-500 mt-1">Global SINAR settings and future modules.</p>
-            </button>
+          {/*--- Card navigation replaces the old persistent sidebar. ---*/}
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <button type="button" onClick={() => setActiveSuperAdminView('clinics')} className="min-h-[126px] rounded-2xl border border-blue-100 bg-blue-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"><Building2 size={24} className="mb-4 text-blue-600"/><p className="font-black text-slate-900">Clinic Management</p><p className="mt-1 text-xs text-slate-500">Add, activate and configure standalone clinics.</p></button>
+            <button type="button" onClick={() => setActiveSuperAdminView('users')} className="min-h-[126px] rounded-2xl border border-violet-100 bg-violet-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"><Users size={24} className="mb-4 text-violet-600"/><p className="font-black text-slate-900">User Management</p><p className="mt-1 text-xs text-slate-500">Create and manage admins and staff by clinic.</p></button>
+            <button type="button" onClick={() => setActiveSuperAdminView('fundus')} className="min-h-[126px] rounded-2xl border border-emerald-100 bg-emerald-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"><Network size={24} className="mb-4 text-emerald-600"/><p className="font-black text-slate-900">Fundus Network</p><p className="mt-1 text-xs text-slate-500">Configure fundus provider clinics and referral routing.</p></button>
+            <button type="button" onClick={() => setActiveSuperAdminView('specialistClinics')} className="min-h-[126px] rounded-2xl border border-cyan-100 bg-cyan-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"><Building2 size={24} className="mb-4 text-cyan-600"/><p className="font-black text-slate-900">Specialist Clinic</p><p className="mt-1 text-xs text-slate-500">Manage specialist clinic directory and status.</p></button>
+            <button type="button" onClick={() => setActiveSuperAdminView('specialistUsers')} className="min-h-[126px] rounded-2xl border border-amber-100 bg-amber-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"><UserCog size={24} className="mb-4 text-amber-600"/><p className="font-black text-slate-900">User Specialist</p><p className="mt-1 text-xs text-slate-500">Manage specialist accounts and clinic assignments.</p></button>
+            <button type="button" onClick={() => setActiveSuperAdminView('settings')} className="min-h-[126px] rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md"><Settings2 size={24} className="mb-4 text-slate-600"/><p className="font-black text-slate-900">System Configuration</p><p className="mt-1 text-xs text-slate-500">Global settings, data migration and maintenance.</p></button>
           </section>
 
           {/*--- Monthly Summary By Clinic ---*/}
@@ -6009,6 +8149,10 @@ const tomorrowTCATotal = Object.values(
               ))}
             </div>
           </section>
+          </>
+          )}
+            <AppFooter />
+          </div>
         </main>
       )}
 
@@ -6192,6 +8336,32 @@ year:'numeric'
 </div>
         </section>
         
+        {(specialistReviewPendingAppointments.length + specialistReportsReturnedAppointments.length > 0) && (
+          <section className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-3 px-2 sm:grid-cols-3 sm:gap-4" aria-label="Specialist referral summary">
+            <div className="flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4">
+              <div className="rounded-lg bg-blue-100 p-2 text-blue-700"><Activity size={19}/></div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-wider text-blue-700">Total Specialist Referrals</p>
+                <p className="text-2xl font-black text-slate-900">{specialistReviewPendingAppointments.length + specialistReportsReturnedAppointments.length}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <div className="rounded-lg bg-amber-100 p-2 text-amber-700"><Clock size={19}/></div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-wider text-amber-800">Pending Ophthalmology Review</p>
+                <p className="text-2xl font-black text-slate-900">{specialistReviewPendingAppointments.length}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="rounded-lg bg-emerald-100 p-2 text-emerald-700"><CheckCircle2 size={19}/></div>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-wider text-emerald-800">Reports Received</p>
+                <p className="text-2xl font-black text-slate-900">{specialistReportsReturnedAppointments.length}</p>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Today's Quick Section */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
@@ -6765,8 +8935,18 @@ year:'numeric'
           </div>
 
           {/* Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[950px] md:min-w-[800px]">
+          <div className="w-full overflow-x-hidden">
+            <table className="w-full table-fixed text-left border-collapse">
+              <colgroup>
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '10%' }} />
+                <col style={{ width: '17%' }} />
+                <col style={{ width: '18%' }} />
+              </colgroup>
               <thead className="bg-slate-50/80 backdrop-blur-sm">
                 <tr className="border-b border-slate-200 bg-slate-200">
                   <th className="px-3 md:px-6 py-3 md:py-4 text-[10px] font-bold text-slate-600 uppercase tracking-wider text-center">RE / LE Photos</th>
@@ -7017,8 +9197,8 @@ year:'numeric'
 </span>
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col">
+                      <td className="px-6 py-4 text-center">
+                        <div className="flex flex-col items-center text-center">
                           <span className="text-sm font-black text-slate-600 uppercase tracking-tighter">{getUserDisplayName(app.createdBy)}</span>
                           
                         </div>
@@ -7033,16 +9213,22 @@ year:'numeric'
                           <span className="text-[10px] font-black text-blue-600 tracking-wider mt-0.5">{dailyQueueNumber}</span>
                         </div>
                       </td>
-                      <td className="px-6 py-4">
-  <div className="flex flex-col gap-1">
+                      <td className="px-6 py-4 text-center">
+  <div className="flex flex-col items-center gap-1 text-center">
 
-    <div className="flex gap-2">
+    <div className="flex items-center justify-center gap-2">
       <StatusBadge status={app.status} />
     </div>
 
+    {(app as any).specialistReportStatus === 'Returned' ? (
+      <span className="mt-1 inline-flex w-fit rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[9px] font-black uppercase text-violet-700">Ophthalmology report received</span>
+    ) : app.referralSent === true && app.specialistClinicId ? (
+      <span className="mt-1 inline-flex w-fit rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-black uppercase text-amber-700">Ophthalmology pending review</span>
+    ) : null}
+
     {app.status === AppointmentStatus.DONE && (
 
-  <div className="flex flex-col mt-1">
+  <div className="flex flex-col items-center text-center mt-1">
 
     <span className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter leading-none">
 
@@ -7327,13 +9513,25 @@ setSelectedReviewSummary(app);
       app.status === AppointmentStatus.NO_SHOW;
 
     return (
-      <div className="flex flex-col items-center gap-2">
+      <div className="flex w-full min-w-0 flex-col items-center gap-2">
 
-        <div className="flex items-center gap-2">
+        <div className="flex max-w-full flex-wrap items-center justify-center gap-1">
+        {(currentUser?.role === UserRole.ADMIN || currentUser?.role === UserRole.SUPER_ADMIN) && isReviewCompleted(app) && app.referred === true && (
+          <button
+            onClick={() => startPatientReferral(app)}
+            disabled={app.referralSent === true}
+            className={`p-1.5 rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${app.referralSent ? 'text-emerald-600' : 'text-violet-600 hover:bg-violet-50'}`}
+            title={app.referralSent ? `Referral dihantar${app.specialistClinicName ? ` ke ${app.specialistClinicName}` : ''}` : 'Lengkapkan borang dan hantar referral'}
+            aria-label={`Rujuk pesakit ${app.patientName || 'patient'}`}
+          >
+            <Network size={18} />
+          </button>
+        )}
+
         {isReviewCompleted(app) && (
           <button
             onClick={() => void printPatientReport(app)}
-            className="p-2 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
             title="Print Patient Report (PDF)"
             aria-label={`Print patient report for ${app.patientName || 'patient'}`}
           >
@@ -7358,7 +9556,7 @@ setSelectedReviewSummary(app);
 
             <button
               onClick={() => confirmDelete(app)}
-              className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+              className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
               title="Delete Patient Record"
             >
               <Trash2 size={18} />
@@ -7509,380 +9707,11 @@ setSelectedReviewSummary(app);
 </div>
         </section>
 
-        <div className="text-center py-3 flex flex-col">
-  
-  <span className="text-[10px] text-slate-500 font-bold tracking-widest uppercase">
-    Fundus {currentClinic?.name || 'Klinik Kesihatan Lintang'} • {APP_VERSION}
-  </span>
-
-  <span className="text-[9px] text-slate-400 font-semibold tracking-wide mt-1">
-    Created by Azairi
-  </span>
-
-</div>
+        <AppFooter />
       </main>
       )}
 
-      {/* =====================================================
-          SUPER ADMIN CONSOLE
-          Box-based navigation for cross-clinic administration.
-          Clinic Management is functional in this phase; other
-          modules are placeholders for the next migration steps.
-         ===================================================== */}
-      <AnimatePresence>
-        {showSuperAdminConsole && currentUser.role === UserRole.SUPER_ADMIN && (
-          <div className="fixed inset-0 z-[110] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowSuperAdminConsole(false)}
-              className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.94, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.94, y: 20 }}
-              className="relative w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
-            >
-              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
-                <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-violet-600 text-white flex items-center justify-center shadow-lg">
-                    <Shield size={22} />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-black text-slate-900">SINAR Super Admin</h2>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Multi-Clinic Administration</p>
-                  </div>
-                </div>
-                <button onClick={() => setShowSuperAdminConsole(false)} className="p-2 rounded-xl hover:bg-slate-200 text-slate-400">
-                  <XCircle size={24} />
-                </button>
-              </div>
 
-              <div className="p-4 sm:p-6 md:p-8 overflow-y-auto overscroll-contain min-h-0">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <button onClick={() => setShowClinicManager(true)} className="group text-left p-5 rounded-2xl border border-blue-100 bg-blue-50 hover:bg-blue-100 transition-all">
-                    <Building2 className="text-blue-600 mb-4" size={25} />
-                    <p className="font-black text-slate-900">Clinic Management</p>
-                    <p className="text-xs text-slate-500 mt-1">Add, activate and configure standalone clinics.</p>
-                  </button>
-                  <button onClick={() => setShowAdminConsole(true)} className="text-left p-5 rounded-2xl border border-violet-100 bg-violet-50 hover:bg-violet-100 transition-all">
-                    <Users className="text-violet-600 mb-4" size={25} />
-                    <p className="font-black text-slate-900">User Management</p>
-                    <p className="text-xs text-slate-500 mt-1">Manage admins and staff across clinics.</p>
-                  </button>
-                  <button onClick={() => setShowFundusNetwork(true)} className="text-left p-5 rounded-2xl border border-emerald-100 bg-emerald-50 hover:bg-emerald-100 transition-all">
-                    <Network className="text-emerald-600 mb-4" size={25} />
-                    <p className="font-black text-slate-900">Fundus Network</p>
-                    <p className="text-xs text-slate-500 mt-1">Configure which clinics provide fundus services.</p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      //--- Open Data & Migration as its own modal layer and close the console underneath ---//
-                      e.stopPropagation();
-                      setShowSuperAdminConsole(false);
-                      setShowDataMigration(true);
-                      void scanMigrationData();
-                    }}
-                    className="text-left p-5 rounded-2xl border border-cyan-100 bg-cyan-50 hover:bg-cyan-100 transition-all cursor-pointer"
-                  >
-                    <Database className="text-cyan-600 mb-4" size={25} />
-                    <p className="font-black text-slate-900">Data &amp; Migration</p>
-                    <p className="text-xs text-slate-500 mt-1">Review legacy records and migrate clinic structure safely.</p>
-                  </button>
-                  <button className="text-left p-5 rounded-2xl border border-amber-100 bg-amber-50 hover:bg-amber-100 transition-all">
-                    <Activity className="text-amber-600 mb-4" size={25} />
-                    <p className="font-black text-slate-900">Global Activity Logs</p>
-                    <p className="text-xs text-slate-500 mt-1">Audit activity across all facilities.</p>
-                  </button>
-                  <button className="text-left p-5 rounded-2xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-all">
-                    <Settings2 className="text-slate-600 mb-4" size={25} />
-                    <p className="font-black text-slate-900">System Configuration</p>
-                    <p className="text-xs text-slate-500 mt-1">Global SINAR settings and future modules.</p>
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* =====================================================
-          DATA & MIGRATION
-          Super Admin can scan legacy records and migrate only the
-          new clinic/referral/provider fields. Legacy department data
-          is intentionally preserved for backward compatibility.
-         ===================================================== */}
-      <AnimatePresence>
-        {showDataMigration && currentUser.role === UserRole.SUPER_ADMIN && (
-          <div className="fixed inset-0 z-[120] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowDataMigration(false)}
-              className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm"
-            />
-
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-5xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
-            >
-              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-cyan-50/70">
-                <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-cyan-600 text-white flex items-center justify-center shadow-lg">
-                    <Database size={22} />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-black text-slate-900">Data &amp; Migration</h2>
-                    <p className="text-[10px] font-black text-cyan-700 uppercase tracking-widest mt-1">
-                      Legacy data → multiclinic structure
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowDataMigration(false)}
-                  className="p-2 rounded-xl hover:bg-cyan-100 text-slate-400"
-                >
-                  <XCircle size={24} />
-                </button>
-              </div>
-
-              <div className="p-6 overflow-y-auto space-y-5">
-                <div className="rounded-2xl border border-cyan-100 bg-cyan-50/50 p-4">
-                  <div className="flex items-start gap-3">
-                    <AlertCircle className="text-cyan-600 shrink-0 mt-0.5" size={19} />
-                    <div>
-                      <p className="font-black text-slate-900">Safe migration policy</p>
-                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                        Migration only fills the new clinic structure. The legacy <b>department</b> field is preserved and existing provider assignments are never overwritten.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {migrationStats ? (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Appointments</p>
-                      <p className="text-2xl font-black text-slate-900 mt-1">{migrationStats.appointmentsTotal}</p>
-                      <p className="text-[11px] text-slate-500 mt-1">total records</p>
-                    </div>
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Clinic migration</p>
-                      <p className="text-2xl font-black text-amber-900 mt-1">{migrationStats.appointmentsNeedsClinicMigration}</p>
-                      <p className="text-[11px] text-amber-700 mt-1">appointments</p>
-                    </div>
-                    <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-violet-700">Referral migration</p>
-                      <p className="text-2xl font-black text-violet-900 mt-1">{migrationStats.appointmentsNeedsReferralMigration}</p>
-                      <p className="text-[11px] text-violet-700 mt-1">appointments</p>
-                    </div>
-                    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Missing provider</p>
-                      <p className="text-2xl font-black text-rose-900 mt-1">{migrationStats.appointmentsMissingProvider}</p>
-                      <p className="text-[11px] text-rose-700 mt-1">appointments</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 text-center">
-                    <p className="text-sm font-bold text-slate-600">Scan Firestore to view migration status.</p>
-                  </div>
-                )}
-
-                {/* =====================================================
-                    CLINIC MASTER SYNCHRONIZATION
-                    Creates only missing DEFAULT_CLINICS in Firestore.
-                    Existing clinic documents are never overwritten.
-                   ===================================================== */}
-                <section className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-5">
-                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm shrink-0">
-                        <Building2 size={19} />
-                      </div>
-                      <div>
-                        <h3 className="font-black text-slate-900">Clinic Master Synchronization</h3>
-                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                          Create missing default clinic documents in Firestore. Existing clinics and their
-                          provider, referral routing and TCA settings will not be changed.
-                        </p>
-                        <div className="flex flex-wrap gap-2 mt-3">
-                          {DEFAULT_CLINICS.map(clinic => (
-                            <span
-                              key={clinic.id}
-                              className="px-2.5 py-1 rounded-lg bg-white border border-emerald-100 text-[10px] font-black text-slate-600"
-                            >
-                              {clinic.shortName}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={clinicMasterSyncRunning || migrationRunning || migrationScanning}
-                      onClick={syncMissingClinicMaster}
-                      className="shrink-0 px-5 py-3 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
-                    >
-                      {clinicMasterSyncRunning ? 'Syncing...' : 'Sync Missing Clinic Master'}
-                    </button>
-                  </div>
-
-                  {clinicMasterSyncMessage && (
-                    <div className="mt-4 rounded-xl border border-emerald-100 bg-white px-4 py-3 text-[11px] font-semibold text-emerald-700">
-                      {clinicMasterSyncMessage}
-                    </div>
-                  )}
-                </section>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="font-black text-slate-900">1. Clinic Structure</h3>
-                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                          Fill <b>clinicId</b> and <b>referringClinicId</b> for legacy appointments, and <b>clinicId</b> for legacy users.
-                        </p>
-                      </div>
-                      <ShieldCheck className="text-emerald-500 shrink-0" size={21} />
-                    </div>
-                    <button
-                      disabled={migrationRunning || migrationScanning}
-                      onClick={migrateClinicStructure}
-                      className="mt-5 w-full py-3 rounded-xl bg-cyan-600 text-white font-black text-sm hover:bg-cyan-700 disabled:opacity-50"
-                    >
-                      Migrate Clinic Structure
-                    </button>
-                  </section>
-
-                  <section className="rounded-2xl border border-slate-200 bg-white p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="font-black text-slate-900">2. Missing Fundus Provider</h3>
-                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                          For old appointments without a provider field, choose the clinic that actually handled those legacy fundus cases.
-                        </p>
-                      </div>
-                      <Network className="text-emerald-500 shrink-0" size={21} />
-                    </div>
-
-                    <div className="mt-4 rounded-xl border border-rose-100 bg-rose-50/60 p-3">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Legacy source breakdown</p>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Assign the historical fundus provider by legacy source. Existing provider assignments are never overwritten.
-                      </p>
-
-                      <div className="mt-3 space-y-2">
-                        {Object.entries(migrationStats?.missingProviderByLegacyDepartment || {})
-                          .sort(([, a], [, b]) => b - a)
-                          .map(([department, count]) => {
-                            const selectedProviderId = migrationProviderByLegacyDepartment[department] || '';
-                            const selectedProvider = clinics.find(clinic => clinic.id === selectedProviderId);
-                            const mappedClinic =
-                              department === 'OPD KKL'
-                                ? 'LINTANG'
-                                : department === 'PBOA'
-                                  ? 'PBOA'
-                                  : department === 'HSS'
-                                    ? 'HSS'
-                                    : '';
-
-                            return (
-                              <div key={department} className="rounded-xl border border-white bg-white p-3 shadow-sm">
-                                <div className="flex flex-col xl:flex-row xl:items-center gap-3">
-                                  <div className="min-w-0 xl:w-[28%]">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-xs font-black text-slate-800">{department}</span>
-                                      <span className="text-sm font-black text-rose-700">{count}</span>
-                                    </div>
-                                    {mappedClinic && (
-                                      <p className="text-[10px] font-bold text-slate-400 mt-1">Legacy clinic → {mappedClinic}</p>
-                                    )}
-                                  </div>
-
-                                  <div className="flex-1 flex flex-col sm:flex-row gap-2">
-                                    <select
-                                      value={selectedProviderId}
-                                      onChange={(e) =>
-                                        setMigrationProviderByLegacyDepartment(prev => ({
-                                          ...prev,
-                                          [department]: e.target.value,
-                                        }))
-                                      }
-                                      disabled={migrationRunning || migrationScanning || count <= 0}
-                                      className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-200 disabled:opacity-50"
-                                    >
-                                      <option value="">Select fundus provider...</option>
-                                      {getFundusProviderClinics(clinics).map(provider => (
-                                        <option key={provider.id} value={provider.id}>
-                                          {provider.name}
-                                        </option>
-                                      ))}
-                                    </select>
-
-                                    <button
-                                      type="button"
-                                      disabled={migrationRunning || migrationScanning || count <= 0 || !selectedProviderId}
-                                      onClick={() => migrateMissingProvidersByLegacyDepartment(department, selectedProviderId)}
-                                      className="sm:min-w-[150px] px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-black hover:bg-emerald-700 disabled:opacity-50"
-                                    >
-                                      Assign Provider
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {selectedProvider && (
-                                  <p className="text-[10px] font-semibold text-emerald-700 mt-2">
-                                    Selected: {selectedProvider.shortName}
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
-                      </div>
-                    </div>
-
-                    <div className="mt-3 rounded-xl border border-amber-100 bg-amber-50 p-3">
-                      <p className="text-xs font-black text-amber-900">Safe historical assignment</p>
-                      <p className="text-[11px] text-amber-800 mt-1 leading-relaxed">
-                        Each legacy source is migrated separately. Review the source and provider before confirming; no record from another source will be changed.
-                      </p>
-                    </div>
-                  </section>
-                </div>
-
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-1">
-                  <div className="text-xs font-semibold text-slate-500 min-h-[18px]">
-                    {migrationScanning ? 'Scanning...' : migrationRunning ? 'Migration in progress...' : migrationMessage}
-                  </div>
-                  <button
-                    disabled={migrationScanning || migrationRunning}
-                    onClick={scanMigrationData}
-                    className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-700 font-black text-xs hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    Refresh Scan
-                  </button>
-                </div>
-
-                {migrationStats && (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <p>Users: <b className="text-slate-900">{migrationStats.usersTotal}</b> total · <b className="text-amber-700">{migrationStats.usersNeedsClinicMigration}</b> need clinic mapping</p>
-                      <p>Appointments with clinicId: <b className="text-slate-900">{migrationStats.appointmentsWithClinicId}</b> / {migrationStats.appointmentsTotal}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* =====================================================
           FUNDUS NETWORK
@@ -8533,28 +10362,40 @@ setSelectedReviewSummary(app);
       {/* Staff Management Console */}
       <AnimatePresence>
         {showAdminConsole && (
-          <div className="fixed inset-0 z-[100] flex items-start sm:items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
+          <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto overscroll-contain bg-slate-900/40 p-2 backdrop-blur-sm sm:p-5">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowAdminConsole(false)}
-              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+              onClick={() => {
+                if (isSavingStaff) return;
+                setShowAdminConsole(false);
+                setShowStaffForm(false);
+                setEditingUser(null);
+                setNewStaffId('');
+                setNewStaffName('');
+                setNewStaffPass('');
+                setShowStaffPassword(false);
+                setNewStaffRole(UserRole.STAFF);
+                setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
+              }}
+              className="absolute inset-0 bg-transparent" 
             />
             <motion.div 
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-3xl shadow-2xl flex flex-col overflow-hidden"
+              className="relative my-auto w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2.5rem)] bg-white rounded-3xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden"
             >
-              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="p-5 sm:p-7 border-b border-slate-100 flex items-start justify-between bg-white">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-blue-600 rounded-xl">
+                  <div className="p-2.5 bg-teal-700 rounded-xl shadow-sm">
                     <Users size={20} className="text-white" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-black text-slate-800 leading-none">{currentUser?.role === UserRole.SUPER_ADMIN ? 'User Management' : 'Clinical Staff Management'}</h2>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Multi-Clinic User Administration' : 'Authorized Admin Console'}</p>
+                    <p className="text-[10px] font-black text-teal-700 uppercase tracking-[.18em] mb-1">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Multi-clinic administration' : 'Clinic administration'}</p>
+                    <h2 className="text-2xl font-black text-slate-900 leading-tight">{currentUser?.role === UserRole.SUPER_ADMIN ? 'User Management' : 'Staff Management'}</h2>
+                    <p className="text-sm text-slate-500 mt-1">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Manage user accounts across clinics.' : `Manage staff accounts for ${currentClinic?.name || 'this clinic'}.`}</p>
                   </div>
                 </div>
                 <button 
@@ -8563,7 +10404,7 @@ setSelectedReviewSummary(app);
   if (isSavingStaff) return;
 
   setShowAdminConsole(false);
-
+  setShowStaffForm(false);
   setEditingUser(null);
 
   setNewStaffId('');
@@ -8574,29 +10415,48 @@ setSelectedReviewSummary(app);
   setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
 
 }}
-                  className="p-2 hover:bg-slate-200 rounded-xl transition-colors text-slate-400"
+                  className="p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-400"
                 >
                   <XCircle size={24} />
                 </button>
               </div>
 
-              <div className="p-4 md:p-6 space-y-4 md:space-y-8 overflow-y-auto">
+              <div className="p-5 sm:p-7 space-y-5 overflow-y-auto bg-white">
                 {/* Add/Edit Staff Form */}
                 <section>
 
   <button
     type="button"
-    onClick={() => setShowStaffForm(!showStaffForm)}
+    onClick={() => {
+      if (showStaffForm) {
+        setShowStaffForm(false);
+        setNewStaffId('');
+        setNewStaffName('');
+        setNewStaffPass('');
+        setShowStaffPassword(false);
+        setNewStaffRole(UserRole.STAFF);
+        setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
+      } else {
+        setEditingUser(null);
+        setNewStaffId('');
+        setNewStaffName('');
+        setNewStaffPass('');
+        setShowStaffPassword(false);
+        setNewStaffRole(UserRole.STAFF);
+        setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
+        setShowStaffForm(true);
+      }
+    }}
     className="w-full flex items-center justify-between mb-4"
   >
     <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
-      {editingUser ? <Edit2 size={14} className="text-blue-500" /> : <UserPlus size={14} className="text-blue-500" />}
+      {editingUser ? <Edit2 size={14} className="text-teal-700" /> : <UserPlus size={14} className="text-teal-700" />}
       {editingUser ? `Editing Account: ${editingUser.id}` : (currentUser?.role === UserRole.SUPER_ADMIN ? 'Register New Clinic User' : 'Register New Clinical Staff')}
     </h3>
 
     {!editingUser && (
-      <span className="text-xs font-bold text-blue-600">
-        {showStaffForm ? 'Hide' : 'Show'}
+      <span className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-40">
+        {showStaffForm ? <XCircle size={16}/> : <UserPlus size={16}/>} {showStaffForm ? 'Close form' : 'Add new user'}
       </span>
     )}
   </button>
@@ -8605,21 +10465,20 @@ setSelectedReviewSummary(app);
 
   <form
   onSubmit={editingUser ? updateStaffMember : addStaffMember}
-  className="bg-blue-50/50 p-3 md:p-4 rounded-2xl border border-blue-100"
+  className="bg-teal-50/50 p-3 md:p-4 rounded-2xl border border-teal-100"
 >
 
   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
 
     <div className="space-y-1">
-      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+      <label className="text-[9px] font-bold text-teal-700 uppercase ml-1">
         Staff User ID
       </label>
 
       <input
         type="text"
         required
-        disabled={!!editingUser}
-        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-bold disabled:bg-slate-100 disabled:text-slate-500"
+        className="w-full px-4 py-2.5 rounded-xl border border-teal-200 focus:ring-2 focus:ring-teal-600 outline-none text-sm font-bold"
         value={editingUser ? editingUser.id : newStaffId}
         onChange={e =>
           editingUser
@@ -8633,16 +10492,17 @@ setSelectedReviewSummary(app);
     </div>
 
     <div className="space-y-1">
-      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+      <label className="text-[9px] font-bold text-teal-700 uppercase ml-1">
         Password
       </label>
 
       <div className="relative">
         <input
           type={showStaffPassword ? "text" : "password"}
-          required
-          className="w-full px-4 pr-11 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
-          value={editingUser ? (editingUser.password || '') : newStaffPass}
+          required={!editingUser}
+          placeholder={editingUser ? 'Leave blank to keep current password' : 'Enter password'}
+          className="w-full px-4 pr-11 py-2.5 rounded-xl border border-teal-200 focus:ring-2 focus:ring-teal-600 outline-none text-sm font-medium"
+          value={newStaffPass}
           onChange={e =>
             editingUser
               ? setEditingUser({
@@ -8664,7 +10524,7 @@ setSelectedReviewSummary(app);
     </div>
 
     <div className="space-y-1">
-      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+      <label className="text-[9px] font-bold text-teal-700 uppercase ml-1">
         Display Name
       </label>
 
@@ -8672,7 +10532,7 @@ setSelectedReviewSummary(app);
         type="text"
         required
         placeholder="e.g. Dr. Johny"
-        className="w-full px-4 py-2.5 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-medium"
+        className="w-full px-4 py-2.5 rounded-xl border border-teal-200 focus:ring-2 focus:ring-teal-600 outline-none text-sm font-medium"
         value={
           editingUser
             ? editingUser.displayName
@@ -8694,7 +10554,7 @@ setSelectedReviewSummary(app);
   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
 
     <div className="space-y-1">
-      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+      <label className="text-[9px] font-bold text-teal-700 uppercase ml-1">
         Clinic
       </label>
       {currentUser?.role === UserRole.SUPER_ADMIN ? (
@@ -8706,7 +10566,7 @@ setSelectedReviewSummary(app);
               : setNewStaffClinicId(e.target.value)
           }
           disabled={editingUser?.role === UserRole.SUPER_ADMIN}
-          className="w-full px-4 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500"
+          className="w-full px-4 py-2.5 rounded-xl border border-teal-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-teal-600 disabled:bg-slate-100 disabled:text-slate-500"
         >
           <option value="">No clinic (Super Admin)</option>
           {clinics.filter(clinic => clinic.active).map(clinic => (
@@ -8714,7 +10574,7 @@ setSelectedReviewSummary(app);
           ))}
         </select>
       ) : (
-        <div className="w-full px-4 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold text-slate-700">
+        <div className="w-full px-4 py-2.5 rounded-xl border border-teal-200 bg-white text-sm font-bold text-slate-700">
           {currentClinic?.name || 'Klinik Kesihatan Lintang'}
         </div>
       )}
@@ -8724,7 +10584,7 @@ setSelectedReviewSummary(app);
     </div>
 
     <div className="space-y-1">
-      <label className="text-[9px] font-bold text-blue-600 uppercase ml-1">
+      <label className="text-[9px] font-bold text-teal-700 uppercase ml-1">
         Role
       </label>
       {currentUser?.role === UserRole.SUPER_ADMIN ? (
@@ -8735,18 +10595,31 @@ setSelectedReviewSummary(app);
               ? setEditingUser({ ...editingUser, role: e.target.value as UserRole, clinicId: e.target.value === UserRole.SUPER_ADMIN ? null : (editingUser.clinicId || newStaffClinicId || 'LINTANG') })
               : setNewStaffRole(e.target.value as UserRole)
           }
-          className="w-full px-4 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-4 py-2.5 rounded-xl border border-teal-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-teal-600"
+        >
+          <option value={UserRole.STAFF}>STAFF</option>
+          <option value={UserRole.ADMIN}>ADMIN</option>
+        </select>
+      ) : editingUser && currentUser?.role === UserRole.ADMIN ? (
+        <select
+          value={editingUser.role}
+          onChange={e => setEditingUser({ ...editingUser, role: e.target.value as UserRole })}
+          className="w-full px-4 py-2.5 rounded-xl border border-teal-200 bg-white text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-teal-600"
         >
           <option value={UserRole.STAFF}>STAFF</option>
           <option value={UserRole.ADMIN}>ADMIN</option>
         </select>
       ) : (
-        <div className="w-full px-4 py-2.5 rounded-xl border border-blue-200 bg-slate-50 text-sm font-bold text-slate-700">
+        <div className="w-full px-4 py-2.5 rounded-xl border border-teal-200 bg-slate-50 text-sm font-bold text-slate-700">
           STAFF
         </div>
       )}
       <p className="text-[9px] text-slate-400 ml-1 mt-1">
-        Super Admin can create ADMIN or STAFF accounts for each clinic.
+        {currentUser?.role === UserRole.SUPER_ADMIN
+          ? 'Super Admin can create ADMIN or STAFF accounts for each clinic.'
+          : editingUser
+            ? 'Admin klinik boleh menukar role akaun sedia ada antara STAFF dan ADMIN. Akaun baharu kekal STAFF.'
+            : 'Akaun baharu oleh admin klinik akan dicipta sebagai STAFF. Untuk cipta ADMIN baharu, hubungi Super Admin.'}
       </p>
     </div>
 
@@ -8770,7 +10643,7 @@ setSelectedReviewSummary(app);
       className={`${
         editingUser
           ? 'bg-emerald-600 hover:bg-emerald-700'
-          : 'bg-blue-600 hover:bg-blue-700'
+          : 'bg-teal-700 hover:bg-teal-800'
       } text-white font-black px-5 py-2.5 rounded-xl transition-all shadow-lg active:scale-95 text-[10px] uppercase tracking-widest`}
     >
       {isSavingStaff
@@ -8856,7 +10729,7 @@ setSelectedReviewSummary(app);
                           <div className="flex flex-wrap items-center gap-2">
                             <button 
                               onClick={() => setEditingUser(u)}
-                              className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all md:opacity-0 md:group-hover:opacity-100"
+                              className="p-2 text-slate-400 hover:text-teal-700 hover:bg-teal-50 rounded-xl transition-all md:opacity-0 md:group-hover:opacity-100"
                               title="Edit User"
                             >
                               <Edit2 size={18} />
@@ -12460,8 +14333,8 @@ const imageReason =
             >
               <div className="shrink-0 px-4 sm:px-6 py-3 bg-gradient-to-r from-blue-950 to-blue-800 text-white flex items-center justify-between gap-4 shadow-lg">
                 <div className="min-w-0">
-                  <h2 className="text-base sm:text-lg font-black">Preview Borang Sebelum Cetak</h2>
-                  <p className="text-[11px] sm:text-xs text-blue-100 mt-0.5">Isi terus pada ruangan borang. Perubahan hanya digunakan untuk PDF dan tidak disimpan ke rekod pesakit.</p>
+                  <h2 className="text-base sm:text-lg font-black">{reportActionMode === 'refer' ? 'Borang Rujukan Pakar' : 'Preview Borang Sebelum Cetak'}</h2>
+                  <p className="text-[11px] sm:text-xs text-blue-100 mt-0.5">{reportActionMode === 'refer' ? 'Lengkapkan maklumat rujukan sebelum dihantar ke klinik pakar.' : 'Isi terus pada ruangan borang. Perubahan hanya digunakan untuk PDF dan tidak disimpan ke rekod pesakit.'}</p>
                 </div>
                 <button type="button" onClick={() => !isGeneratingPatientReport && setPrintReportApp(null)} disabled={isGeneratingPatientReport} className="shrink-0 rounded-lg px-3 py-2 text-white hover:bg-white/10 disabled:opacity-50" aria-label="Tutup popup">✕</button>
               </div>
@@ -12500,7 +14373,6 @@ const imageReason =
                       <div className="space-y-2 px-1 mb-3">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Nama Pesakit:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-xs font-bold flex-1">{app.patientName || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>No. K/P:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-xs font-bold flex-1">{app.icNumber || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Klinik Kesihatan (Asal):</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{getClinicById(clinics, getReferringClinicId(app))?.name || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>No. Telefon:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{app.phoneNumber || '—'}</span></div></div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Diabetes Mellitus sejak:</span>{field('dmDuration', '(tahun)', 'Contoh: 8 tahun')}</div>{field('hba1c', 'HbA1c', 'Keputusan')}</div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2">{field('urineAlbumin', 'Urine Albumin', 'Keputusan')}{field('serumCreatinine', 'Serum Creatinine', 'Keputusan')}</div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex min-w-0 items-baseline gap-1.5"><span className={labelClass}>Penyakit Lain:</span><input aria-label="Penyakit Lain" className={inputClass + " flex-1 min-w-0"} value={printReportFields.otherDiseases || ''} placeholder="Contoh: DM, HTN, LIPID, CKD" onChange={e => setPrintReportFields(prev => ({ ...prev, otherDiseases: e.target.value }))} /></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tarikh Pemeriksaan:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{app.date ? new Date(app.date).toLocaleDateString('en-GB') : '—'}</span></div></div>
                         {field('history', 'Sejarah ringkas', 'Masukkan sejarah ringkas', true)}
                       </div>
@@ -12513,7 +14385,7 @@ const imageReason =
 
                       {section(3, 'Gambar Fundus')}
                       <div className="grid grid-cols-2 gap-3 mb-4">
-                        {[{title:'MATA KANAN (RE)',image:app.rightEyePhoto,uploadedBy:app.rightEyeUploadedBy,uploadedAt:app.rightEyePhotoUploadedAt},{title:'MATA KIRI (LE)',image:app.leftEyePhoto,uploadedBy:app.leftEyeUploadedBy,uploadedAt:app.leftEyePhotoUploadedAt}].map(photo=><div key={photo.title} className="border border-slate-300 rounded-sm p-2"><h4 className="text-center text-[10px] font-black text-blue-950 mb-2">{photo.title}</h4><div className="h-36 sm:h-44 flex items-center justify-center bg-slate-50 border border-slate-200">{photo.image?<img src={photo.image} alt={photo.title} className="max-h-full max-w-full object-contain"/>:<span className="text-[10px] text-slate-400">Tiada gambar fundus</span>}</div><p className="mt-2 text-[9px] text-slate-600">Tarikh / masa imej: {photo.uploadedAt ? new Date(photo.uploadedAt).toLocaleString('en-GB') : '____ / ____ / ______  ______'}</p><p className="text-[9px] text-slate-600">Dimuat naik oleh: {photo.uploadedBy ? getUserDisplayName(photo.uploadedBy) : '________________'}</p></div>)}
+                        {[{title:'MATA KANAN (RE)',image:app.rightEyePhoto,uploadedBy:app.rightEyeUploadedBy,uploadedAt:app.rightEyePhotoUploadedAt},{title:'MATA KIRI (LE)',image:app.leftEyePhoto,uploadedBy:app.leftEyeUploadedBy,uploadedAt:app.leftEyePhotoUploadedAt}].map(photo=><div key={photo.title} className="border border-slate-300 rounded-sm p-2"><h4 className="text-center text-[10px] font-black text-blue-950 mb-2">{photo.title}</h4><div className="h-36 sm:h-44 flex items-center justify-center bg-slate-50 border border-slate-200">{photo.image?<img src={photo.image} alt={photo.title} className="max-h-full max-w-full object-contain"/>:<span className="text-[10px] text-slate-400">Tiada gambar fundus</span>}</div><p className="mt-2 text-center text-[9px] text-slate-600">Tarikh / masa imej: {photo.uploadedAt ? new Date(photo.uploadedAt).toLocaleString('en-GB') : '____ / ____ / ______  ______'}</p><p className="text-center text-[9px] text-slate-600">Dimuat naik oleh: {photo.uploadedBy ? getUserDisplayName(photo.uploadedBy) : '________________'}</p></div>)}
                       </div>
 
                       {section(4, 'Dapatan Pemeriksaan')}
@@ -12521,16 +14393,85 @@ const imageReason =
                         {[{title:'MATA KANAN (RE)',data:eyeInfo('right')},{title:'MATA KIRI (LE)',data:eyeInfo('left')}].map(eye=><div key={eye.title} className="border border-slate-300 rounded-sm overflow-hidden"><h4 className="bg-blue-50 px-2 py-1.5 text-[10px] font-black text-blue-950">{eye.title}</h4><div className="p-2 space-y-1 text-[10px]"><p><b>Status:</b> {eye.data.text}</p><p><b>Jenis abnormaliti:</b> {eye.data.types || '—'}</p><p><b>NPDR severity:</b> {eye.data.severity || '—'}</p><p><b>Catatan:</b> {eye.data.notes || '—'}</p></div></div>)}
                       </div>
                       <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-3 px-1"> <div className="flex items-baseline gap-1.5"><span className={labelClass}>Kes Dirujuk:</span><span className="text-[11px] font-bold">{app.referred === true ? 'Ya' : app.referred === false ? 'Tidak' : '—'}</span></div><div className="flex min-w-0 items-baseline gap-1.5"><span className={labelClass}>Jika Ya, nyatakan sebab:</span><input aria-label="Jika Ya, nyatakan sebab" className={inputClass} value={printReportFields.referralReason || ''} placeholder="Tulis sebab rujukan di sini" onChange={e => setPrintReportFields(prev => ({ ...prev, referralReason: e.target.value }))} /></div></div>
+
+                      {section(5, 'Pengesahan Petugas')}
+                      <div className="px-1 mb-3 space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2">{field('staffName', 'Nama Petugas', 'Nama pegawai yang merujuk')}{field('staffDesignation', 'Jawatan', 'Jawatan')}</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tandatangan:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5"></span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Cop Rasmi:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5"></span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tarikh:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5">{printReportFields.staffDate || ''}</span></div></div>
+                      </div>
                       <p className="mt-4 text-right text-[8px] text-slate-400">Halaman 1 · Preview borang SINAR</p>
                     </div>
+
+                    {reportActionMode === 'print' && (() => {
+                      // Section 6 is never editable from the clinic print preview.
+                      // It is populated only from the specialist report returned to this appointment.
+                      const returned = (app as any).specialistReport || {};
+                      const hasReturnedReport = (app as any).specialistReportStatus === 'Returned' || Boolean((app as any).specialistReportReturnedAt);
+                      const hasDigitalSpecialistReport = hasReturnedReport && Boolean(String(returned.ophthalmologyDoctorName || '').trim());
+                      const reportValue = (key: string) => hasReturnedReport ? String(returned[key] ?? '') : '';
+                      const ruledLines = (value: string, count: number) => {
+                        const lines = value ? value.split(/\r?\n/) : [];
+                        return Array.from({ length: Math.max(count, lines.length) }, (_, index) => (
+                          <div key={index} className="min-h-7 border-b border-slate-400 flex items-end px-1 pb-1 text-[11px] text-slate-900 whitespace-pre-wrap">{lines[index] || ''}</div>
+                        ));
+                      };
+                      return <div className="w-full max-w-[794px] min-h-[1000px] bg-white shadow-2xl ring-1 ring-black/10 px-5 py-5 sm:px-8 sm:py-7 text-[11px]">
+                        <div className="border-b border-slate-300 pb-3 mb-5">
+                          <h3 className="text-sm sm:text-base font-black text-blue-950">SAMBUNGAN REKOD PEMERIKSAAN FUNDUS &amp; RUJUKAN</h3>
+                          <p className="mt-2 text-[10px] text-slate-600"><b>Nama:</b> {app.patientName || '—'} <span className="ml-5"><b>No. K/P:</b> {app.icNumber || '—'}</span></p>
+                        </div>
+                        {section(6, 'Untuk Kegunaan Pakar Oftalmologi')}
+                        <div className="space-y-5 px-1 pt-2">
+                          <div><p className={labelClass + ' mb-1'}>Laporan:</p>{ruledLines(reportValue('ophthalmologyReport'), 3)}</div>
+                          <div><p className={labelClass + ' mb-1'}>Syor:</p>{ruledLines(reportValue('ophthalmologyRecommendation'), 3)}</div>
+                          <div className="max-w-[360px]"><p className={labelClass + ' mb-1'}>Temujanji di Klinik Oftalmologi:</p><div className="min-h-7 border-b border-dotted border-slate-500 flex items-end px-1 pb-1 text-[11px]">{reportValue('ophthalmologyAppointment')}</div></div>
+                          <div className="grid grid-cols-2 gap-5 pt-2">
+                            <div><p className={labelClass + ' mb-1'}>Nama Doktor:</p><div className="min-h-7 border-b border-dotted border-slate-500 px-1 pb-1">{reportValue('ophthalmologyDoctorName')}</div></div>
+                            <div><p className={labelClass + ' mb-1'}>Jawatan:</p><div className="min-h-7 border-b border-dotted border-slate-500 px-1 pb-1">{reportValue('ophthalmologyDesignation')}</div></div>
+                          </div>
+                          <div className="max-w-[260px]"><p className={labelClass + ' mb-1'}>Tarikh laporan:</p><div className="min-h-7 border-b border-dotted border-slate-500 px-1 pb-1">{hasReturnedReport && (app as any).specialistReportReturnedAt ? ((app as any).specialistReportReturnedAt?.toDate ? (app as any).specialistReportReturnedAt.toDate() : new Date((app as any).specialistReportReturnedAt)).toLocaleDateString('en-GB') : reportValue('ophthalmologyDate')}</div></div>
+                        </div>
+                        <div className="mt-10 text-right text-[8px] text-slate-400">{hasReturnedReport ? 'Laporan pakar diterima semula oleh klinik' : 'Untuk kegunaan pakar oftalmologi'}</div>
+                        <div className="mt-16 border-t border-slate-200 pt-2 flex items-end justify-between gap-3 text-[8px] text-slate-400">{hasDigitalSpecialistReport && <span className="italic">Dokumen ini dijana secara digital dan tidak memerlukan tandatangan atau cop rasmi.</span>}<span className="shrink-0">Halaman 2 · SINAR</span></div>
+                      </div>;
+                    })()}
 
                   </div>;
                 })()}
               </div>
 
               <div className="shrink-0 px-4 sm:px-6 py-3 bg-white border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
-                <p className="text-[10px] text-slate-500">Popup ini memaparkan bahagian 1 hingga 4 sahaja. Borang PDF akan dijana menggunakan maklumat di atas.</p>
-                <div className="flex justify-end gap-2"><button type="button" onClick={() => setPrintReportApp(null)} disabled={isGeneratingPatientReport} className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50 disabled:opacity-50">Batal</button><button type="button" onClick={() => void generatePatientReport(printReportApp, printReportFields)} disabled={isGeneratingPatientReport} className="px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Printer size={16}/>{isGeneratingPatientReport ? 'Sedang menjana PDF...' : 'Jana & Muat Turun PDF'}</button></div>
+                <p className="text-[10px] text-slate-500">{reportActionMode === 'refer' ? 'Semak dan lengkapkan maklumat sebelum menghantar rujukan kepada klinik pakar.' : 'Popup ini memaparkan bahagian 1 hingga 5. Borang PDF akan dijana menggunakan maklumat di atas.'}</p>
+                <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={() => setPrintReportApp(null)} disabled={isGeneratingPatientReport || isSendingReferral} className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50 disabled:opacity-50">Batal</button>{reportActionMode === 'refer' && <button type="button" onClick={() => { const allowedSpecialistIds = currentClinic?.specialistClinicIds || []; if (!specialistClinics.some(clinic => clinic.active && allowedSpecialistIds.includes(clinic.id))) { alert('Tiada klinik pakar yang dibenarkan untuk klinik anda. Sila hubungi Super Admin untuk tetapkan Specialist Referral Routing.'); return; } setShowReferralClinicPicker(true); }} disabled={isSendingReferral} className="px-5 py-2.5 rounded-xl bg-violet-700 hover:bg-violet-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Network size={16}/>Rujuk</button>}{reportActionMode === 'print' && <button type="button" onClick={() => void generatePatientReport(printReportApp, printReportFields)} disabled={isGeneratingPatientReport} className="px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Printer size={16}/>{isGeneratingPatientReport ? 'Sedang menjana PDF...' : 'Jana & Muat Turun PDF'}</button>}</div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showReferralClinicPicker && printReportApp && (
+          <div className="fixed inset-0 z-[220] flex items-center justify-center p-4">
+            <motion.button type="button" aria-label="Tutup pilihan klinik pakar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => !isSendingReferral && setShowReferralClinicPicker(false)} className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }} className="relative z-10 w-full max-w-lg overflow-hidden rounded-3xl bg-white shadow-2xl">
+              <div className="flex items-center gap-3 border-b border-slate-100 bg-violet-50 px-5 py-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-700 text-white"><Building2 size={22}/></div>
+                <div className="min-w-0 flex-1"><h2 className="text-lg font-black text-slate-900">Pilih Klinik Pakar</h2><p className="mt-0.5 text-xs text-slate-500">Referral untuk {printReportApp.patientName || 'pesakit'}</p></div>
+                <button type="button" onClick={() => !isSendingReferral && setShowReferralClinicPicker(false)} disabled={isSendingReferral} className="rounded-xl p-2 text-slate-400 hover:bg-violet-100 hover:text-slate-700 disabled:opacity-50"><XCircle size={22}/></button>
+              </div>
+              <div className="space-y-3 p-5">
+                <label className="block text-xs font-black uppercase tracking-widest text-slate-500">Klinik pakar penerima</label>
+                {specialistClinics.filter(clinic => clinic.active && (currentClinic?.specialistClinicIds || []).includes(clinic.id)).length === 0 ? <p className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">Tiada klinik pakar dibenarkan untuk klinik anda. Sila hubungi Super Admin untuk tetapkan Specialist Referral Routing.</p> : specialistClinics.filter(clinic => clinic.active && (currentClinic?.specialistClinicIds || []).includes(clinic.id)).map(clinic => (
+                  <label key={clinic.id} className={`flex cursor-pointer items-center gap-3 rounded-2xl border p-4 transition-colors ${selectedReferralClinicId === clinic.id ? 'border-violet-500 bg-violet-50 ring-2 ring-violet-100' : 'border-slate-200 hover:border-violet-200 hover:bg-slate-50'}`}>
+                    <input type="radio" name="specialistClinic" value={clinic.id} checked={selectedReferralClinicId === clinic.id} onChange={() => setSelectedReferralClinicId(clinic.id)} className="h-4 w-4 accent-violet-700" />
+                    <span className="min-w-0 flex-1"><span className="block text-sm font-bold text-slate-800">{clinic.name}</span>{clinic.address && <span className="mt-0.5 block text-xs text-slate-500">{clinic.address}</span>}{clinic.phone && <span className="mt-0.5 block text-xs text-slate-500">{clinic.phone}</span>}</span>
+                    {selectedReferralClinicId === clinic.id && <CheckCircle2 size={19} className="text-violet-700"/>}
+                  </label>
+                ))}
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50 px-5 py-4">
+                <button type="button" onClick={() => setShowReferralClinicPicker(false)} disabled={isSendingReferral} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50">Kembali</button>
+                <button type="button" onClick={() => void sendPatientReferral()} disabled={!selectedReferralClinicId || isSendingReferral} className="flex items-center justify-center gap-2 rounded-xl bg-violet-700 px-5 py-2.5 text-sm font-black text-white shadow-md hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-50"><Network size={16}/>{isSendingReferral ? 'Menghantar...' : 'Sahkan & Hantar Referral'}</button>
               </div>
             </motion.div>
           </div>
