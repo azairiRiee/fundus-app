@@ -7324,7 +7324,7 @@ const tomorrowTCATotal = Object.values(
           {activeSuperAdminView !== 'dashboard' && (
             <section className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
               <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">SINAR Super Admin</p><p className="mt-1 text-sm text-slate-500">Manage multi-clinic settings and access.</p></div>
-              <button type="button" onClick={() => { setActiveSuperAdminView('dashboard'); setShowStaffForm(false); setEditingUser(null); setShowDataMigration(false); }} className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-black text-slate-700 transition hover:bg-slate-50 sm:self-auto"><ChevronLeft size={16}/> Back to Dashboard</button>
+              <button type="button" onClick={() => { setActiveSuperAdminView('dashboard'); setShowStaffForm(false); setEditingUser(null); setShowDataMigration(false); }} className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-teal-500 bg-teal-200 px-4 py-2.5 text-xs font-black text-slate-700 transition hover:bg-teal-500 hover:text-white sm:self-auto"><ChevronLeft size={16}/> Back to Dashboard</button>
             </section>
           )}
           {activeSuperAdminView === 'clinics' ? (
