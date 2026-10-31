@@ -121,6 +121,7 @@ interface SpecialistClinic {
   phone?: string;
   active: boolean;
   createdAt: number;
+  canSendSpecialistReferral?: boolean;
 }
 
 interface SpecialistUser {
@@ -497,6 +498,22 @@ const formatIC = (value: string) => {
 
 const normalizeIC = (ic: string) => ic.replace(/\D/g, "");
 
+//--- Address helpers: keep line 1 and line 2 in the existing address string field ---//
+const getAddressLine = (address: string, lineIndex: 0 | 1) => {
+  const normalizedAddress = String(address || '').replace(/\\n/g, '\n');
+  const lines = normalizedAddress.split(/\r?\n/);
+  return lines[lineIndex] || '';
+};
+
+const updateAddressLine = (address: string, lineIndex: 0 | 1, value: string) => {
+  const normalizedAddress = String(address || '').replace(/\\n/g, '\n');
+  const lines = normalizedAddress.split(/\r?\n/);
+  while (lines.length < 2) lines.push('');
+  lines[lineIndex] = value;
+  return lines.slice(0, 2).join('\n');
+};
+
+
 const isCurrentYear = (date: string) => {
   return new Date(date).getFullYear() === new Date().getFullYear();
 };
@@ -514,6 +531,25 @@ const formatDisplayDate = (date: string) => {
 // --- Main Application ---
 
 export default function App() {
+  //--- Centralized, centered application dialogs (replaces browser-native alerts/confirms) ---//
+  const [appDialog, setAppDialog] = useState<{ type: 'alert' | 'confirm'; title: string; message: string } | null>(null);
+  const appDialogResolveRef = useRef<((confirmed: boolean) => void) | null>(null);
+
+  const showAppAlert = (message: string) => {
+    setAppDialog({ type: 'alert', title: 'SINAR', message: String(message) });
+  };
+
+  const showAppConfirm = (message: string): Promise<boolean> => new Promise(resolve => {
+    appDialogResolveRef.current = resolve;
+    setAppDialog({ type: 'confirm', title: 'Please Confirm', message: String(message) });
+  });
+
+  const closeAppDialog = (confirmed = false) => {
+    const resolve = appDialogResolveRef.current;
+    appDialogResolveRef.current = null;
+    setAppDialog(null);
+    if (resolve) resolve(confirmed);
+  };
   //--- Read-only V/A summary reused in clinical review and visit-history views ---//
   const renderVisualAcuity = (record: any) => {
     if (!record) return null;
@@ -572,7 +608,55 @@ export default function App() {
   const [specialistReferralSearch, setSpecialistReferralSearch] = useState('');
   const [specialistReferralPageNumber, setSpecialistReferralPageNumber] = useState(1);
   const [showSpecialistActivityLogs, setShowSpecialistActivityLogs] = useState(false);
+  const [specialistActivityLogs, setSpecialistActivityLogs] = useState<ActivityLog[]>([]);
   const [specialistComingSoonFeature, setSpecialistComingSoonFeature] = useState<string | null>(null);
+  //--- Specialist portal page history (Activity Logs / Staff Management panels) ---//
+  const specialistPageHistoryRef = useRef<Array<{ activityLogs: boolean; staffManagement: boolean }>>([]);
+  const previousSpecialistPageRef = useRef({ activityLogs: false, staffManagement: false });
+  const suppressSpecialistPageHistoryRef = useRef(false);
+  const suppressSpecialistPagePopRef = useRef(0);
+
+  useEffect(() => {
+    const nextPage = {
+      activityLogs: showSpecialistActivityLogs,
+      staffManagement: showSpecialistStaffManagement,
+    };
+    const previousPage = previousSpecialistPageRef.current;
+    const previousWasSubPage = previousPage.activityLogs || previousPage.staffManagement;
+    const nextIsSubPage = nextPage.activityLogs || nextPage.staffManagement;
+
+    if (
+      previousPage.activityLogs === nextPage.activityLogs &&
+      previousPage.staffManagement === nextPage.staffManagement
+    ) return;
+
+    if (suppressSpecialistPageHistoryRef.current) {
+      suppressSpecialistPageHistoryRef.current = false;
+      previousSpecialistPageRef.current = nextPage;
+      return;
+    }
+
+    if (specialistCurrentUser && !currentUser) {
+      if (nextIsSubPage) {
+        // Opening or switching to a specialist sub-page creates one history entry.
+        specialistPageHistoryRef.current.push(previousPage);
+        window.history.pushState({ sinarPage: 'specialist' }, '', window.location.href);
+      } else if (previousWasSubPage) {
+        // Closing a sub-page with its own Back button/X must also consume its history entry.
+        specialistPageHistoryRef.current.pop();
+        suppressSpecialistPagePopRef.current += 1;
+        window.history.back();
+      }
+    }
+
+    previousSpecialistPageRef.current = nextPage;
+  }, [
+    showSpecialistActivityLogs,
+    showSpecialistStaffManagement,
+    specialistCurrentUser,
+    currentUser,
+  ]);
+
   const [specialistReferrals, setSpecialistReferrals] = useState<Array<Record<string, any> & { id: string }>>([]);
   // Specialist-only referral review workspace. This state is isolated from clinic review forms.
   const [selectedSpecialistReferral, setSelectedSpecialistReferral] = useState<(Record<string, any> & { id: string }) | null>(null);
@@ -604,6 +688,7 @@ export default function App() {
     };
   }, [selectedSpecialistReferral, specialistZoomImage, specialistComingSoonFeature]);
   const [users, setUsers] = useState<User[]>([]);
+  const [updatingReferralPermissionId, setUpdatingReferralPermissionId] = useState<string | null>(null);
 
   //---Clinic master is loaded from Firestore; defaults keep the existing app usable during migration---//
   const [clinics, setClinics] = useState<Clinic[]>(DEFAULT_CLINICS);
@@ -660,6 +745,29 @@ export default function App() {
   const [activityLogClinicFilter, setActivityLogClinicFilter] = useState('ALL');
   const [superAdminSidebarCollapsed, setSuperAdminSidebarCollapsed] = useState(false);
   const [activeSuperAdminView, setActiveSuperAdminView] = useState<'dashboard' | 'clinics' | 'users' | 'fundus' | 'analytics' | 'logs' | 'settings' | 'specialistClinics' | 'specialistUsers' | 'migration'>('dashboard');
+  //--- Page-level navigation history for Super Admin sub-pages ---//
+  const superAdminPageHistoryRef = useRef<Array<typeof activeSuperAdminView>>([]);
+  const previousSuperAdminViewRef = useRef(activeSuperAdminView);
+  const suppressSuperAdminPageHistoryRef = useRef(false);
+
+  useEffect(() => {
+    if (previousSuperAdminViewRef.current === activeSuperAdminView) return;
+
+    // A Back action has already selected the previous page; do not create a new entry.
+    if (suppressSuperAdminPageHistoryRef.current) {
+      suppressSuperAdminPageHistoryRef.current = false;
+      previousSuperAdminViewRef.current = activeSuperAdminView;
+      return;
+    }
+
+    // Keep the page the user came from so browser/device Back restores it.
+    if (currentUser?.role === UserRole.SUPER_ADMIN) {
+      superAdminPageHistoryRef.current.push(previousSuperAdminViewRef.current);
+      window.history.pushState({ sinarPage: 'super-admin' }, '', window.location.href);
+    }
+
+    previousSuperAdminViewRef.current = activeSuperAdminView;
+  }, [activeSuperAdminView, currentUser?.role]);
   const [specialistClinics, setSpecialistClinics] = useState<SpecialistClinic[]>([]);
   const [specialistUsers, setSpecialistUsers] = useState<SpecialistUser[]>([]);
   const [specialistClinicSearch, setSpecialistClinicSearch] = useState('');
@@ -674,6 +782,27 @@ export default function App() {
   const [specialistClinicShortNameInput, setSpecialistClinicShortNameInput] = useState('');
   const [specialistClinicAddressInput, setSpecialistClinicAddressInput] = useState('');
   const [specialistClinicPhoneInput, setSpecialistClinicPhoneInput] = useState('');
+  const [editingSpecialistClinicAddressId, setEditingSpecialistClinicAddressId] = useState<string | null>(null);
+  const [specialistClinicAddressDraft, setSpecialistClinicAddressDraft] = useState('');
+  const [specialistClinicPhoneDraft, setSpecialistClinicPhoneDraft] = useState('');
+  const [specialistClinicAddressSaving, setSpecialistClinicAddressSaving] = useState<string | null>(null);
+
+  // Clear unfinished Specialist Clinic address edits and add-clinic form when
+  // leaving the Specialist Clinics page or ending the Super Admin session.
+  useEffect(() => {
+    if (activeSuperAdminView !== 'specialistClinics' || currentUser?.role !== UserRole.SUPER_ADMIN) {
+      setEditingSpecialistClinicAddressId(null);
+      setSpecialistClinicAddressDraft('');
+      setSpecialistClinicPhoneDraft('');
+      setShowSpecialistClinicForm(false);
+      setEditingSpecialistClinicId(null);
+      setSpecialistClinicIdInput('');
+      setSpecialistClinicNameInput('');
+      setSpecialistClinicShortNameInput('');
+      setSpecialistClinicAddressInput('');
+      setSpecialistClinicPhoneInput('');
+    }
+  }, [activeSuperAdminView, currentUser?.role]);
   const [showSpecialistUserForm, setShowSpecialistUserForm] = useState(false);
   const [editingSpecialistUserId, setEditingSpecialistUserId] = useState<string | null>(null);
   const [specialistUserIdInput, setSpecialistUserIdInput] = useState('');
@@ -703,6 +832,16 @@ export default function App() {
   const [clinicAddressDraft, setClinicAddressDraft] = useState('');
   const [clinicPhoneDraft, setClinicPhoneDraft] = useState('');
   const [clinicAddressSaving, setClinicAddressSaving] = useState<string | null>(null);
+
+  // Clear an unfinished clinic address edit whenever Super Admin leaves Clinic Management.
+  useEffect(() => {
+    if (activeSuperAdminView !== 'clinics') {
+      setEditingClinicAddressId(null);
+      setClinicAddressDraft('');
+      setClinicPhoneDraft('');
+    }
+  }, [activeSuperAdminView]);
+
   const [newClinicIsFundusProvider, setNewClinicIsFundusProvider] = useState(false);
   //--- Super Admin clinic color assignment ---//
   const [newClinicColorKey, setNewClinicColorKey] = useState<ClinicColorKey>('pink');
@@ -744,6 +883,20 @@ export default function App() {
 
   //--- Serialize routing writes per referral clinic so rapid checkbox clicks cannot overwrite each other ---//
   const fundusRoutingWriteQueueRef = useRef<Record<string, Promise<void>>>({});
+
+  // Specialist portal account settings are intentionally isolated from clinic staff settings.
+  const [showSpecialistAccountSettings, setShowSpecialistAccountSettings] = useState(false);
+  const [specialistCurrentPasswordInput, setSpecialistCurrentPasswordInput] = useState('');
+  const [specialistNewPasswordInput, setSpecialistNewPasswordInput] = useState('');
+  const [specialistConfirmPasswordInput, setSpecialistConfirmPasswordInput] = useState('');
+  const [specialistNewDisplayName, setSpecialistNewDisplayName] = useState('');
+  const [showSpecialistCurrentPassword, setShowSpecialistCurrentPassword] = useState(false);
+  const [showSpecialistNewPassword, setShowSpecialistNewPassword] = useState(false);
+  const [showSpecialistConfirmPassword, setShowSpecialistConfirmPassword] = useState(false);
+  const [isSavingSpecialistAccount, setIsSavingSpecialistAccount] = useState(false);
+  const [showSpecialistAccountSuccess, setShowSpecialistAccountSuccess] = useState(false);
+  const [specialistAccountError, setSpecialistAccountError] = useState('');
+  const [specialistAccountWarning, setSpecialistAccountWarning] = useState('');
 
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [currentPasswordInput, setCurrentPasswordInput] = useState('');
@@ -914,7 +1067,7 @@ const [unableOtherReason, setUnableOtherReason] =
     othersText: '',
     comment: ''
   });
-  //--- Mobile back button: close the active SINAR modal without leaving the app ---//
+  //--- Existing modal Back Navigation ---//
   const modalHistoryCountRef = useRef(0);
   const suppressModalHistoryCleanupRef = useRef(false);
 
@@ -942,8 +1095,33 @@ const [unableOtherReason, setUnableOtherReason] =
     showDuplicateWarning,
     showImageNotObtainable,
     !!printReportApp,
-    showReferralClinicPicker
+    showReferralClinicPicker,
+    showSpecialistAccountSettings,
+    !!specialistAccountWarning,
+    !!selectedSpecialistReferral,
+    !!specialistZoomImage,
+    !!specialistComingSoonFeature
   ].filter(Boolean).length;
+
+  useEffect(() => {
+    if (!specialistCurrentUser || currentUser) {
+      specialistPageHistoryRef.current = [];
+      previousSpecialistPageRef.current = {
+        activityLogs: showSpecialistActivityLogs,
+        staffManagement: showSpecialistStaffManagement,
+      };
+      suppressSpecialistPageHistoryRef.current = false;
+      suppressSpecialistPagePopRef.current = 0;
+    }
+  }, [specialistCurrentUser, currentUser, showSpecialistActivityLogs, showSpecialistStaffManagement]);
+
+  useEffect(() => {
+    if (currentUser?.role !== UserRole.SUPER_ADMIN) {
+      superAdminPageHistoryRef.current = [];
+      previousSuperAdminViewRef.current = activeSuperAdminView;
+      suppressSuperAdminPageHistoryRef.current = false;
+    }
+  }, [currentUser?.role, activeSuperAdminView]);
 
   useEffect(() => {
     //--- Modal opened: add one temporary history entry ---//
@@ -969,7 +1147,36 @@ const [unableOtherReason, setUnableOtherReason] =
 
   useEffect(() => {
     const handleMobileBack = () => {
-      if (modalHistoryCountRef.current <= 0) return;
+      //--- Ignore the popstate generated by closing a specialist sub-page with its own UI button ---//
+      if (suppressSpecialistPagePopRef.current > 0) {
+        suppressSpecialistPagePopRef.current -= 1;
+        return;
+      }
+
+      //--- Modal entries always take priority: close the top popup before changing pages ---//
+      if (modalHistoryCountRef.current <= 0) {
+        //--- Restore the previous Specialist portal panel before leaving the portal ---//
+        const previousSpecialistPage = specialistPageHistoryRef.current.pop();
+        if (previousSpecialistPage) {
+          suppressSpecialistPageHistoryRef.current = true;
+          setShowSpecialistActivityLogs(previousSpecialistPage.activityLogs);
+          setShowSpecialistStaffManagement(previousSpecialistPage.staffManagement);
+          setShowSpecialistStaffForm(false);
+          setEditingSpecialistStaffId(null);
+          return;
+        }
+
+        //--- If no popup is open, restore the previous Super Admin page ---//
+        const previousPage = superAdminPageHistoryRef.current.pop();
+        if (previousPage) {
+          suppressSuperAdminPageHistoryRef.current = true;
+          setActiveSuperAdminView(previousPage);
+          setShowStaffForm(false);
+          setEditingUser(null);
+          setShowDataMigration(false);
+        }
+        return;
+      }
 
       //--- Normal X/Close cleanup: consume the temporary history entry without closing another modal ---//
       if (suppressModalHistoryCleanupRef.current > 0) {
@@ -983,8 +1190,25 @@ const [unableOtherReason, setUnableOtherReason] =
       //--- Browser Back consumed one temporary modal history entry ---//
       modalHistoryCountRef.current -= 1;
 
-      //--- Close only the currently active/top modal; existing close functions remain untouched ---//
-      if (showReferralClinicPicker) {
+      //--- Close specialist portal overlays before clinic/super-admin dialogs ---//
+      if (specialistZoomImage) {
+        setSpecialistZoomImage(null);
+      } else if (specialistComingSoonFeature) {
+        setSpecialistComingSoonFeature(null);
+      } else if (selectedSpecialistReferral) {
+        setSelectedSpecialistReferral(null);
+      } else if (specialistAccountWarning) {
+        setSpecialistAccountWarning('');
+      } else if (showSpecialistAccountSettings) {
+        setShowSpecialistAccountSettings(false);
+        setSpecialistCurrentPasswordInput('');
+        setSpecialistNewPasswordInput('');
+        setSpecialistConfirmPasswordInput('');
+        setSpecialistAccountError('');
+        setShowSpecialistCurrentPassword(false);
+        setShowSpecialistNewPassword(false);
+        setShowSpecialistConfirmPassword(false);
+      } else if (showReferralClinicPicker) {
         setShowReferralClinicPicker(false);
       } else if (printReportApp) {
         setPrintReportApp(null);
@@ -1069,7 +1293,12 @@ const [unableOtherReason, setUnableOtherReason] =
     showAdminConsole,
     showSuperAdminConsole,
     showReferralClinicPicker,
-    printReportApp
+    showSpecialistAccountSettings,
+    specialistAccountWarning,
+    printReportApp,
+    selectedSpecialistReferral,
+    specialistZoomImage,
+    specialistComingSoonFeature
   ]);
 
   useEffect(() => {
@@ -1147,7 +1376,7 @@ const analyzeWithAI = async () => {
   }
 
   if (!imageUrl) {
-    alert("No fundus image available for AI analysis.");
+    showAppAlert("No fundus image available for AI analysis.");
     return;
   }
 
@@ -1247,7 +1476,7 @@ switch (label) {
 
     default:
 
-        alert("Mapping not available yet.");
+        showAppAlert("Mapping not available yet.");
 
 }
 
@@ -1484,9 +1713,26 @@ const isReviewCompleted = (app: Appointment) => {
   );
 };
 
+  const trimActivityLogsForClinic = async (clinicId: string) => {
+    if (!clinicId) return;
+    const logsSnapshot = await getDocs(
+      query(
+        collection(db, 'activityLogs'),
+        where('clinicId', '==', clinicId),
+        orderBy('timestamp', 'desc')
+      )
+    );
+    if (logsSnapshot.size > 50) {
+      const oldLogs = logsSnapshot.docs.slice(50);
+      for (const oldLog of oldLogs) {
+        await deleteDoc(oldLog.ref);
+      }
+    }
+  };
+
   const addActivityLog = (action: string, patient: string = 'System', byOverride?: string) => {
     const logEntry: ActivityLog = {
-      //--- Super Admin activity is global; clinic users are scoped to their own clinic ---//
+      // Each clinic and the Super Admin retain their own 50 most recent logs.
       clinicId: currentUser?.role === UserRole.SUPER_ADMIN
         ? 'SUPER_ADMIN'
         : (currentUser?.clinicId || ''),
@@ -1498,40 +1744,34 @@ const isReviewCompleted = (app: Appointment) => {
 
     setActivityLogs(prev => [logEntry, ...prev].slice(0, 50));
 
-    addDoc(
-  collection(db, "activityLogs"),
-  logEntry
-)
-.then(async () => {
+    addDoc(collection(db, 'activityLogs'), logEntry)
+      .then(() => trimActivityLogsForClinic(logEntry.clinicId))
+      .catch(error => {
+        console.error('Failed to save or trim activity log in Firestore', error);
+      });
+  };
 
-  const logsSnapshot = await getDocs(
-    query(
-      collection(db, "activityLogs"),
-      orderBy("timestamp", "desc")
-    )
-  );
-
-  if (logsSnapshot.size > 50) {
-
-    const logs = logsSnapshot.docs;
-
-    for (let i = 50; i < logs.length; i++) {
-
-      await deleteDoc(logs[i].ref);
-
+  // Specialist logs are partitioned by the actual specialist clinic document ID.
+  const addSpecialistActivityLog = (
+    clinicId: string,
+    action: string,
+    patient: string = 'System',
+    byOverride?: string
+  ) => {
+    if (!clinicId) {
+      console.warn('Specialist activity log skipped: missing clinicId');
+      return;
     }
-
-  }
-
-})
-.catch(error => {
-
-  console.error(
-    "Failed to save activity log to Firestore",
-    error
-  );
-
-});
+    const logEntry: ActivityLog = {
+      clinicId: `SPECIALIST:${clinicId}`,
+      action,
+      patient,
+      by: byOverride || specialistCurrentUser?.displayName || 'System',
+      timestamp: Date.now(),
+    };
+    addDoc(collection(db, 'activityLogs'), logEntry)
+      .then(() => trimActivityLogsForClinic(logEntry.clinicId))
+      .catch(error => console.error('Failed to save specialist activity log', error));
   };
 
   /* =====================================================
@@ -1542,11 +1782,11 @@ const isReviewCompleted = (app: Appointment) => {
      ===================================================== */
   const handleDeleteClinic = async (clinic: Clinic) => {
     if (currentUser?.role !== UserRole.SUPER_ADMIN) {
-      alert('Only Super Admin can delete a clinic.');
+      showAppAlert('Only Super Admin can delete a clinic.');
       return;
     }
 
-    const confirmed = window.confirm(
+    const confirmed = await showAppConfirm(
       `Delete clinic "${clinic.name}" (${clinic.id})?\n\n` +
       `This is only allowed if the clinic has no users ` +
       `and no appointment records linked to it.`
@@ -1565,7 +1805,7 @@ const isReviewCompleted = (app: Appointment) => {
       );
 
       if (!usersSnapshot.empty) {
-        alert(
+        showAppAlert(
           `Cannot delete ${clinic.name}.\n\n` +
           `There are still user account(s) linked to this clinic.\n` +
           `Remove or reassign those users first.`
@@ -1583,7 +1823,7 @@ const isReviewCompleted = (app: Appointment) => {
       );
 
       if (!appointmentsSnapshot.empty) {
-        alert(
+        showAppAlert(
           `Cannot delete ${clinic.name}.\n\n` +
           `There are still appointment records linked to this clinic.\n` +
           `The clinic is kept to protect historical clinical data.`
@@ -1601,10 +1841,10 @@ const isReviewCompleted = (app: Appointment) => {
         currentUser.displayName
       );
 
-      alert(`${clinic.name} has been deleted.`);
+      showAppAlert(`${clinic.name} has been deleted.`);
     } catch (error) {
       console.error('Failed to delete clinic', error);
-      alert(
+      showAppAlert(
         'Failed to delete clinic. Please check Firestore permissions/indexes and try again.'
       );
     }
@@ -1618,7 +1858,7 @@ const isReviewCompleted = (app: Appointment) => {
   // =====================================================
   const scanMigrationData = async () => {
     if (currentUser?.role !== UserRole.SUPER_ADMIN) {
-      alert('Only Super Admin can access Data & Migration.');
+      showAppAlert('Only Super Admin can access Data & Migration.');
       return;
     }
 
@@ -1699,11 +1939,11 @@ const isReviewCompleted = (app: Appointment) => {
   // Existing clinic documents are never overwritten or modified by this operation.
   const syncMissingClinicMaster = async () => {
     if (currentUser?.role !== UserRole.SUPER_ADMIN) {
-      alert('Only Super Admin can sync the clinic master.');
+      showAppAlert('Only Super Admin can sync the clinic master.');
       return;
     }
 
-    const confirmed = window.confirm(
+    const confirmed = await showAppConfirm(
       'Sync missing clinic master?\\n\\n' +
       'Only clinic documents that do not exist in Firestore will be created.\\n' +
       'Existing clinic documents and their routing/provider/TCA settings will NOT be changed.'
@@ -1748,7 +1988,7 @@ const isReviewCompleted = (app: Appointment) => {
     } catch (error) {
       console.error('Failed to sync missing clinic master', error);
       setClinicMasterSyncMessage('Clinic master sync failed. Please check Firestore access and try again.');
-      alert('Failed to sync missing clinic master. Please check Firestore permissions and try again.');
+      showAppAlert('Failed to sync missing clinic master. Please check Firestore permissions and try again.');
     } finally {
       setClinicMasterSyncRunning(false);
     }
@@ -1756,11 +1996,11 @@ const isReviewCompleted = (app: Appointment) => {
 
   const migrateClinicStructure = async () => {
     if (currentUser?.role !== UserRole.SUPER_ADMIN) {
-      alert('Only Super Admin can run migration.');
+      showAppAlert('Only Super Admin can run migration.');
       return;
     }
 
-    const confirmed = window.confirm(
+    const confirmed = await showAppConfirm(
       'Run clinic structure migration?\n\n' +
       'This will only fill clinicId and referringClinicId for legacy records.\n' +
       'The old department field will NOT be deleted or changed.'
@@ -1854,7 +2094,7 @@ const isReviewCompleted = (app: Appointment) => {
     providerId: string
   ) => {
     if (currentUser?.role !== UserRole.SUPER_ADMIN) {
-      alert('Only Super Admin can run migration.');
+      showAppAlert('Only Super Admin can run migration.');
       return;
     }
 
@@ -1862,17 +2102,17 @@ const isReviewCompleted = (app: Appointment) => {
     const providerClinic = clinics.find(clinic => clinic.id === providerId);
 
     if (!providerClinic?.active || !providerClinic.isFundusProvider) {
-      alert('Please select an active Fundus Provider clinic first.');
+      showAppAlert('Please select an active Fundus Provider clinic first.');
       return;
     }
 
     const pendingCount = migrationStats?.missingProviderByLegacyDepartment?.[normalizedDepartment] || 0;
     if (pendingCount <= 0) {
-      alert(`No legacy ${normalizedDepartment} appointments are missing a fundus provider.`);
+      showAppAlert(`No legacy ${normalizedDepartment} appointments are missing a fundus provider.`);
       return;
     }
 
-    const confirmed = window.confirm(
+    const confirmed = await showAppConfirm(
       `Assign ${providerClinic.name} as the fundus provider for ${pendingCount} legacy ${normalizedDepartment} appointment(s)?\n\n` +
       'Existing provider assignments will NOT be changed.'
     );
@@ -3144,6 +3384,33 @@ return () => {
 
 }, []);
 
+// Specialist Activity Logs: each specialist clinic receives its own latest 50 records.
+useEffect(() => {
+  if (!specialistCurrentUser?.clinicId || currentUser) {
+    setSpecialistActivityLogs([]);
+    return;
+  }
+
+  const specialistLogClinicId = `SPECIALIST:${specialistCurrentUser.clinicId}`;
+  const unsubscribeSpecialistActivityLogs = onSnapshot(
+    query(
+      collection(db, 'activityLogs'),
+      where('clinicId', '==', specialistLogClinicId),
+      orderBy('timestamp', 'desc'),
+      limit(50)
+    ),
+    snapshot => {
+      setSpecialistActivityLogs(snapshot.docs.map(item => ({
+        ...(item.data() as ActivityLog),
+        clinicId: specialistLogClinicId,
+      })));
+    },
+    error => console.warn('Specialist activity log sync unavailable.', error)
+  );
+
+  return () => unsubscribeSpecialistActivityLogs();
+}, [specialistCurrentUser?.clinicId, currentUser]);
+
 // Specialist referral inbox: subscribe only after a specialist clinic is known.
 // The clinic ID is part of the effect dependencies so logging in/switching sessions
 // cannot leave the listener stuck with the initial null specialistCurrentUser.
@@ -3223,7 +3490,7 @@ useEffect(() => {
       e.name === 'QuotaExceededError'
     ) {
 
-      alert(
+      showAppAlert(
         "Local storage is full. Some data might not be saved. Try removing some photos or clearing browser data."
       );
 
@@ -3374,13 +3641,12 @@ useEffect(() => {
       setCurrentUser(null);
       setSpecialistCurrentUser(specialistUser);
       sessionStorage.removeItem('clinic_current_user');
-      addDoc(collection(db, 'activityLogs'), {
-        clinicId: `SPECIALIST:${specialistUser.clinicId}`,
-        action: 'Specialist User Logged In',
-        patient: `${specialistUser.displayName} (${specialistUser.id})`,
-        by: specialistUser.displayName,
-        timestamp: Date.now(),
-      }).catch(error => console.warn('Could not write specialist login log', error));
+      addSpecialistActivityLog(
+        specialistUser.clinicId,
+        'Specialist User Logged In',
+        `${specialistUser.displayName} (${specialistUser.id})`,
+        specialistUser.displayName
+      );
     } else if (user) {
       setSpecialistCurrentUser(null);
       sessionStorage.removeItem('specialist_current_user');
@@ -3421,6 +3687,17 @@ useEffect(() => {
 
       sessionStorage.removeItem('clinic_current_user');
       sessionStorage.removeItem('specialist_current_user');
+
+      // Always return Super Admin to its home dashboard after logout.
+      setActiveSuperAdminView('dashboard');
+      superAdminPageHistoryRef.current = [];
+      previousSuperAdminViewRef.current = 'dashboard';
+      suppressSuperAdminPageHistoryRef.current = false;
+
+      setShowStaffForm(false);
+      setEditingUser(null);
+      setShowDataMigration(false);
+
       setCurrentUser(null);
       setSpecialistCurrentUser(null);
 
@@ -3454,7 +3731,7 @@ const addStaffMember = async (e: React.FormEvent) => {
       u => u.id.trim().toLowerCase() === id.toLowerCase()
     )
   ) {
-    alert(`Staff User ID "${id}" sudah digunakan. Sila pilih ID yang berbeza.`);
+    showAppAlert(`Staff User ID "${id}" sudah digunakan. Sila pilih ID yang berbeza.`);
     return;
   }
 
@@ -3497,7 +3774,7 @@ const addStaffMember = async (e: React.FormEvent) => {
       error
     );
 
-    alert(
+    showAppAlert(
       'Failed to create staff account. Please try again.'
     );
   } finally {
@@ -3512,7 +3789,7 @@ const updateStaffMember = async (e: React.FormEvent) => {
     const updatedId = editingUser.id.trim().toUpperCase();
     const updatedName = editingUser.displayName.trim();
     if (!updatedId || !updatedName) {
-      alert('Sila isi Staff User ID dan Display Name.');
+      showAppAlert('Sila isi Staff User ID dan Display Name.');
       return;
     }
 
@@ -3523,7 +3800,7 @@ const updateStaffMember = async (e: React.FormEvent) => {
         editingUser.role === UserRole.SUPER_ADMIN ||
         editingUser.clinicId !== currentUser.clinicId
       ) {
-        alert('Admin klinik hanya boleh mengurus akaun dalam klinik sendiri dengan role STAFF atau ADMIN.');
+        showAppAlert('Admin klinik hanya boleh mengurus akaun dalam klinik sendiri dengan role STAFF atau ADMIN.');
         return;
       }
     }
@@ -3534,7 +3811,7 @@ const updateStaffMember = async (e: React.FormEvent) => {
         u.id.trim().toLowerCase() === updatedId.toLowerCase()
     );
     if (duplicateUser) {
-      alert(`Staff User ID "${updatedId}" sudah digunakan oleh akaun lain. Sila pilih ID yang berbeza.`);
+      showAppAlert(`Staff User ID "${updatedId}" sudah digunakan oleh akaun lain. Sila pilih ID yang berbeza.`);
       return;
     }
 
@@ -3569,9 +3846,41 @@ const updateStaffMember = async (e: React.FormEvent) => {
       setShowStaffPassword(false);
     } catch (error) {
       console.error('Failed to update staff account', error);
-      alert('Gagal mengemas kini akaun. Sila cuba lagi.');
+      showAppAlert('Gagal mengemas kini akaun. Sila cuba lagi.');
     } finally {
       setIsSavingStaff(false);
+    }
+  };
+
+  // Clinic Admin controls whether an individual STAFF account may send specialist referrals.
+  // Missing legacy values are treated as disabled.
+  const toggleStaffReferralPermission = async (user: User) => {
+    if (currentUser?.role !== UserRole.ADMIN || user.role !== UserRole.STAFF) return;
+    if (!user.firestoreId || user.clinicId !== currentUser.clinicId) {
+      showAppAlert('Akaun staff ini bukan dalam klinik anda.');
+      return;
+    }
+
+    const nextPermission = user.canSendSpecialistReferral !== true;
+    setUpdatingReferralPermissionId(user.firestoreId);
+    try {
+      await updateDoc(doc(db, 'users', user.firestoreId), {
+        canSendSpecialistReferral: nextPermission,
+      });
+      setUsers(previous => previous.map(item =>
+        item.firestoreId === user.firestoreId
+          ? { ...item, canSendSpecialistReferral: nextPermission }
+          : item
+      ));
+      addActivityLog(
+        nextPermission ? 'Enabled Specialist Referral Access' : 'Disabled Specialist Referral Access',
+        `${user.displayName} (${user.id})`
+      );
+    } catch (error) {
+      console.error('Failed to update specialist referral permission', error);
+      showAppAlert('Gagal mengemas kini kebenaran referral. Sila cuba lagi.');
+    } finally {
+      setUpdatingReferralPermissionId(null);
     }
   };
 
@@ -3582,7 +3891,7 @@ const updateStaffMember = async (e: React.FormEvent) => {
   // Verify current password
   if (currentPasswordInput !== currentUser.password) {
 
-    alert('Current password is incorrect');
+    showAppAlert('Current password is incorrect');
 
     return;
 
@@ -3591,7 +3900,7 @@ const updateStaffMember = async (e: React.FormEvent) => {
   // Check password confirmation
   if (newPasswordInput !== confirmPasswordInput) {
 
-    alert('New passwords do not match');
+    showAppAlert('New passwords do not match');
 
     return;
 
@@ -3600,7 +3909,7 @@ const updateStaffMember = async (e: React.FormEvent) => {
   // Password minimum length
   if (newPasswordInput.length < 4) {
 
-    alert('Password must be at least 4 characters');
+    showAppAlert('Password must be at least 4 characters');
 
     return;
 
@@ -3649,7 +3958,7 @@ setTimeout(() => {
 
     console.error(error);
 
-    alert('Failed to update account');
+    showAppAlert('Failed to update account');
 
   } finally {
 
@@ -4100,15 +4409,15 @@ link.setAttribute(
   const startPatientReferral = (app: Appointment) => {
     // Specialist referrals are restricted to clinic Admin and Super Admin accounts.
     if (currentUser?.role !== UserRole.ADMIN && currentUser?.role !== UserRole.SUPER_ADMIN) {
-      alert('Hanya Admin boleh menghantar referral kepada klinik pakar.');
+      showAppAlert('Hanya Admin boleh menghantar referral kepada klinik pakar.');
       return;
     }
     if (!isReviewCompleted(app)) {
-      alert('Sila lengkapkan clinical review kedua-dua mata dahulu.');
+      showAppAlert('Sila lengkapkan clinical review kedua-dua mata dahulu.');
       return;
     }
     if (app.referred !== true) {
-      alert('Tandakan Kes Dirujuk semasa Clinical Review dan simpan dahulu sebelum menghantar referral.');
+      showAppAlert('Tandakan Kes Dirujuk semasa Clinical Review dan simpan dahulu sebelum menghantar referral.');
       return;
     }
     setReportActionMode('refer');
@@ -4132,15 +4441,15 @@ link.setAttribute(
     const app = printReportApp;
     const targetClinic = specialistClinics.find(clinic => clinic.id === selectedReferralClinicId && clinic.active);
     if (!app || !targetClinic) {
-      alert('Sila pilih klinik pakar yang aktif.');
+      showAppAlert('Sila pilih klinik pakar yang aktif.');
       return;
     }
     if (!(currentClinic?.specialistClinicIds || []).includes(targetClinic.id)) {
-      alert('Klinik anda tidak dibenarkan merujuk ke klinik pakar ini. Sila hubungi Super Admin.');
+      showAppAlert('Klinik anda tidak dibenarkan merujuk ke klinik pakar ini. Sila hubungi Super Admin.');
       return;
     }
     if (!currentUser || !currentClinic) {
-      alert('Maklumat klinik asal tidak dapat dikenal pasti. Sila log masuk semula.');
+      showAppAlert('Maklumat klinik asal tidak dapat dikenal pasti. Sila log masuk semula.');
       return;
     }
     setIsSendingReferral(true);
@@ -4230,10 +4539,10 @@ link.setAttribute(
       addActivityLog('Sent Specialist Referral', `${app.patientName || '-'} → ${targetClinic.name}`);
       setShowReferralClinicPicker(false);
       setPrintReportApp(null);
-      alert(`Referral berjaya dihantar ke ${targetClinic.name}.`);
+      showAppAlert(`Referral berjaya dihantar ke ${targetClinic.name}.`);
     } catch (error) {
       console.error('Failed to send specialist referral', error);
-      alert('Referral tidak berjaya dihantar. Sila semak sambungan dan kebenaran Firestore.');
+      showAppAlert('Referral tidak berjaya dihantar. Sila semak sambungan dan kebenaran Firestore.');
     } finally {
       setIsSendingReferral(false);
     }
@@ -4658,7 +4967,7 @@ link.setAttribute(
       setPrintReportApp(null);
     } catch (error) {
       console.error('Failed to generate patient report', error);
-      alert('Tak berjaya jana laporan pesakit. Sila cuba lagi.');
+      showAppAlert('Tak berjaya jana laporan pesakit. Sila cuba lagi.');
     } finally {
       setIsGeneratingPatientReport(false);
     }
@@ -5015,7 +5324,7 @@ link.setAttribute(
     );
 
     if (!referringClinic || !providerClinicId) {
-      alert('Sila pilih Klinik Perujuk dan Klinik Rujukan Fundus.');
+      showAppAlert('Sila pilih Klinik Perujuk dan Klinik Rujukan Fundus.');
       return;
     }
 
@@ -5026,7 +5335,7 @@ link.setAttribute(
         : (referringClinic.fundusProviderClinicIds || []).includes(providerClinicId);
 
     if (!validProvider) {
-      alert('Klinik Rujukan Fundus tidak dibenarkan untuk klinik perujuk ini berdasarkan Fundus Network.');
+      showAppAlert('Klinik Rujukan Fundus tidak dibenarkan untuk klinik perujuk ini berdasarkan Fundus Network.');
       return;
     }
 
@@ -5056,7 +5365,7 @@ link.setAttribute(
           .filter(Boolean)
           .join(', ');
 
-        const proceed = window.confirm(
+        const proceed = await showAppConfirm(
           `Hari TCA untuk ${referringClinic.name} ialah ${allowedLabels} sahaja.\n\n` +
           `Tarikh yang dipilih ialah ${dayLabels[appointmentDay] || 'hari tidak diketahui'}.\n\n` +
           `Nak teruskan?`
@@ -5759,7 +6068,7 @@ const tomorrowTCATotal = Object.values(
       );
     } catch (error) {
       console.error('Failed to update clinic color', error);
-      alert('Failed to update clinic color. Please try again.');
+      showAppAlert('Failed to update clinic color. Please try again.');
     } finally {
       setClinicColorSaving(null);
     }
@@ -5773,7 +6082,7 @@ const tomorrowTCATotal = Object.values(
     const displayName = specialistStaffNameInput.trim();
     if (!id || !displayName || (!editingSpecialistStaffId && !specialistStaffPasswordInput.trim())) return;
     if (!editingSpecialistStaffId && specialistUsers.some(u => u.id.toLowerCase() === id.toLowerCase())) {
-      alert('User ID already exists.'); return;
+      showAppAlert('User ID already exists.'); return;
     }
     setSpecialistStaffSaving(true);
     try {
@@ -5792,8 +6101,80 @@ const tomorrowTCATotal = Object.values(
       setSpecialistStaffIdInput(''); setSpecialistStaffNameInput(''); setSpecialistStaffPasswordInput('');
     } catch (error) {
       console.error('Failed to save specialist staff account', error);
-      alert('Unable to save staff account. Please check Firestore permissions.');
+      showAppAlert('Unable to save staff account. Please check Firestore permissions.');
     } finally { setSpecialistStaffSaving(false); }
+  };
+
+  // Specialist account updates write ONLY to specialistUsers and never touch clinic users.
+  const handleSpecialistAccountUpdate = async () => {
+    if (!specialistCurrentUser) return;
+
+    if (specialistCurrentPasswordInput !== (specialistCurrentUser.password || '')) {
+      setSpecialistAccountWarning('Current password is incorrect');
+      return;
+    }
+    if (!specialistNewDisplayName.trim()) {
+      setSpecialistAccountWarning('Please enter a display name');
+      return;
+    }
+    if (specialistNewPasswordInput.length < 4) {
+      setSpecialistAccountWarning('Password must be at least 4 characters');
+      return;
+    }
+    if (specialistNewPasswordInput !== specialistConfirmPasswordInput) {
+      setSpecialistAccountWarning('New passwords do not match');
+      return;
+    }
+
+    setSpecialistAccountError('');
+    setIsSavingSpecialistAccount(true);
+    try {
+      const updatedSpecialistUser: SpecialistUser = {
+        ...specialistCurrentUser,
+        displayName: specialistNewDisplayName.trim(),
+        password: specialistNewPasswordInput,
+      };
+      await updateDoc(doc(db, 'specialistUsers', specialistCurrentUser.id), {
+        displayName: updatedSpecialistUser.displayName,
+        password: updatedSpecialistUser.password,
+      });
+
+      setSpecialistCurrentUser(updatedSpecialistUser);
+      sessionStorage.setItem('specialist_current_user', JSON.stringify(updatedSpecialistUser));
+      addSpecialistActivityLog(
+        specialistCurrentUser.clinicId,
+        'Specialist User Updated Own Account',
+        `${updatedSpecialistUser.displayName} (${specialistCurrentUser.id})`,
+        updatedSpecialistUser.displayName
+      );
+
+      setShowSpecialistAccountSettings(false);
+      setSpecialistAccountWarning('');
+      setSpecialistCurrentPasswordInput('');
+      setSpecialistNewPasswordInput('');
+      setSpecialistConfirmPasswordInput('');
+      setShowSpecialistAccountSuccess(true);
+      window.setTimeout(() => setShowSpecialistAccountSuccess(false), 2200);
+    } catch (error) {
+      console.error('Failed to update specialist account', error);
+      setSpecialistAccountWarning('Unable to update specialist account. Please try again.');
+    } finally {
+      setIsSavingSpecialistAccount(false);
+    }
+  };
+
+  const closeSpecialistAccountSettings = () => {
+    if (isSavingSpecialistAccount) return;
+    setShowSpecialistAccountSettings(false);
+    setSpecialistCurrentPasswordInput('');
+    setSpecialistNewPasswordInput('');
+    setSpecialistConfirmPasswordInput('');
+    setSpecialistAccountError('');
+    setSpecialistAccountWarning('');
+    setSpecialistNewDisplayName(specialistCurrentUser?.displayName || '');
+    setShowSpecialistCurrentPassword(false);
+    setShowSpecialistNewPassword(false);
+    setShowSpecialistConfirmPassword(false);
   };
 
   const specialistLogout = () => {
@@ -5802,13 +6183,14 @@ const tomorrowTCATotal = Object.values(
     setAuthMessage('Ending Clinical Session...');
     setTimeout(() => {
       setAuthMessage('Protecting Patient Data...');
-      addDoc(collection(db, 'activityLogs'), {
-        clinicId: `SPECIALIST:${specialistCurrentUser?.clinicId || ''}`,
-        action: 'Specialist User Logged Out',
-        patient: `${specialistCurrentUser?.displayName || 'Specialist user'} (${specialistCurrentUser?.id || ''})`,
-        by: specialistCurrentUser?.displayName || 'System',
-        timestamp: Date.now(),
-      }).catch(error => console.warn('Could not write specialist logout log', error));
+      if (specialistCurrentUser?.clinicId) {
+        addSpecialistActivityLog(
+          specialistCurrentUser.clinicId,
+          'Specialist User Logged Out',
+          `${specialistCurrentUser.displayName || 'Specialist user'} (${specialistCurrentUser.id || ''})`,
+          specialistCurrentUser.displayName || 'System'
+        );
+      }
       setTimeout(() => {
         sessionStorage.removeItem('specialist_current_user');
         setSpecialistCurrentUser(null);
@@ -5870,13 +6252,13 @@ const tomorrowTCATotal = Object.values(
       if (sendBack) {
         setSelectedSpecialistReferral(null);
         setSpecialistReferralPage(1);
-        alert('Laporan pakar berjaya dihantar semula ke klinik asal.');
+        showAppAlert('Laporan pakar berjaya dihantar semula ke klinik asal.');
       } else {
-        alert('Dapatan pakar berjaya disimpan.');
+        showAppAlert('Dapatan pakar berjaya disimpan.');
       }
     } catch (error) {
       console.error('Failed to save specialist referral', error);
-      alert('Tidak berjaya menyimpan laporan pakar. Sila cuba lagi.');
+      showAppAlert('Tidak berjaya menyimpan laporan pakar. Sila cuba lagi.');
     } finally {
       setSpecialistReferralSaving(false);
     }
@@ -5953,6 +6335,7 @@ const tomorrowTCATotal = Object.values(
       return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('en-GB');
     };
     return (
+      <>
       <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-sky-50 font-sans text-slate-900 flex flex-col">
         <header className="sticky top-0 z-40 border-b border-slate-200 bg-white shadow-sm">
           <div className="mx-auto flex w-full max-w-7xl flex-col justify-center gap-3 px-3 py-2 md:min-h-16 md:flex-row md:items-center md:justify-between md:gap-4">
@@ -5993,6 +6376,26 @@ const tomorrowTCATotal = Object.values(
                   </button>
                 </>
               )}
+              {specialistCurrentUser.role === 'STAFF' && (
+                <button
+                  onClick={() => {
+                    setSpecialistNewDisplayName(specialistCurrentUser.displayName || '');
+                    setSpecialistCurrentPasswordInput('');
+                    setSpecialistNewPasswordInput('');
+                    setSpecialistConfirmPasswordInput('');
+                    setSpecialistAccountError('');
+                    setSpecialistAccountWarning('');
+                    setShowSpecialistCurrentPassword(false);
+                    setShowSpecialistNewPassword(false);
+                    setShowSpecialistConfirmPassword(false);
+                    setShowSpecialistAccountSettings(true);
+                  }}
+                  className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:border-teal-200 hover:bg-teal-50 hover:text-teal-800"
+                >
+                  <UserCog size={15} className="text-teal-700" />
+                  <span>Manage Account</span>
+                </button>
+              )}
               <div className="ml-auto text-right">
                 <p className="text-xs font-black uppercase text-slate-800">{specialistCurrentUser.displayName}</p>
                 <p className="text-[10px] font-bold uppercase tracking-widest text-teal-700">{specialistCurrentUser.id}</p>
@@ -6008,55 +6411,60 @@ const tomorrowTCATotal = Object.values(
             <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-7">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-teal-700">Specialist clinic administration</p><h1 className="mt-1 text-2xl font-black">Activity Logs</h1><p className="mt-1 text-sm text-slate-500">Recent activity for this specialist clinic.</p></div>
-                <button onClick={() => setShowSpecialistActivityLogs(false)} className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Back to Dashboard</button>
+                <button onClick={() => setShowSpecialistActivityLogs(false)} className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-teal-500 bg-teal-200 px-4 py-2.5 text-xs font-black text-slate-700 transition hover:bg-teal-500 hover:text-white sm:self-auto"><ChevronLeft size={16}/> Back to Dashboard</button>
               </div>
               <div className="mt-5 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200">
-                {activityLogs.filter(log => String(log.clinicId || '') === `SPECIALIST:${specialistCurrentUser.clinicId}`).length ? activityLogs.filter(log => String(log.clinicId || '') === `SPECIALIST:${specialistCurrentUser.clinicId}`).map((log, index) => <div key={`${log.timestamp || index}-${index}`} className="flex flex-wrap items-start justify-between gap-2 px-4 py-3"><div><p className="text-sm font-bold text-slate-800">{log.action || 'Activity'}</p><p className="mt-0.5 text-xs text-slate-500">{log.by || log.patient || specialistCurrentUser.displayName}</p></div><p className="text-xs text-slate-400">{log.timestamp ? new Date(log.timestamp).toLocaleString('en-GB') : '-'}</p></div>) : <p className="px-4 py-10 text-center text-sm text-slate-500">No specialist activity logs to display yet.</p>}
+                {specialistActivityLogs.length ? specialistActivityLogs.map((log, index) => <div key={`${log.timestamp || index}-${index}`} className="flex flex-wrap items-start justify-between gap-2 px-4 py-3"><div><p className="text-sm font-bold text-slate-800">{log.action || 'Activity'}</p><p className="mt-0.5 text-xs text-slate-500">{log.by || log.patient || specialistCurrentUser.displayName}</p></div><p className="text-xs text-slate-400">{log.timestamp ? new Date(log.timestamp).toLocaleString('en-GB') : '-'}</p></div>) : <p className="px-4 py-10 text-center text-sm text-slate-500">No specialist activity logs to display yet.</p>}
               </div>
             </section>
           ) : (
             <>
-              {/* Practice Summary — mirrors the standard clinic dashboard layout. */}
-              <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm md:p-8">
-                <div className="grid grid-cols-2 items-stretch gap-3 lg:grid-cols-12">
-                  <div className="col-span-2 flex flex-col justify-center lg:col-span-2">
-                    <h1 className="text-xl font-black tracking-tight text-slate-800 md:text-2xl">Practice Summary</h1>
-                    <p className="mt-1 text-2xl font-black leading-none text-slate-300 md:text-3xl">{new Date().getFullYear()}</p>
+              {/* Practice Summary — visual refresh only; referral calculations and month controls are unchanged. */}
+              <section className="relative overflow-hidden rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-200 via-white to-cyan-50 p-4 shadow-sm md:p-7">
+                <div className="pointer-events-none absolute -bottom-16 -right-10 h-48 w-48 rounded-full bg-cyan-100/40 blur-3xl"/>
+                <div className="relative grid grid-cols-2 items-stretch gap-3 lg:grid-cols-12">
+                  <div className="col-span-2 flex items-center gap-3 lg:col-span-2 lg:flex-col lg:items-start lg:justify-center">
+                    <div>
+                      <h1 className="text-xl font-black tracking-tight text-slate-800 md:text-2xl">Practice Summary</h1>
+                      <p className="mt-1 text-2xl font-black leading-none text-slate-400 border-b border-slate-300 leading-none mt-1 md:text-3xl">{new Date().getFullYear()}</p>
+                    </div>
                   </div>
 
-                  <div className="min-h-[120px] rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-teal-50 px-3 py-3 lg:col-span-2">
-                    <p className="mb-3 text-center text-xs font-black uppercase tracking-widest text-emerald-700">Total Referrals</p>
+                  <div className="min-h-[116px] rounded-2xl border border-emerald-100 bg-gradient-to-br from-white to-emerald-50/90 px-3 py-3 shadow-sm lg:col-span-2">
+                    <p className="mb-3 text-center text-[10px] font-black uppercase tracking-widest text-emerald-700 md:text-xs">Total Referrals</p>
                     <div className="grid grid-cols-[40px_1px_minmax(0,1fr)] items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-lg shadow-emerald-100"><Activity size={20}/></div>
-                      <div className="h-16 w-px bg-slate-300"/>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-md shadow-emerald-200"><Activity size={20}/></div>
+                      <div className="h-14 w-px bg-emerald-200"/>
                       <p className="text-center text-4xl font-black leading-none text-slate-900 md:text-5xl">{clinicReferrals.length}</p>
                     </div>
                   </div>
 
-                  <div className="min-h-[120px] rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50 to-indigo-50 px-3 py-3 lg:col-span-2">
-                    <p className="mb-3 text-center text-xs font-black uppercase tracking-widest text-violet-700">Pending Review</p>
+                  <div className="min-h-[116px] rounded-2xl border border-violet-100 bg-gradient-to-br from-white to-violet-50/90 px-3 py-3 shadow-sm lg:col-span-2">
+                    <p className="mb-3 text-center text-[10px] font-black uppercase tracking-widest text-violet-700 md:text-xs">Pending Review</p>
                     <div className="grid grid-cols-[40px_1px_minmax(0,1fr)] items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600 text-white shadow-lg shadow-violet-100"><Search size={20}/></div>
-                      <div className="h-16 w-px bg-slate-300"/>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600 text-white shadow-md shadow-violet-200"><Search size={20}/></div>
+                      <div className="h-14 w-px bg-violet-200"/>
                       <p className="text-center text-4xl font-black leading-none text-slate-900 md:text-5xl">{openReferrals.length}</p>
                     </div>
                   </div>
 
-                  <div id="specialist-monthly-summary" className="col-span-2 rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 shadow-sm lg:col-span-6">
-                    <div className="grid grid-cols-1 items-center gap-4 md:grid-cols-[minmax(150px,1fr)_2fr]">
+                  <div id="specialist-monthly-summary" className="col-span-2 rounded-2xl border border-slate-200/80 bg-gradient-to-br from-white to-slate-50 p-3 shadow-sm md:p-4 lg:col-span-6">
+                    <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[minmax(150px,1fr)_2fr]">
                       <div>
-                        <h2 className="mb-1 text-sm font-bold uppercase tracking-widest text-teal-700">Monthly Summary</h2>
-                        <div className="mt-2 flex items-center gap-3">
-                          <button onClick={() => shiftSpecialistMonth(-1)} className="rounded-full p-1 hover:bg-slate-200" aria-label="Previous month"><ChevronLeft size={18}/></button>
-                          <p className="min-w-[120px] text-center text-sm font-bold text-slate-600">{specialistAnalyticsMonth.toLocaleString('en-US', {month:'long',year:'numeric'})}</p>
-                          <button onClick={() => shiftSpecialistMonth(1)} disabled={currentMonthKey === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`} className="rounded-full p-1 transition-all hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-30" aria-label="Next month"><ChevronRight size={18}/></button>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-sm font-black uppercase tracking-widest text-teal-700">Monthly Analytics</h2>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button onClick={() => shiftSpecialistMonth(-1)} className="rounded-full p-1.5 text-slate-600 transition hover:bg-teal-50 hover:text-teal-700" aria-label="Previous month"><ChevronLeft size={18}/></button>
+                          <p className="min-w-[120px] text-center text-sm font-bold text-slate-700">{specialistAnalyticsMonth.toLocaleString('en-US', {month:'long',year:'numeric'})}</p>
+                          <button onClick={() => shiftSpecialistMonth(1)} disabled={currentMonthKey === `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`} className="rounded-full p-1.5 text-slate-600 transition hover:bg-teal-50 hover:text-teal-700 disabled:cursor-not-allowed disabled:opacity-30" aria-label="Next month"><ChevronRight size={18}/></button>
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                        <div className="text-center"><p className="text-[10px] font-bold uppercase text-slate-400">Total</p><p className="text-3xl font-black">{monthlyReferrals.length}</p></div>
-                        <div className="text-center"><p className="text-[10px] font-bold uppercase text-teal-700">New</p><p className="text-3xl font-black text-teal-700">{monthlyReferrals.filter(r => ['new','pending','referred','submitted','new referral'].includes(referralStatus(r))).length}</p></div>
-                        <div className="text-center"><p className="text-[10px] font-bold uppercase text-indigo-500">In Progress</p><p className="text-3xl font-black text-indigo-600">{monthlyReferrals.filter(r => ['in progress','in_progress','processing','accepted'].includes(referralStatus(r))).length}</p></div>
-                        <div className="text-center"><p className="text-[10px] font-bold uppercase text-emerald-600">Returned</p><p className="text-3xl font-black text-emerald-600">{monthlyReferrals.filter(r => ['returned','returned to clinic','completed and returned','sent back','sent back to clinic','returned to referring clinic'].includes(referralStatus(r).replace(/[_-]+/g, ' ').trim())).length}</p></div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        <div className="rounded-xl bg-slate-50/90 px-2 py-2 text-center"><p className="text-[9px] font-black uppercase tracking-wide text-slate-400">Total</p><p className="text-2xl font-black text-slate-900 md:text-3xl">{monthlyReferrals.length}</p></div>
+                        <div className="rounded-xl bg-teal-50/80 px-2 py-2 text-center"><p className="text-[9px] font-black uppercase tracking-wide text-teal-700">New</p><p className="text-2xl font-black text-teal-700 md:text-3xl">{monthlyReferrals.filter(r => ['new','pending','referred','submitted','new referral'].includes(referralStatus(r))).length}</p></div>
+                        <div className="rounded-xl bg-indigo-50/80 px-2 py-2 text-center"><p className="text-[9px] font-black uppercase tracking-wide text-indigo-500">In Progress</p><p className="text-2xl font-black text-indigo-600 md:text-3xl">{monthlyReferrals.filter(r => ['in progress','in_progress','processing','accepted'].includes(referralStatus(r))).length}</p></div>
+                        <div className="rounded-xl bg-emerald-50/80 px-2 py-2 text-center"><p className="text-[9px] font-black uppercase tracking-wide text-emerald-600">Returned</p><p className="text-2xl font-black text-emerald-600 md:text-3xl">{monthlyReferrals.filter(r => ['returned','returned to clinic','completed and returned','sent back','sent back to clinic','returned to referring clinic'].includes(referralStatus(r).replace(/[_-]+/g, ' ').trim())).length}</p></div>
                       </div>
                     </div>
                   </div>
@@ -6065,13 +6473,23 @@ const tomorrowTCATotal = Object.values(
 
               {/* Active referrals remain visible until the completed report is sent back to the referring clinic. */}
               <section id="specialist-referrals" className="space-y-4 scroll-mt-24">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Clock size={20} className="text-teal-700"/>
-                    <h2 className="text-lg font-bold tracking-tight text-slate-800">Referrals from Clinics</h2>
-                    <span className="text-sm font-semibold text-slate-500">{new Date().toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'})}</span>
-                    <span className="rounded bg-teal-700 px-2 py-0.5 text-[10px] font-black uppercase tracking-tighter text-white">{openReferrals.length} Active Referrals</span>
-                    <span className="rounded bg-slate-100 px-2 py-0.5 text-[10px] font-black uppercase tracking-tighter text-slate-600">{newReferrals.length} New</span>
+                <div className="relative overflow-hidden rounded-3xl border border-emerald-100 bg-gradient-to-r from-emerald-50 via-white to-cyan-50 px-4 py-4 shadow-sm md:px-6">
+                  <div className="pointer-events-none absolute -right-8 -top-10 h-32 w-32 rounded-full bg-teal-100/50 blur-2xl"/>
+                  <div className="relative flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-md shadow-emerald-200"><ClipboardList size={21}/></div>
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <h2 className="text-lg font-black tracking-tight text-slate-800">Referrals from Clinics</h2>
+                          <span className="text-xs font-semibold text-slate-500">{new Date().toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'})}</span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">Review incoming referrals and return completed reports to the referring clinic.</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-700 px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-white shadow-sm"><Clock size={13}/>{openReferrals.length} Active Referrals</span>
+                      <span className="rounded-full border border-slate-200 bg-white/90 px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-slate-600">{newReferrals.length} New</span>
+                    </div>
                   </div>
                 </div>
 
@@ -6119,9 +6537,9 @@ const tomorrowTCATotal = Object.values(
                   )}
                 </div>
 
-                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white p-3 md:p-4">
-                    <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-slate-300 px-3 py-2">
+                <section className="overflow-hidden rounded-3xl border border-slate-200/90 bg-white shadow-md shadow-slate-200/60">
+                  <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-gradient-to-r from-white to-slate-50 p-3 md:p-4">
+                    <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-inner shadow-slate-100 focus-within:border-teal-300 focus-within:ring-2 focus-within:ring-teal-100">
                       <Search size={16} className="shrink-0 text-slate-400"/>
                       <input
                         value={specialistReferralSearch}
@@ -6131,20 +6549,20 @@ const tomorrowTCATotal = Object.values(
                         aria-label="Search referrals by patient name or IC"
                       />
                     </div>
-                    <span className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-xs font-bold text-teal-800">All referrals ({filteredClinicReferrals.length})</span>
+                    <span className="inline-flex items-center gap-2 rounded-xl border border-teal-200 bg-gradient-to-r from-teal-50 to-emerald-50 px-3 py-2.5 text-xs font-black text-teal-800"><Filter size={14}/>All referrals ({filteredClinicReferrals.length})</span>
                   </div>
 
                   {filteredClinicReferrals.length > 0 ? (
                     <div className="overflow-x-auto">
                       <table className="w-full min-w-[850px] text-left">
-                        <thead className="bg-slate-200/80 text-[10px] font-black uppercase tracking-widest text-slate-600">
+                        <thead className="bg-gradient-to-r from-slate-100 via-blue-50 to-slate-100 text-[10px] font-black uppercase tracking-widest text-slate-600">
                           <tr>
-                            <th className="px-4 py-4">Patient Details</th>
-                            <th className="px-4 py-4">Referring Clinic</th>
-                            <th className="px-4 py-4">Referral Date</th>
-                            <th className="px-4 py-4">Reason / Notes</th>
-                            <th className="px-4 py-4">Status</th>
-                            <th className="px-4 py-4">Action</th>
+                            <th className="px-4 py-4"><span className="inline-flex items-center gap-2"><UserIcon size={14} className="text-blue-600"/>Patient Details</span></th>
+                            <th className="px-4 py-4"><span className="inline-flex items-center gap-2"><Building2 size={14} className="text-blue-600"/>Referring Clinic</span></th>
+                            <th className="px-4 py-4"><span className="inline-flex items-center gap-2"><Calendar size={14} className="text-blue-600"/>Referral Date</span></th>
+                            <th className="px-4 py-4"><span className="inline-flex items-center gap-2"><ClipboardList size={14} className="text-blue-600"/>Reason / Notes</span></th>
+                            <th className="px-4 py-4"><span className="inline-flex items-center gap-2"><Clock size={14} className="text-teal-600"/>Status</span></th>
+                            <th className="px-4 py-4"><span className="inline-flex items-center gap-2"><Settings2 size={14} className="text-blue-600"/>Action</span></th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -6154,7 +6572,7 @@ const tomorrowTCATotal = Object.values(
                             const sourceClinic = clinics.find(clinic => clinic.id === referringClinicId) || clinics.find(clinic => clinic.name === referringClinic || clinic.shortName === referringClinic) || null;
                             const clinicColor = getClinicColor(sourceClinic);
                             return (
-                              <tr key={referral.id} className={`border-l-4 ${clinicColor.border} bg-white transition-colors hover:bg-slate-50`}>
+                              <tr key={referral.id} className={`border-l-4 ${clinicColor.border} bg-white transition-colors hover:bg-teal-50/40`}>
                                 <td className="px-4 py-4">
                                   <p className="text-sm font-black text-slate-800">{referral.patientName || referral.patient?.name || referral.name || 'Patient details pending'}</p>
                                   <p className="mt-1 text-xs text-slate-500">IC: {referral.icNumber || referral.patientIC || referral.patient?.icNumber || '-'}</p>
@@ -6163,7 +6581,7 @@ const tomorrowTCATotal = Object.values(
                                 <td className="px-4 py-4 text-sm text-slate-600">{formatReferralDate(referral)}</td>
                                 <td className="max-w-xs px-4 py-4 text-sm text-slate-600">{referral.referralReason || referral.reason || referral.notes || '-'}</td>
                                 <td className="px-4 py-4">{(() => { const status = String(referral.status || referral.referralStatus || 'New').replace(/[_-]+/g, ' '); const returned = ['returned', 'returned to clinic', 'sent back', 'sent back to clinic', 'returned to referring clinic', 'completed and returned'].includes(status.toLowerCase()); const inProgress = status.toLowerCase() === 'in progress'; const returnedDate = returned ? formatReferralReturnedDate(referral) : ''; return <div className="flex flex-col items-center gap-1.5 text-center"><span className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${returned ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : inProgress ? 'border-indigo-200 bg-indigo-50 text-indigo-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>{returned ? 'Returned to Clinic' : status}</span>{returnedDate && <span className="text-[10px] font-medium text-slate-500">Returned: {returnedDate}</span>}</div>; })()}</td>
-                                <td className="px-4 py-4"><button type="button" onClick={() => openSpecialistReferral(referral)} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-bold text-white transition hover:bg-teal-800">{openReferrals.some(item => item.id === referral.id) ? 'Open Referral' : 'View Report'}</button></td>
+                                <td className="px-4 py-4"><button type="button" onClick={() => openSpecialistReferral(referral)} className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-teal-700 to-emerald-700 px-3.5 py-2.5 text-xs font-black text-white shadow-sm shadow-teal-200 transition hover:-translate-y-0.5 hover:shadow-md hover:shadow-teal-200">{openReferrals.some(item => item.id === referral.id) ? 'Open Referral' : 'View Report'}</button></td>
                               </tr>
                             );
                           })}
@@ -6174,7 +6592,7 @@ const tomorrowTCATotal = Object.values(
                     <div className="flex min-h-[150px] flex-col items-center justify-center px-4 py-8 text-center">
                       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-50 text-teal-700"><ClipboardCheck size={23}/></div>
                       <p className="mt-3 font-bold text-slate-700">{specialistReferralSearch.trim() ? 'No matching referrals found' : 'No referrals to display yet'}</p>
-                      <p className="mx-auto mt-1 max-w-lg text-sm text-slate-500">{specialistReferralSearch.trim() ? 'Try another patient name or IC number.' : 'New referrals sent by clinic users will appear here and remain until the specialist report is sent back to the referring clinic.'}</p>
+                      <p className="mx-auto mt-1 max-w-lg text-sm text-slate-500">{specialistReferralSearch.trim() ? 'Try another patient name or IC number.' : 'New referrals sent by clinic users will appear here once received.'}</p>
                     </div>
                   )}
                   {filteredClinicReferrals.length > 0 && (
@@ -6215,17 +6633,22 @@ const tomorrowTCATotal = Object.values(
               }}
               className="absolute inset-0 h-full w-full cursor-default"
             />
-            <section className="relative my-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl sm:max-h-[calc(100dvh-2.5rem)]">
-              <div className="flex items-start justify-between border-b border-slate-100 bg-white p-5 sm:p-7">
-                <div className="flex items-center gap-3">
-                  <div className="rounded-xl bg-teal-700 p-2.5 shadow-sm"><Users size={20} className="text-white" /></div>
-                  <div>
-                    <p className="mb-1 text-[10px] font-black uppercase tracking-[.18em] text-teal-700">Specialist clinic administration</p>
-                    <h2 className="text-2xl font-black leading-tight text-slate-900">Staff Management</h2>
-                    <p className="mt-1 text-sm text-slate-500">Manage staff accounts for {specialistClinic?.name || 'this specialist clinic'}.</p>
+            <section className="relative my-auto flex max-h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-violet-100 bg-white shadow-2xl sm:max-h-[calc(100dvh-2.5rem)]">
+              <div className="m-4 sm:m-6 flex items-start justify-between gap-4 rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 via-white to-indigo-50 p-4 shadow-sm sm:p-5">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="shrink-0 rounded-2xl bg-violet-600 p-3 shadow-lg shadow-violet-200"><Users size={21} className="text-white" /></div>
+                  <div className="min-w-0">
+                    <p className="mb-1 text-[10px] font-black uppercase tracking-[.18em] text-violet-700">Specialist clinic administration</p>
+                    <h2 className="text-xl font-black leading-tight text-slate-900 sm:text-2xl">Staff Management</h2>
+                    <p className="mt-1 text-xs text-slate-500 sm:text-sm">Manage staff accounts for {specialistClinic?.name || 'this specialist clinic'}.</p>
                   </div>
                 </div>
-                <button
+                <div className="flex shrink-0 items-start gap-2 sm:gap-3">
+                  <div className="hidden min-w-[104px] flex-col justify-center rounded-2xl border border-violet-100 bg-violet-50 px-4 py-2.5 sm:flex">
+                    <span className="text-[10px] font-bold text-violet-600">Registered users</span>
+                    <span className="text-2xl font-black leading-tight text-violet-700">{clinicStaff.length}</span>
+                  </div>
+                  <button
                   type="button"
                   aria-label="Close Staff Management"
                   onClick={() => {
@@ -6238,12 +6661,13 @@ const tomorrowTCATotal = Object.values(
                     setSpecialistStaffPasswordInput('');
                     setShowSpecialistStaffPassword(false);
                   }}
-                  className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100"
+                  className="rounded-xl border border-transparent p-2 text-slate-400 transition-colors hover:border-violet-100 hover:bg-white/80"
                 ><XCircle size={24} /></button>
+                </div>
               </div>
 
-              <div className="space-y-5 overflow-y-auto bg-white p-5 sm:p-7">
-                <section>
+              <div className="space-y-5 overflow-y-auto bg-slate-50/50 px-4 pb-5 sm:px-6 sm:pb-6">
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                   <button
                     type="button"
                     onClick={() => {
@@ -6263,17 +6687,17 @@ const tomorrowTCATotal = Object.values(
                         setShowSpecialistStaffForm(true);
                       }
                     }}
-                    className="mb-4 flex w-full items-center justify-between"
+                    className="mb-4 flex w-full items-center justify-between gap-3"
                   >
                     <h3 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
                       {editingSpecialistStaffId ? <Edit2 size={14} className="text-teal-700" /> : <UserPlus size={14} className="text-teal-700" />}
                       {editingSpecialistStaffId ? `Editing Account: ${editingSpecialistStaffId}` : 'Register New Specialist Staff'}
                     </h3>
-                    {!editingSpecialistStaffId && <span className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-black text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-40">{showSpecialistStaffForm ? <XCircle size={16}/> : <UserPlus size={16}/>} {showSpecialistStaffForm ? 'Close form' : 'Add new user'}</span>}
+                    {!editingSpecialistStaffId && <span className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black text-white shadow-md shadow-violet-100 transition hover:bg-violet-700 disabled:opacity-40">{showSpecialistStaffForm ? <XCircle size={16}/> : <UserPlus size={16}/>} {showSpecialistStaffForm ? 'Close form' : 'Add new user'}</span>}
                   </button>
 
                   {(showSpecialistStaffForm || editingSpecialistStaffId) && (
-                    <form onSubmit={saveSpecialistStaff} className="rounded-2xl border border-teal-100 bg-teal-50/50 p-3 md:p-4">
+                    <form onSubmit={saveSpecialistStaff} className="rounded-2xl border border-violet-100 bg-violet-50/40 p-3 md:p-4">
                       <div className="mb-5 flex items-center justify-between gap-3">
                         <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-teal-700">New account</p><h4 className="mt-1 text-base font-black text-slate-900">{editingSpecialistStaffId ? 'Edit Specialist User Details' : 'Register New Specialist User'}</h4></div>
                         <span className="rounded-full bg-white px-3 py-1.5 text-[10px] font-bold text-slate-500">Specialist Admin</span>
@@ -6315,16 +6739,16 @@ const tomorrowTCATotal = Object.values(
                   )}
                 </section>
 
-                <section className="flex max-h-[420px] flex-col">
-                  <h3 className="mb-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Current Specialist Users ({clinicStaff.length})</h3>
+                <section className="flex max-h-[420px] flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+                  <div className="mb-4 flex items-center justify-between gap-3"><h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Current Specialist Users</h3><span className="rounded-full bg-violet-50 px-3 py-1 text-[10px] font-black text-violet-700">{clinicStaff.length} registered</span></div>
                   <div className="overflow-y-auto pr-1">
                     {clinicStaff.length ? clinicStaff.map(staff => (
-                      <div key={staff.id} className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-slate-100 px-4 py-3">
+                      <div key={staff.id} className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 transition-all hover:border-violet-200 hover:bg-violet-50/30 sm:px-4">
                         <div className="min-w-0 flex items-center gap-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600"><Users size={18}/></div>
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-700"><Users size={18}/></div>
                           <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-bold text-slate-800">{staff.displayName}</p><span className={`rounded px-2 py-0.5 text-[9px] font-bold ${staff.role === 'ADMIN' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>{staff.role || 'STAFF'}</span><span className="rounded border border-teal-200 bg-teal-50 px-2 py-0.5 text-[9px] font-bold text-teal-800">{specialistClinic?.name || specialistCurrentUser.clinicId}</span></div><p className="mt-1 text-xs text-slate-400">{staff.id} · {staff.active ? 'Active' : 'Inactive'}</p></div>
                         </div>
-                        <button type="button" onClick={() => { setEditingSpecialistStaffId(staff.id); setSpecialistStaffIdInput(staff.id); setSpecialistStaffNameInput(staff.displayName); setSpecialistStaffPasswordInput(''); setShowSpecialistStaffPassword(false); setShowSpecialistStaffForm(true); }} className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-teal-800 hover:bg-teal-50"><Edit2 size={13} className="mr-1 inline"/> Edit</button>
+                        <button type="button" onClick={() => { setEditingSpecialistStaffId(staff.id); setSpecialistStaffIdInput(staff.id); setSpecialistStaffNameInput(staff.displayName); setSpecialistStaffPasswordInput(''); setShowSpecialistStaffPassword(false); setShowSpecialistStaffForm(true); }} className="shrink-0 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 transition hover:bg-violet-50"><Edit2 size={13} className="mr-1 inline"/> Edit</button>
                       </div>
                     )) : <div className="rounded-2xl border border-slate-200 px-4 py-10 text-center text-sm text-slate-500">No staff accounts have been added for this clinic yet.</div>}
                   </div>
@@ -6610,7 +7034,7 @@ const tomorrowTCATotal = Object.values(
                       <span className="text-xs text-slate-500">Lengkapkan Section 6 dan simpan laporan pakar</span>
                       <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={() => void saveSpecialistReferral(false)} disabled={specialistReferralSaving} className="rounded-lg border border-teal-700 px-4 py-2 text-xs font-black text-teal-800 disabled:opacity-50">{specialistReferralSaving ? 'Saving...' : 'Save Draft'}</button>
-                        <button type="button" onClick={() => { if (window.confirm('Hantar laporan lengkap ini semula ke klinik yang merujuk? Referral akan dikeluarkan daripada inbox pakar.')) void saveSpecialistReferral(true); }} disabled={specialistReferralSaving} className="rounded-lg bg-teal-800 px-4 py-2 text-xs font-black text-white disabled:opacity-50">{specialistReferralSaving ? 'Processing...' : 'Send Back to Clinic'}</button>
+                        <button type="button" onClick={async () => { if (await showAppConfirm('Hantar laporan lengkap ini semula ke klinik yang merujuk? Referral akan dikeluarkan daripada inbox pakar.')) void saveSpecialistReferral(true); }} disabled={specialistReferralSaving} className="rounded-lg bg-teal-800 px-4 py-2 text-xs font-black text-white disabled:opacity-50">{specialistReferralSaving ? 'Processing...' : 'Send Back to Clinic'}</button>
                       </div>
                     </>
                   );
@@ -6659,6 +7083,126 @@ const tomorrowTCATotal = Object.values(
         )}
         <footer className="mt-auto px-4 pb-5 pt-2 text-center text-[10px] font-bold uppercase tracking-widest text-slate-500">SINAR SPECIALIST PORTAL · {APP_VERSION}</footer>
       </div>
+{showSpecialistAccountSettings && specialistCurrentUser && (
+  <div className="fixed inset-0 z-[500] flex items-center justify-center overflow-y-auto bg-slate-950/45 p-3 backdrop-blur-sm sm:p-5">
+    <button
+      aria-label="Close specialist account settings"
+      className="absolute inset-0 cursor-default"
+      onClick={closeSpecialistAccountSettings}
+      disabled={isSavingSpecialistAccount}
+    />
+    <motion.div
+      initial={{ opacity: 0, y: 12, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 12, scale: 0.97 }}
+      className="relative z-10 w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-2xl"
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-teal-100 bg-gradient-to-r from-teal-50 via-white to-cyan-50 px-5 py-4 sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-teal-600 text-white shadow-md shadow-teal-200">
+            <UserCog size={20}/>
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-extrabold text-slate-800">Specialist Account Settings</h2>
+            <p className="mt-0.5 text-[9px] font-extrabold uppercase tracking-[0.16em] text-teal-700">Manage your credentials</p>
+            <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{specialistCurrentUser.id}</p>
+          </div>
+        </div>
+        <button
+          onClick={closeSpecialistAccountSettings}
+          disabled={isSavingSpecialistAccount}
+          aria-label="Close"
+          className="rounded-xl border border-slate-200 bg-white p-2 text-slate-400 shadow-sm hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
+        >
+          <XCircle size={19}/>
+        </button>
+      </div>
+
+      <div className="max-h-[calc(100dvh-9rem)] space-y-4 overflow-y-auto p-5 sm:p-6">
+        <div className="space-y-1.5">
+          <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">Display Name</label>
+          <input
+            type="text"
+            value={specialistNewDisplayName}
+            onChange={e => setSpecialistNewDisplayName(e.target.value)}
+            autoComplete="off"
+            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:bg-white focus:ring-4 focus:ring-teal-50"
+            placeholder="Enter display name"
+          />
+        </div>
+
+        {([
+          {label:'Current Password',value:specialistCurrentPasswordInput,setter:setSpecialistCurrentPasswordInput,visible:showSpecialistCurrentPassword,toggle:setShowSpecialistCurrentPassword},
+          {label:'New Password',value:specialistNewPasswordInput,setter:setSpecialistNewPasswordInput,visible:showSpecialistNewPassword,toggle:setShowSpecialistNewPassword},
+          {label:'Confirm Password',value:specialistConfirmPasswordInput,setter:setSpecialistConfirmPasswordInput,visible:showSpecialistConfirmPassword,toggle:setShowSpecialistConfirmPassword},
+        ] as const).map(field => (
+          <div key={field.label} className="space-y-1.5">
+            <label className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">{field.label}</label>
+            <div className="relative">
+              <input
+                type={field.visible ? 'text' : 'password'}
+                value={field.value}
+                onChange={e => field.setter(e.target.value)}
+                autoComplete="new-password"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 pr-12 text-sm font-semibold text-slate-800 outline-none transition focus:border-teal-500 focus:bg-white focus:ring-4 focus:ring-teal-50"
+                placeholder="Enter password"
+              />
+              <button
+                type="button"
+                onClick={() => field.toggle(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-md p-1 text-slate-400 hover:text-teal-700"
+                aria-label={`Toggle ${field.label.toLowerCase()}`}
+              >
+                {field.visible ? <EyeOff size={17}/> : <Eye size={17}/>}
+              </button>
+            </div>
+          </div>
+        ))}
+
+        <button
+          onClick={handleSpecialistAccountUpdate}
+          disabled={isSavingSpecialistAccount}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-teal-700 to-cyan-700 px-4 py-3.5 text-xs font-extrabold uppercase tracking-widest text-white shadow-lg shadow-teal-100 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isSavingSpecialistAccount ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+    </motion.div>
+  </div>
+)}
+
+{specialistAccountWarning && (
+  <div className="fixed inset-0 z-[700] flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
+    <div role="alertdialog" aria-modal="true" className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+      <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-teal-50 px-5 py-4">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm"><AlertCircle size={19}/></div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-extrabold text-slate-900">SINAR</h2>
+          <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Account verification</p>
+        </div>
+        <button type="button" onClick={() => setSpecialistAccountWarning('')} aria-label="Close warning" className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"><XCircle size={18}/></button>
+      </div>
+      <div className="px-5 py-5"><p className="whitespace-pre-line text-sm leading-6 text-slate-700">{specialistAccountWarning}</p></div>
+      <div className="flex justify-end border-t border-slate-100 bg-slate-50/80 px-5 py-3">
+        <button type="button" onClick={() => setSpecialistAccountWarning('')} className="rounded-xl bg-gradient-to-r from-blue-700 to-teal-700 px-5 py-2 text-xs font-extrabold text-white shadow-sm transition hover:brightness-105">OK</button>
+      </div>
+    </div>
+  </div>
+)}
+
+{showSpecialistAccountSuccess && (
+  <div className="fixed left-1/2 top-5 z-[99999] -translate-x-1/2">
+    <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-white px-5 py-3 shadow-xl">
+      <CheckCircle2 size={20} className="text-emerald-600"/>
+      <div>
+        <p className="text-xs font-extrabold text-slate-800">Account Updated</p>
+        <p className="text-[10px] text-slate-500">Specialist credentials saved successfully.</p>
+      </div>
+    </div>
+  </div>
+)}
+
+      </>
     );
   }
 
@@ -6892,42 +7436,52 @@ const tomorrowTCATotal = Object.values(
 
 {showTCASchedule && (
 
-  <div className="fixed inset-0 z-[99999] bg-black/40 flex items-center justify-center">
+  <div
+    className="fixed inset-0 z-[99999] bg-slate-950/55 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5"
+    onClick={() => setShowTCASchedule(false)}
+  >
 
-    <div className="bg-white rounded-3xl shadow-2xl w-[calc(100vw-1rem)] sm:w-[92vw] max-w-[560px] max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+    <div
+      className="bg-white rounded-3xl shadow-2xl shadow-slate-950/20 w-[calc(100vw-1.5rem)] sm:w-[92vw] max-w-[620px] max-h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-2.5rem)] flex flex-col overflow-hidden border border-white/70"
+      onClick={(e) => e.stopPropagation()}
+    >
 
-      <div className="p-5 border-b border-slate-300 flex items-center justify-between bg-gradient-to-r from-slate-100 to-slate-200">
-
-        <div>
-
-          <h2 className="text-lg font-black text-slate-800">
-            📅 Fundus TCA Schedule
-          </h2>
-
-          <p className="text-xs text-slate-600 font-semibold">
-            Upcoming TCA Appointments
-          </p>
-
+      <div className="px-5 sm:px-6 py-5 border-b border-violet-100 bg-gradient-to-r from-violet-50 via-white to-indigo-50 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-violet-600 text-white flex items-center justify-center shadow-md shadow-violet-200 shrink-0">
+            <Calendar size={20} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[9px] font-black uppercase tracking-[0.18em] text-violet-600 mb-0.5">
+              Appointment Overview
+            </p>
+            <h2 className="text-lg sm:text-xl font-black text-slate-900">
+              Fundus TCA Schedule
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+              Upcoming TCA Appointments
+            </p>
+          </div>
         </div>
 
         <button
-          onClick={() =>
-            setShowTCASchedule(false)
-          }
-          className="text-slate-400 hover:text-slate-700"
+          type="button"
+          onClick={() => setShowTCASchedule(false)}
+          aria-label="Close TCA schedule"
+          className="w-9 h-9 rounded-full border border-violet-200 bg-white/80 text-slate-400 hover:text-violet-700 hover:bg-violet-50 flex items-center justify-center transition-all shrink-0"
         >
-          ✕
+          <span className="text-xl leading-none">×</span>
         </button>
-
       </div>
 
-      <div className="p-5 space-y-3 overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
+      <div className="p-4 sm:p-5 space-y-3 overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-violet-200 scrollbar-track-transparent bg-slate-50/60">
 
         {tcaSchedule.length === 0 ? (
 
-          <div className="text-center py-6 md:py-10 text-slate-400 font-medium">
-  No upcoming appointments
-</div>
+          <div className="text-center py-10 px-4 rounded-2xl border border-dashed border-slate-300 bg-white text-slate-400 font-semibold">
+            <Calendar size={28} className="mx-auto mb-3 text-slate-300" />
+            No upcoming appointments
+          </div>
 
         ) : (
 
@@ -6937,7 +7491,7 @@ const tomorrowTCATotal = Object.values(
 
               <div
                 key={date}
-                className="border border-slate-200 rounded-2xl p-4 md:p-5 bg-white shadow-sm hover:shadow-md hover:border-blue-200 transition-all"
+                className="border border-slate-200 rounded-2xl p-4 sm:p-5 bg-white shadow-sm hover:shadow-md hover:border-violet-200 transition-all"
               >
 
                 <div className="flex items-center justify-between">
@@ -7277,7 +7831,16 @@ const tomorrowTCATotal = Object.values(
   {currentUser.role === UserRole.STAFF && (
 
     <button 
-      onClick={() => setShowAccountSettings(true)}
+      onClick={() => {
+        setNewDisplayName(currentUser?.displayName || '');
+        setCurrentPasswordInput('');
+        setNewPasswordInput('');
+        setConfirmPasswordInput('');
+        setShowCurrentPassword(false);
+        setShowNewPassword(false);
+        setShowConfirmPassword(false);
+        setShowAccountSettings(true);
+      }}
       className="flex items-center gap-2 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all border border-slate-200"
     >
 
@@ -7319,33 +7882,86 @@ const tomorrowTCATotal = Object.values(
           The landing page is the PKD multi-clinic console.
          ===================================================== */}
       {currentUser.role === UserRole.SUPER_ADMIN && (
-        <main className="flex-1 w-full max-w-[1280px] mx-auto flex flex-col gap-5 px-3 md:px-5 py-4 md:py-6">
+        <main className="super-admin-workspace flex-1 w-full max-w-[1280px] mx-auto flex flex-col gap-5 px-3 md:px-5 py-4 md:py-6">
+          <style>{`
+            .super-admin-workspace .sa-panel-hero {
+              border: 1px solid #dbeafe;
+              border-radius: 1rem;
+              background: linear-gradient(115deg, #eff6ff 0%, #ffffff 58%, #f0fdfa 100%);
+              padding: .9rem 1rem;
+              margin-bottom: 1rem;
+            }
+            .super-admin-workspace .sa-panel-hero:has(.sa-blue) { border-color: #bfdbfe; background: linear-gradient(115deg, #dbeafe 0%, #eff6ff 48%, #ffffff 100%); }
+            .super-admin-workspace .sa-panel-hero:has(.sa-violet) { border-color: #ddd6fe; background: linear-gradient(115deg, #ede9fe 0%, #f5f3ff 48%, #ffffff 100%); }
+            .super-admin-workspace .sa-panel-hero:has(.sa-cyan) { border-color: #a5f3fc; background: linear-gradient(115deg, #cffafe 0%, #ecfeff 48%, #ffffff 100%); }
+            .super-admin-workspace .sa-panel-hero:has(.sa-amber) { border-color: #fde68a; background: linear-gradient(115deg, #fef3c7 0%, #fffbeb 48%, #ffffff 100%); }
+            .super-admin-workspace .sa-hero-slate { border-color: #cbd5e1; background: linear-gradient(115deg, #e2e8f0 0%, #f8fafc 52%, #ffffff 100%); }
+            .super-admin-workspace .sa-slate { background: #475569; color: #fff; }
+            .super-admin-workspace .sa-config-card { min-height: 7.5rem; }
+            .super-admin-workspace .sa-config-cyan { border-color: #a5f3fc; background: linear-gradient(135deg, #cffafe 0%, #ecfeff 58%, #ffffff 100%); }
+            .super-admin-workspace .sa-config-cyan:hover { background: linear-gradient(135deg, #a5f3fc 0%, #cffafe 58%, #ffffff 100%); }
+            .super-admin-workspace .sa-config-amber { border-color: #fde68a; background: linear-gradient(135deg, #fef3c7 0%, #fffbeb 58%, #ffffff 100%); }
+            .super-admin-workspace .sa-config-amber:hover { background: linear-gradient(135deg, #fde68a 0%, #fef3c7 58%, #ffffff 100%); }
+            .super-admin-workspace .sa-config-slate { border-color: #cbd5e1; background: linear-gradient(135deg, #e2e8f0 0%, #f8fafc 58%, #ffffff 100%); }
+            .super-admin-workspace .sa-config-icon { display: inline-flex; height: 2.65rem; width: 2.65rem; align-items: center; justify-content: center; border-radius: .9rem; }
+            .super-admin-workspace .sa-config-icon-cyan { background: #a5f3fc; color: #0e7490; }
+            .super-admin-workspace .sa-config-icon-amber { background: #fde68a; color: #b45309; }
+            .super-admin-workspace .sa-config-icon-slate { background: #cbd5e1; color: #334155; }
+            .super-admin-workspace .sa-panel-icon {
+              display: flex; height: 2.75rem; width: 2.75rem; flex: 0 0 2.75rem;
+              align-items: center; justify-content: center; border-radius: .9rem;
+              box-shadow: 0 5px 12px rgba(15, 23, 42, .08);
+            }
+            .super-admin-workspace .sa-blue { background: #2563eb; color: #fff; }
+            .super-admin-workspace .sa-violet { background: #7c3aed; color: #fff; }
+            .super-admin-workspace .sa-cyan { background: #0891b2; color: #fff; }
+            .super-admin-workspace .sa-amber { background: #d97706; color: #fff; }
+            .super-admin-workspace .sa-panel-kicker {
+              color: #0f766e; font-size: .625rem; font-weight: 900;
+              letter-spacing: .18em; text-transform: uppercase; margin-bottom: .15rem;
+            }
+            @media (max-width: 639px) {
+              .super-admin-workspace .sa-panel-hero { padding: .75rem; }
+            }
+            .super-admin-workspace h1 { font-size: 1.25rem; line-height: 1.4; }
+            .super-admin-workspace h2 { font-size: 1rem; line-height: 1.45; }
+            .super-admin-workspace h3 { font-size: .925rem; line-height: 1.45; }
+            .super-admin-workspace p { line-height: 1.55; }
+            .super-admin-workspace section.rounded-3xl { border-radius: 1.25rem; }
+            .super-admin-workspace section.rounded-3xl.shadow-sm { box-shadow: 0 1px 3px rgba(15, 23, 42, .07), 0 1px 2px rgba(15, 23, 42, .04); }
+            .super-admin-workspace input, .super-admin-workspace select, .super-admin-workspace textarea { font-size: .875rem; }
+            .super-admin-workspace button { line-height: 1.35; }
+            @media (min-width: 768px) {
+              .super-admin-workspace h1 { font-size: 1.35rem; }
+              .super-admin-workspace h2 { font-size: 1.05rem; }
+            }
+          `}</style>
           <div className="min-w-0 flex-1 space-y-6">
           {activeSuperAdminView !== 'dashboard' && (
             <section className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-              <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">SINAR Super Admin</p><p className="mt-1 text-sm text-slate-500">Manage multi-clinic settings and access.</p></div>
+              <div><p className="text-sm font-black text-violet-600">SINAR Super Admin</p><p className="mt-1 text-xs text-slate-500">Manage multi-clinic settings and access.</p></div>
               <button type="button" onClick={() => { setActiveSuperAdminView('dashboard'); setShowStaffForm(false); setEditingUser(null); setShowDataMigration(false); }} className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-teal-500 bg-teal-200 px-4 py-2.5 text-xs font-black text-slate-700 transition hover:bg-teal-500 hover:text-white sm:self-auto"><ChevronLeft size={16}/> Back to Dashboard</button>
             </section>
           )}
           {activeSuperAdminView === 'clinics' ? (
             <div className="space-y-6">
               <section className="bg-white border border-slate-200 rounded-3xl p-5 md:p-7 shadow-sm">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6">
-                  <div><h1 className="text-2xl font-black text-slate-900">Clinic Management</h1><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Dynamic clinic master · {clinics.length} registered clinics</p></div>
+                <div className="sa-panel-hero mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-3"><div className="sa-panel-icon sa-blue"><Building2 size={22}/></div><div><p className="sa-panel-kicker">Clinic administration</p><h1 className="text-xl font-black text-slate-900">Clinic Management</h1><p className="mt-1 text-xs font-bold tracking-wider text-slate-500">Dynamic clinic master · {clinics.length} registered clinics</p></div></div>
                   <button type="button" onClick={() => { setNewClinicId(''); setNewClinicName(''); setNewClinicShortName(''); setNewClinicAddress(''); setNewClinicPhone(''); setNewClinicIsFundusProvider(false); setNewClinicColorKey('pink'); setShowNewClinicForm(v => !v); }} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white hover:bg-violet-700"><Plus size={16}/> {showNewClinicForm ? 'Cancel' : 'Add clinic'}</button>
                 </div>
                 {showNewClinicForm && <form onSubmit={async (e) => {
                   e.preventDefault();
                   const id = newClinicId.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
                   if (!id || !newClinicName.trim()) return;
-                  if (clinics.some(c => c.id === id)) { alert('Clinic ID already exists.'); return; }
+                  if (clinics.some(c => c.id === id)) { showAppAlert('Clinic ID already exists.'); return; }
                   setIsAddingClinic(true);
                   const clinic: Clinic = { id, name: newClinicName.trim(), shortName: newClinicShortName.trim() || newClinicName.trim(), address: newClinicAddress.trim(), phone: newClinicPhone.trim(), active: true, isFundusProvider: newClinicIsFundusProvider, colorKey: newClinicColorKey };
                   try {
                     await setDoc(doc(db, 'clinics', clinic.id), clinic);
                     addActivityLog('Created Clinic', `${clinic.name} (${clinic.id})`, currentUser.displayName);
                     setNewClinicId(''); setNewClinicName(''); setNewClinicShortName(''); setNewClinicAddress(''); setNewClinicPhone(''); setNewClinicIsFundusProvider(false); setNewClinicColorKey('pink'); setShowNewClinicForm(false);
-                  } catch (error) { console.error('Failed to create clinic', error); alert('Failed to create clinic. Please try again.'); }
+                  } catch (error) { console.error('Failed to create clinic', error); showAppAlert('Failed to create clinic. Please try again.'); }
                   finally { setIsAddingClinic(false); }
                 }} className="mb-6 rounded-2xl border border-violet-100 bg-violet-50/40 p-4 md:p-5">
                   <p className="mb-4 text-xs font-black uppercase tracking-widest text-slate-700">Add new clinic</p>
@@ -7353,7 +7969,10 @@ const tomorrowTCATotal = Object.values(
                     <input required value={newClinicId} onChange={e => setNewClinicId(e.target.value)} placeholder="CLINIC_ID" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-violet-500" />
                     <input required value={newClinicName} onChange={e => setNewClinicName(e.target.value)} placeholder="Clinic name" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
                     <input value={newClinicShortName} onChange={e => setNewClinicShortName(e.target.value)} placeholder="Short name" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
-                    <textarea value={newClinicAddress} onChange={e => setNewClinicAddress(e.target.value)} rows={2} placeholder="Full clinic address" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500 xl:col-span-2" />
+                    <div className="grid min-w-0 grid-cols-1 gap-2 xl:col-span-2">
+                      <input value={getAddressLine(newClinicAddress, 0)} onChange={e => setNewClinicAddress(updateAddressLine(newClinicAddress, 0, e.target.value))} placeholder="Address line 1" aria-label="Clinic address line 1" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
+                      <input value={getAddressLine(newClinicAddress, 1)} onChange={e => setNewClinicAddress(updateAddressLine(newClinicAddress, 1, e.target.value))} placeholder="Address line 2" aria-label="Clinic address line 2" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
+                    </div>
                     <input value={newClinicPhone} onChange={e => setNewClinicPhone(e.target.value)} placeholder="Clinic telephone number" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
                     <select value={newClinicColorKey} onChange={e => setNewClinicColorKey(e.target.value as ClinicColorKey)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-500">{CLINIC_COLORS.map(color => <option key={color.key} value={color.key}>{color.label}</option>)}</select>
                     <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600"><input type="checkbox" checked={newClinicIsFundusProvider} onChange={e => setNewClinicIsFundusProvider(e.target.checked)} /> Fundus provider</label>
@@ -7363,16 +7982,16 @@ const tomorrowTCATotal = Object.values(
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
                   {clinics.map(clinic => <div key={clinic.id} className="flex min-w-0 flex-col gap-4 rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 md:p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-lg">
                     <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-slate-900">{clinic.name}</h2><span className="rounded-md bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{clinic.id}</span></div>
-                      <p className="mt-1 text-xs text-slate-400">{clinic.shortName}</p>
-                      {editingClinicAddressId === clinic.id ? <div className="mt-3 flex max-w-2xl flex-col gap-2"><textarea value={clinicAddressDraft} onChange={e => setClinicAddressDraft(e.target.value)} rows={2} placeholder="Full clinic address" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"/><input value={clinicPhoneDraft} onChange={e => setClinicPhoneDraft(e.target.value)} placeholder="Clinic phone" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm sm:max-w-sm"/><div className="flex gap-2"><button type="button" disabled={clinicAddressSaving === clinic.id} onClick={async () => { setClinicAddressSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { address: clinicAddressDraft.trim(), phone: clinicPhoneDraft.trim() }); addActivityLog('Updated Clinic Address and Telephone', clinic.name, currentUser.displayName); setEditingClinicAddressId(null); } catch (error) { console.error('Failed to update clinic address', error); alert('Failed to update clinic address. Please try again.'); } finally { setClinicAddressSaving(null); } }} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50">{clinicAddressSaving === clinic.id ? 'Saving...' : 'Save'}</button><button type="button" disabled={clinicAddressSaving === clinic.id} onClick={() => setEditingClinicAddressId(null)} className="rounded-lg border px-3 py-2 text-xs font-bold">Cancel</button></div></div> : <div className="mt-2 flex flex-wrap items-start gap-3"><div className="min-w-0"><p className="whitespace-pre-line text-xs text-slate-500">{clinic.address || 'Full address not set'}</p><p className="mt-1 text-xs text-slate-500">{clinic.phone ? `Tel: ${clinic.phone}` : 'Telephone not set'}</p></div><button type="button" onClick={() => { setEditingClinicAddressId(clinic.id); setClinicAddressDraft(clinic.address || ''); setClinicPhoneDraft(clinic.phone || ''); }} className="rounded-lg border border-violet-200 px-2 py-1 text-[10px] font-black text-violet-700 hover:bg-violet-50">{clinic.address ? 'Edit address' : 'Add address'}</button></div>}
+                      <div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-slate-900">{clinic.name}</h2></div>
+                      <p className="border-b border-slate-300"></p>
+                      {editingClinicAddressId === clinic.id ? <div className="mt-3 flex max-w-2xl flex-col gap-2"><input value={getAddressLine(clinicAddressDraft, 0)} onChange={e => setClinicAddressDraft(updateAddressLine(clinicAddressDraft, 0, e.target.value))} placeholder="Address line 1" aria-label="Clinic address line 1" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"/><input value={getAddressLine(clinicAddressDraft, 1)} onChange={e => setClinicAddressDraft(updateAddressLine(clinicAddressDraft, 1, e.target.value))} placeholder="Address line 2" aria-label="Clinic address line 2" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"/><input value={clinicPhoneDraft} onChange={e => setClinicPhoneDraft(e.target.value)} placeholder="Clinic phone" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm sm:max-w-sm"/><div className="flex gap-2"><button type="button" disabled={clinicAddressSaving === clinic.id} onClick={async () => { setClinicAddressSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { address: clinicAddressDraft.trim(), phone: clinicPhoneDraft.trim() }); addActivityLog('Updated Clinic Address and Telephone', clinic.name, currentUser.displayName); setEditingClinicAddressId(null); } catch (error) { console.error('Failed to update clinic address', error); showAppAlert('Failed to update clinic address. Please try again.'); } finally { setClinicAddressSaving(null); } }} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50">{clinicAddressSaving === clinic.id ? 'Saving...' : 'Save'}</button><button type="button" disabled={clinicAddressSaving === clinic.id} onClick={() => setEditingClinicAddressId(null)} className="rounded-lg border px-3 py-2 text-xs font-bold">Cancel</button></div></div> : <div className="mt-2 flex flex-wrap items-start gap-3"><div className="min-w-0"><p className="whitespace-pre-line text-xs text-slate-500">{clinic.address || 'Full address not set'}</p><p className="mt-1 text-xs text-slate-500">{clinic.phone ? `Tel: ${clinic.phone}` : 'Telephone not set'}</p></div><button type="button" onClick={() => { setEditingClinicAddressId(clinic.id); setClinicAddressDraft(clinic.address || ''); setClinicPhoneDraft(clinic.phone || ''); }} className="rounded-lg border border-violet-200 px-2 py-1 text-[10px] font-black text-violet-700 hover:bg-violet-50">{clinic.address ? 'Edit address' : 'Add address'}</button></div>}
                     </div>
                     <div className="mt-auto border-t border-slate-100 pt-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-[8px] font-black uppercase text-slate-500">Color</span>
                         <select value={getClinicColor(clinic).key} disabled={clinicColorSaving === clinic.id} onChange={e => handleClinicColorChange(clinic, e.target.value as ClinicColorKey)} className="h-9 min-w-[100px] rounded-lg border border-slate-200 bg-white px-2 text-xs font-bold" aria-label={`Choose color for ${clinic.name}`}>{CLINIC_COLORS.map(color => <option key={color.key} value={color.key}>{color.label}</option>)}</select>
-                        <button type="button" disabled={clinicStatusSaving === clinic.id} onClick={async () => { const nextActive = !clinic.active; setClinicStatusSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { active: nextActive }); addActivityLog(nextActive ? 'Activated Clinic' : 'Deactivated Clinic', clinic.name, currentUser.displayName); } catch (error) { console.error('Failed to update clinic status', error); alert('Failed to update clinic status. Please try again.'); } finally { setClinicStatusSaving(null); } }} className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase transition disabled:opacity-50 ${clinic.active ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`} title="Click to toggle clinic status">{clinicStatusSaving === clinic.id ? 'Saving...' : clinic.active ? 'Active' : 'Inactive'}</button>
-                        <button type="button" disabled={clinicProviderSaving === clinic.id} onClick={async () => { const nextProvider = !clinic.isFundusProvider; setClinicProviderSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { isFundusProvider: nextProvider }); addActivityLog(nextProvider ? 'Enabled Fundus Provider' : 'Changed to Referral Clinic', clinic.name, currentUser.displayName); } catch (error) { console.error('Failed to update clinic provider status', error); alert('Failed to update clinic provider status. Please try again.'); } finally { setClinicProviderSaving(null); } }} className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase transition disabled:cursor-not-allowed disabled:opacity-50 ${clinic.isFundusProvider ? 'bg-blue-50 text-blue-700 hover:bg-blue-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} title={!clinic.active && clinic.isFundusProvider ? 'Inactive provider is unavailable for referral routing' : 'Click to toggle provider/referral status'}>{clinicProviderSaving === clinic.id ? 'Saving...' : clinic.isFundusProvider ? 'Fundus Provider' : 'Referral Clinic'}</button>
+                        <button type="button" disabled={clinicStatusSaving === clinic.id} onClick={async () => { const nextActive = !clinic.active; setClinicStatusSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { active: nextActive }); addActivityLog(nextActive ? 'Activated Clinic' : 'Deactivated Clinic', clinic.name, currentUser.displayName); } catch (error) { console.error('Failed to update clinic status', error); showAppAlert('Failed to update clinic status. Please try again.'); } finally { setClinicStatusSaving(null); } }} className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase transition disabled:opacity-50 ${clinic.active ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`} title="Click to toggle clinic status">{clinicStatusSaving === clinic.id ? 'Saving...' : clinic.active ? 'Active' : 'Inactive'}</button>
+                        <button type="button" disabled={clinicProviderSaving === clinic.id} onClick={async () => { const nextProvider = !clinic.isFundusProvider; setClinicProviderSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { isFundusProvider: nextProvider }); addActivityLog(nextProvider ? 'Enabled Fundus Provider' : 'Changed to Referral Clinic', clinic.name, currentUser.displayName); } catch (error) { console.error('Failed to update clinic provider status', error); showAppAlert('Failed to update clinic provider status. Please try again.'); } finally { setClinicProviderSaving(null); } }} className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase transition disabled:cursor-not-allowed disabled:opacity-50 ${clinic.isFundusProvider ? 'bg-blue-50 text-blue-700 hover:bg-blue-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`} title={!clinic.active && clinic.isFundusProvider ? 'Inactive provider is unavailable for referral routing' : 'Click to toggle provider/referral status'}>{clinicProviderSaving === clinic.id ? 'Saving...' : clinic.isFundusProvider ? 'Fundus Provider' : 'Referral Clinic'}</button>
                         <button type="button" onClick={() => handleDeleteClinic(clinic)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[9px] font-black uppercase text-rose-600 hover:bg-rose-100" title={`Delete ${clinic.name}`}><Trash2 size={13}/>Delete</button>
                       </div>
                     </div>
@@ -7383,8 +8002,11 @@ const tomorrowTCATotal = Object.values(
           ) : activeSuperAdminView === 'users' ? (
             <section className="space-y-5">
               <div className="rounded-3xl border border-slate-200 bg-white p-5 md:p-7 shadow-sm">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">Administration</p><h1 className="mt-1 text-2xl font-black text-slate-900">User Management</h1><p className="mt-1 text-sm text-slate-500">Find accounts by name, staff ID, clinic or role.</p></div>
+                <div className="sa-panel-hero flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="flex min-w-0 items-center gap-3"><div className="sa-panel-icon sa-violet"><Users size={22}/></div><div>
+                    <p className="sa-panel-kicker">Administration</p>
+                    <h1 className="mt-1 text-xl font-black text-slate-900">User Management</h1>
+                  <p className="mt-1 text-xs text-slate-600">Find accounts by name, staff ID, clinic or role.</p></div></div>
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="rounded-2xl bg-violet-50 px-4 py-3"><p className="text-xs font-bold text-violet-700">Registered users</p><p className="text-2xl font-black text-violet-800">{users.length}</p></div>
                     <button
@@ -7477,7 +8099,7 @@ const tomorrowTCATotal = Object.values(
                 <div className="mt-5 flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-bold text-slate-500">{users.filter(u => { const q = superAdminUserSearch.trim().toLowerCase(); const clinic = clinics.find(c => c.id === u.clinicId); const matchesSearch = !q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q); const matchesClinic = superAdminUserClinicFilter === 'ALL' || u.clinicId === superAdminUserClinicFilter; const matchesRole = superAdminUserRoleFilter === 'ALL' || u.role === superAdminUserRoleFilter; return matchesSearch && matchesClinic && matchesRole; }).length} matching accounts</p><button type="button" onClick={() => { setSuperAdminUserSearch(''); setSuperAdminUserClinicFilter('ALL'); setSuperAdminUserRoleFilter('ALL'); setSelectedSuperAdminUsersClinic(null); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Reset filters</button></div>
                 <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   {clinics.filter(c => superAdminUserClinicFilter === 'ALL' || c.id === superAdminUserClinicFilter).map(c => {
-                    return <button type="button" key={c.id} onClick={() => { setSelectedSuperAdminUsersClinic(selectedSuperAdminUsersClinic === c.id ? null : c.id); setSuperAdminUserClinicFilter(selectedSuperAdminUsersClinic === c.id ? 'ALL' : c.id); }} className={`rounded-2xl border p-4 text-left transition ${selectedSuperAdminUsersClinic === c.id || superAdminUserClinicFilter === c.id ? 'border-violet-300 bg-violet-50 ring-1 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/40'}`}><div className="flex items-center justify-between gap-2"><Building2 size={20} className="text-violet-600"/><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{c.id}</span></div><p className="mt-3 font-black text-slate-800">{c.name}</p><p className="mt-1 text-xs text-slate-500">{users.filter(u => u.clinicId === c.id).length} registered {users.filter(u => u.clinicId === c.id).length === 1 ? 'user' : 'users'}</p><p className="mt-3 text-xs font-bold text-violet-700">{superAdminUserClinicFilter === c.id ? 'Viewing this clinic' : 'Click to view users'} →</p></button>;
+                    return <button type="button" key={c.id} onClick={() => { setSelectedSuperAdminUsersClinic(selectedSuperAdminUsersClinic === c.id ? null : c.id); setSuperAdminUserClinicFilter(selectedSuperAdminUsersClinic === c.id ? 'ALL' : c.id); }} className={`rounded-2xl border p-4 text-left transition ${selectedSuperAdminUsersClinic === c.id || superAdminUserClinicFilter === c.id ? 'border-violet-300 bg-violet-50 ring-1 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/40'}`}><div className="flex items-center justify-between gap-2"><Building2 size={20} className="text-violet-600"/></div><p className="mt-3 font-black text-slate-800">{c.name}</p><p className="border-b border-slate-300"></p><p className="mt-1 text-xs text-slate-500">{users.filter(u => u.clinicId === c.id).length} registered {users.filter(u => u.clinicId === c.id).length === 1 ? 'user' : 'users'}</p><p className="mt-3 text-xs font-bold text-violet-700">{superAdminUserClinicFilter === c.id ? 'Viewing this clinic' : 'Click to view users'} →</p></button>;
                   })}
                 </div>
                 {(superAdminUserClinicFilter !== 'ALL' || superAdminUserSearch.trim().length > 0) ? (
@@ -7486,7 +8108,6 @@ const tomorrowTCATotal = Object.values(
                   <div className="divide-y divide-slate-100">
                     {users.filter(u => { const q = superAdminUserSearch.trim().toLowerCase(); const clinic = clinics.find(c => c.id === u.clinicId); const matchesSearch = !q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q); const matchesClinic = superAdminUserClinicFilter === 'ALL' || u.clinicId === superAdminUserClinicFilter; const matchesRole = superAdminUserRoleFilter === 'ALL' || u.role === superAdminUserRoleFilter; return matchesSearch && matchesClinic && matchesRole; }).map(u => { const clinic = clinics.find(c => c.id === u.clinicId); return <div key={u.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex min-w-0 items-center gap-3"><div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${u.role === UserRole.SUPER_ADMIN ? 'bg-slate-900 text-white' : 'bg-violet-50 text-violet-600'}`}>{u.role === UserRole.SUPER_ADMIN ? <Shield size={17}/> : <Users size={17}/>}</div><div className="min-w-0"><p className="truncate font-bold text-slate-800">{u.displayName}</p><p className="truncate text-xs text-slate-500">{u.id}</p></div></div><div className="flex flex-wrap items-center gap-2 sm:justify-end">
   <span className="rounded-lg bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{u.role}</span>
-  <span className="rounded-lg bg-violet-50 px-2 py-1 text-[9px] font-black uppercase text-violet-700">{clinic?.shortName || clinic?.name || u.department || 'Unassigned'}</span>
   {u.id.toLowerCase() !== 'admin' && u.role !== UserRole.SUPER_ADMIN && (
     <div className="flex items-center gap-1 border-l border-slate-200 pl-2 ml-1">
       <button
@@ -7520,7 +8141,7 @@ const tomorrowTCATotal = Object.values(
                   <div className="mt-6 rounded-2xl border border-dashed border-violet-200 bg-violet-50/50 px-5 py-10 text-center">
                     <Building2 size={30} className="mx-auto text-violet-400"/>
                     <p className="mt-3 font-black text-slate-700">Choose a clinic or search for a user</p>
-                    <p className="mt-1 text-sm text-slate-500">User accounts will appear here after you select a clinic card or enter a name or staff ID in the search box.</p>
+                    <p className="mt-1 text-xs text-slate-500">User accounts will appear here after you select a clinic card or enter a name or staff ID in the search box.</p>
                   </div>
                 )}
               </div>
@@ -7531,7 +8152,9 @@ const tomorrowTCATotal = Object.values(
                 <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:p-7">
                   <div className="flex items-start gap-4">
                     <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-lg shadow-emerald-200"><Network size={24}/></div>
-                    <div><p className="text-[10px] font-black uppercase tracking-[.2em] text-emerald-700">Network administration</p><h1 className="mt-1 text-2xl font-black text-slate-900 md:text-3xl">Fundus Network</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Urus klinik penyedia fundus dan tetapkan klinik rujukan yang boleh menghantar pesakit. Perubahan disimpan terus ke sistem.</p></div>
+                    <div><p className="text-[10px] font-black uppercase tracking-[.2em] text-emerald-700">Network administration</p>
+                    <h1 className="mt-1 text-2xl font-black text-slate-900 md:text-3xl">Fundus Network</h1>
+                    <p className="mt-2 max-w text-xs leading-6 text-slate-600">Urus klinik penyedia fundus dan tetapkan klinik rujukan yang boleh menghantar pesakit.</p></div>
                   </div>
                   <div className="rounded-2xl border border-emerald-100 bg-white/90 px-4 py-3"><p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Active providers</p><p className="mt-1 text-3xl font-black text-emerald-700">{getFundusProviderClinics(clinics).length}</p></div>
                 </div>
@@ -7544,21 +8167,21 @@ const tomorrowTCATotal = Object.values(
               </div>
 
               <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
-                <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.18em] text-emerald-600">01 · Provider setup</p><h2 className="mt-1 text-lg font-black text-slate-900">Fundus Provider Clinics</h2><p className="mt-1 text-sm text-slate-500">Aktifkan atau nyahaktifkan perkhidmatan fundus bagi setiap klinik aktif.</p></div><span className="w-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-emerald-700">{getFundusProviderClinics(clinics).length} active providers</span></div>
+                <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.18em] text-emerald-600">01 · Provider setup</p><h2 className="mt-1 text-lg font-black text-slate-900">Fundus Provider Clinics</h2><p className="mt-1 text-xs text-slate-500">Aktifkan atau nyahaktifkan perkhidmatan fundus bagi setiap klinik aktif.</p></div><span className="w-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-emerald-700">{getFundusProviderClinics(clinics).length} active providers</span></div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
                   {clinics.filter(c => c.active).map(clinic => <article key={clinic.id} className="group rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md">
-                    <div className="flex items-start gap-3"><div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><Building2 size={21}/></div><div className="min-w-0 flex-1"><h3 className="font-black leading-snug text-slate-900">{clinic.name}</h3><p className="mt-1 truncate text-[10px] font-bold uppercase tracking-widest text-slate-400">{clinic.shortName} · {clinic.id}</p></div></div>
-                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-slate-100 pt-3"><span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}><span className={`h-1.5 w-1.5 rounded-full ${clinic.isFundusProvider ? 'bg-emerald-500' : 'bg-slate-400'}`}/>{clinic.isFundusProvider ? 'Provider enabled' : 'Referral clinic'}</span>
-                    <button type="button" disabled={fundusNetworkSaving === `provider:${clinic.id}`} onClick={async () => { const nextValue = !clinic.isFundusProvider; if (!nextValue && getFundusProviderClinics(clinics).length <= 1) { alert('At least one active fundus provider clinic is required.'); return; } const savingKey = `provider:${clinic.id}`; setFundusNetworkSaving(savingKey); const previousClinics = clinics; pendingFundusProviderRef.current[clinic.id] = nextValue; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, isFundusProvider: nextValue } : !nextValue ? { ...c, fundusProviderClinicIds: (c.fundusProviderClinicIds || []).filter(id => id !== clinic.id) } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { isFundusProvider: nextValue }, { merge: true }); if (!nextValue) { const referralClinics = previousClinics.filter(c => c.active && !c.isFundusProvider && c.id !== clinic.id); await Promise.all(referralClinics.filter(c => (c.fundusProviderClinicIds || []).includes(clinic.id)).map(c => setDoc(doc(db, 'clinics', c.id), { fundusProviderClinicIds: (c.fundusProviderClinicIds || []).filter(id => id !== clinic.id) }, { merge: true }))); } addActivityLog(nextValue ? 'Enabled Fundus Provider' : 'Disabled Fundus Provider', `${clinic.name} (${clinic.id})`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus provider status', error); delete pendingFundusProviderRef.current[clinic.id]; setClinics(previousClinics); const code = (error as any)?.code || 'unknown'; alert(`Failed to update ${clinic.shortName}. Firestore error: ${code}`); } finally { setFundusNetworkSaving(null); } }} className={`rounded-xl px-3 py-2 text-[10px] font-black transition disabled:cursor-wait disabled:opacity-50 ${clinic.isFundusProvider ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>{fundusNetworkSaving === `provider:${clinic.id}` ? 'Saving…' : clinic.isFundusProvider ? 'Turn off' : 'Enable provider'}</button></div>
+                    <div className="flex items-start gap-3"><div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><Building2 size={21}/></div><div className="min-w-0 flex-1"><h3 className="font-black leading-snug text-slate-900">{clinic.name}</h3></div></div>
+                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-slate-300 pt-3"><span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}><span className={`h-1.5 w-1.5 rounded-full ${clinic.isFundusProvider ? 'bg-emerald-500' : 'bg-slate-400'}`}/>{clinic.isFundusProvider ? 'Provider enabled' : 'Referral clinic'}</span>
+                    <button type="button" disabled={fundusNetworkSaving === `provider:${clinic.id}`} onClick={async () => { const nextValue = !clinic.isFundusProvider; if (!nextValue && getFundusProviderClinics(clinics).length <= 1) { showAppAlert('At least one active fundus provider clinic is required.'); return; } const savingKey = `provider:${clinic.id}`; setFundusNetworkSaving(savingKey); const previousClinics = clinics; pendingFundusProviderRef.current[clinic.id] = nextValue; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, isFundusProvider: nextValue } : !nextValue ? { ...c, fundusProviderClinicIds: (c.fundusProviderClinicIds || []).filter(id => id !== clinic.id) } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { isFundusProvider: nextValue }, { merge: true }); if (!nextValue) { const referralClinics = previousClinics.filter(c => c.active && !c.isFundusProvider && c.id !== clinic.id); await Promise.all(referralClinics.filter(c => (c.fundusProviderClinicIds || []).includes(clinic.id)).map(c => setDoc(doc(db, 'clinics', c.id), { fundusProviderClinicIds: (c.fundusProviderClinicIds || []).filter(id => id !== clinic.id) }, { merge: true }))); } addActivityLog(nextValue ? 'Enabled Fundus Provider' : 'Disabled Fundus Provider', `${clinic.name} (${clinic.id})`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus provider status', error); delete pendingFundusProviderRef.current[clinic.id]; setClinics(previousClinics); const code = (error as any)?.code || 'unknown'; showAppAlert(`Failed to update ${clinic.shortName}. Firestore error: ${code}`); } finally { setFundusNetworkSaving(null); } }} className={`rounded-xl px-3 py-2 text-[10px] font-black transition disabled:cursor-wait disabled:opacity-50 ${clinic.isFundusProvider ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>{fundusNetworkSaving === `provider:${clinic.id}` ? 'Saving…' : clinic.isFundusProvider ? 'Turn off' : 'Enable provider'}</button></div>
                   </article>)}
                   {clinics.filter(c => c.active).length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">No active clinics available.</div>}
                 </div>
               </section>
 
               <section className="rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-50/70 to-white p-5 shadow-sm md:p-6">
-                <div className="mb-5"><p className="text-[10px] font-black uppercase tracking-[.18em] text-blue-600">02 · Referral setup</p><h2 className="mt-1 text-lg font-black text-slate-900">Referral Routing</h2><p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">Pilih satu atau lebih klinik penyedia fundus bagi setiap klinik rujukan. Hanya provider yang aktif tersedia untuk dipilih.</p></div>
+                <div className="mb-5"><p className="text-[10px] font-black uppercase tracking-[.18em] text-blue-600">02 · Referral setup</p><h2 className="mt-1 text-lg font-black text-slate-900">Referral Routing</h2><p className="mt-1 max-w text-xs leading-6 text-slate-500">Pilih satu atau lebih klinik penyedia fundus bagi setiap klinik rujukan. Hanya provider yang aktif tersedia untuk dipilih.</p></div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                  {clinics.filter(c => c.active && !c.isFundusProvider).map(clinic => { const providers = getFundusProviderClinics(clinics); const selectedProviders = clinic.fundusProviderClinicIds || []; return <article key={clinic.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/80 p-4"><div className="flex items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Network size={19}/></div><div><h3 className="font-black text-slate-900">{clinic.name}</h3><p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">{clinic.shortName} · referral clinic</p></div></div><span className="shrink-0 rounded-full bg-blue-100 px-2.5 py-1 text-[9px] font-black uppercase text-blue-700">{selectedProviders.length} selected</span></div><div className="space-y-2 p-4">{providers.length === 0 ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">No active fundus provider is available. Enable a provider above first.</div> : providers.map(provider => { const checked = selectedProviders.includes(provider.id); return <label key={provider.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition ${checked ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-slate-50'} ${fundusNetworkSaving === `routing:${clinic.id}:${provider.id}` ? 'opacity-60' : ''}`}><input type="checkbox" checked={checked} disabled={!provider.active || fundusNetworkSaving === `routing:${clinic.id}:${provider.id}`} onChange={async e => { const savingKey = `routing:${clinic.id}:${provider.id}`; const checkedNow = e.currentTarget.checked; setFundusNetworkSaving(savingKey); const previousQueue = fundusRoutingWriteQueueRef.current[clinic.id] || Promise.resolve(); const queuedWrite = previousQueue.then(async () => { const latestClinic = clinicsRef.current.find(c => c.id === clinic.id); const currentProviders = latestClinic?.fundusProviderClinicIds || []; const nextProviders = checkedNow ? Array.from(new Set([...currentProviders, provider.id])) : currentProviders.filter(id => id !== provider.id); pendingFundusRoutingRef.current[clinic.id] = nextProviders; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, fundusProviderClinicIds: nextProviders } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { fundusProviderClinicIds: nextProviders }, { merge: true }); addActivityLog('Updated Fundus Routing', `${clinic.shortName} → ${nextProviders.length ? nextProviders.map(id => getClinicById(clinicsRef.current, id)?.shortName || id).join(', ') : 'No provider selected'}`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus routing', error); delete pendingFundusRoutingRef.current[clinic.id]; const code = (error as any)?.code || 'unknown'; alert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`); } }); const queuedSafe = queuedWrite.catch(() => undefined); fundusRoutingWriteQueueRef.current[clinic.id] = queuedSafe; try { await queuedWrite; } finally { if (fundusRoutingWriteQueueRef.current[clinic.id] === queuedSafe) { delete fundusRoutingWriteQueueRef.current[clinic.id]; setFundusNetworkSaving(null); } } }} className="h-4 w-4 accent-blue-600"/><div className="min-w-0 flex-1"><p className={`text-sm font-bold ${checked ? 'text-blue-800' : 'text-slate-700'}`}>{provider.name}</p><p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">{provider.shortName} · {provider.id}</p></div>{checked && <CheckCircle2 size={18} className="shrink-0 text-blue-600"/>}</label>; })}</div></article>; })}
+                  {clinics.filter(c => c.active && !c.isFundusProvider).map(clinic => { const providers = getFundusProviderClinics(clinics); const selectedProviders = clinic.fundusProviderClinicIds || []; return <article key={clinic.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/80 p-4"><div className="flex items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Network size={19}/></div><div><h3 className="font-black text-slate-900">{clinic.name}</h3><p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">referral clinic</p></div></div><span className="shrink-0 rounded-full bg-blue-100 px-2.5 py-1 text-[9px] font-black uppercase text-blue-700">{selectedProviders.length} selected</span></div><div className="space-y-2 p-4">{providers.length === 0 ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">No active fundus provider is available. Enable a provider above first.</div> : providers.map(provider => { const checked = selectedProviders.includes(provider.id); return <label key={provider.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition ${checked ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-slate-50'} ${fundusNetworkSaving === `routing:${clinic.id}:${provider.id}` ? 'opacity-60' : ''}`}><input type="checkbox" checked={checked} disabled={!provider.active || fundusNetworkSaving === `routing:${clinic.id}:${provider.id}`} onChange={async e => { const savingKey = `routing:${clinic.id}:${provider.id}`; const checkedNow = e.currentTarget.checked; setFundusNetworkSaving(savingKey); const previousQueue = fundusRoutingWriteQueueRef.current[clinic.id] || Promise.resolve(); const queuedWrite = previousQueue.then(async () => { const latestClinic = clinicsRef.current.find(c => c.id === clinic.id); const currentProviders = latestClinic?.fundusProviderClinicIds || []; const nextProviders = checkedNow ? Array.from(new Set([...currentProviders, provider.id])) : currentProviders.filter(id => id !== provider.id); pendingFundusRoutingRef.current[clinic.id] = nextProviders; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, fundusProviderClinicIds: nextProviders } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { fundusProviderClinicIds: nextProviders }, { merge: true }); addActivityLog('Updated Fundus Routing', `${clinic.shortName} → ${nextProviders.length ? nextProviders.map(id => getClinicById(clinicsRef.current, id)?.shortName || id).join(', ') : 'No provider selected'}`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus routing', error); delete pendingFundusRoutingRef.current[clinic.id]; const code = (error as any)?.code || 'unknown'; showAppAlert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`); } }); const queuedSafe = queuedWrite.catch(() => undefined); fundusRoutingWriteQueueRef.current[clinic.id] = queuedSafe; try { await queuedWrite; } finally { if (fundusRoutingWriteQueueRef.current[clinic.id] === queuedSafe) { delete fundusRoutingWriteQueueRef.current[clinic.id]; setFundusNetworkSaving(null); } } }} className="h-4 w-4 accent-blue-600"/><div className="min-w-0 flex-1"><p className={`text-sm font-bold ${checked ? 'text-blue-800' : 'text-slate-700'}`}>{provider.name}</p><p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">{provider.shortName} · {provider.id}</p></div>{checked && <CheckCircle2 size={18} className="shrink-0 text-blue-600"/>}</label>; })}</div></article>; })}
                   {clinics.filter(c => c.active && !c.isFundusProvider).length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-blue-200 bg-white p-8 text-center"><CheckCircle2 size={28} className="mx-auto text-emerald-500"/><p className="mt-2 font-bold text-slate-700">All active clinics are fundus providers</p><p className="mt-1 text-sm text-slate-500">No referral routing is required until a clinic is set as a referral clinic.</p></div>}
                 </div>
               </section>
@@ -7567,7 +8190,7 @@ const tomorrowTCATotal = Object.values(
                 <div className="mb-5">
                   <p className="text-[10px] font-black uppercase tracking-[.18em] text-fuchsia-600">03 · Specialist referral setup</p>
                   <h2 className="mt-1 text-lg font-black text-slate-900">Specialist Referral Routing</h2>
-                  <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">Tandakan klinik yang dibenarkan menghantar rujukan kepada setiap klinik pakar. Hanya klinik yang dipilih akan nampak klinik pakar tersebut dalam pilihan rujukan SINAR.</p>
+                  <p className="mt-1 max-w text-xs leading-6 text-slate-500">Tandakan klinik yang dibenarkan menghantar rujukan kepada setiap klinik pakar. Hanya klinik yang dipilih akan nampak klinik pakar tersebut dalam pilihan rujukan SINAR.</p>
                 </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
                   {specialistClinics.filter(c => c.active).map(specialistClinic => {
@@ -7577,7 +8200,7 @@ const tomorrowTCATotal = Object.values(
                         <div className="flex items-start justify-between gap-2 border-b border-slate-100 bg-fuchsia-50/70 p-3">
                           <div className="flex min-w-0 items-start gap-2">
                             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-fuchsia-100 text-fuchsia-700"><Building2 size={18}/></div>
-                            <div className="min-w-0"><h3 className="text-sm font-black leading-snug text-slate-900">{specialistClinic.name}</h3><p className="mt-1 truncate text-[9px] font-bold uppercase tracking-wider text-slate-400">{specialistClinic.shortName || specialistClinic.id}</p></div>
+                            <div className="min-w-0"><h3 className="text-sm font-black leading-snug text-slate-900">{specialistClinic.name}</h3></div>
                           </div>
                           <span className="shrink-0 rounded-full bg-fuchsia-100 px-2 py-1 text-[9px] font-black text-fuchsia-700">{authorizedClinics.length} selected</span>
                         </div>
@@ -7600,7 +8223,7 @@ const tomorrowTCATotal = Object.values(
                                   } catch (error) {
                                     console.error('Failed to update specialist referral routing', error);
                                     setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, specialistClinicIds: currentIds } : c));
-                                    alert(`Gagal menyimpan routing untuk ${clinic.shortName}. Sila cuba lagi.`);
+                                    showAppAlert(`Gagal menyimpan routing untuk ${clinic.shortName}. Sila cuba lagi.`);
                                   } finally {
                                     setFundusNetworkSaving(null);
                                   }
@@ -7664,7 +8287,7 @@ const tomorrowTCATotal = Object.values(
             <section className="space-y-5">
               <div className="overflow-hidden rounded-3xl border border-amber-100 bg-gradient-to-br from-amber-50 via-white to-orange-50 shadow-sm">
                 <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between md:p-7">
-                  <div className="flex items-start gap-4"><div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-500 text-white shadow-lg shadow-amber-200"><Activity size={24}/></div><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-amber-700">System audit trail</p><h1 className="mt-1 text-2xl font-black text-slate-900 md:text-3xl">Activity Logs</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Semak aktiviti yang direkodkan merentas klinik. Gunakan carian dan penapis untuk mencari rekod dengan lebih cepat.</p></div></div>
+                  <div className="flex items-start gap-4"><div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-500 text-white shadow-lg shadow-amber-200"><Activity size={24}/></div><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-amber-700">System audit trail</p><h1 className="mt-1 text-2xl font-black text-slate-900 md:text-3xl">Activity Logs</h1><p className="mt-2 max-w text-xs leading-6 text-slate-600">Semak aktiviti yang direkodkan merentas klinik. Gunakan carian dan penapis untuk mencari rekod dengan lebih cepat.</p></div></div>
                   <div className="rounded-2xl border border-amber-100 bg-white/90 px-5 py-3"><p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Matching records</p><p className="mt-1 text-2xl font-black text-amber-700">{activityLogs.filter(log => { const q = activityLogSearch.trim().toLowerCase(); const matchesSearch = !q || [log.action, log.patient, log.by, log.clinicId || ''].some(v => String(v).toLowerCase().includes(q)); const matchesAction = activityLogActionFilter === 'ALL' || log.action === activityLogActionFilter; const matchesClinic = activityLogClinicFilter === 'ALL' || (log.clinicId || 'LEGACY') === activityLogClinicFilter; return matchesSearch && matchesAction && matchesClinic; }).length}</p><p className="text-xs text-slate-500">of {visibleActivityLogs.length} visible records</p></div>
                 </div>
               </div>
@@ -7682,112 +8305,170 @@ const tomorrowTCATotal = Object.values(
               </div>
             </section>
           ) : activeSuperAdminView === 'specialistClinics' ? (
-            <section className="space-y-4 sm:space-y-5">
-              <div className="rounded-2xl sm:rounded-3xl border border-violet-100 bg-white p-3 sm:p-5 md:p-7 shadow-sm min-w-0">
-                <div className="flex flex-col gap-3 sm:gap-4 md:flex-row md:items-center md:justify-between">
-                  <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">Specialist network</p><h1 className="mt-1 text-2xl font-black text-slate-900">Specialist Clinics</h1><p className="mt-2 text-sm text-slate-500">Manage specialist referral destinations separately from screening clinics.</p></div>
-                  <button type="button" onClick={() => { if (showSpecialistClinicForm) { setShowSpecialistClinicForm(false); setEditingSpecialistClinicId(null); } else { setEditingSpecialistClinicId(null); setSpecialistClinicIdInput(''); setSpecialistClinicNameInput(''); setSpecialistClinicShortNameInput(''); setSpecialistClinicAddressInput(''); setSpecialistClinicPhoneInput(''); setShowSpecialistClinicForm(true); } }} className="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white hover:bg-violet-700"><Plus size={16}/>{showSpecialistClinicForm ? 'Cancel' : 'Add Specialist Clinic'}</button>
-                </div>
-                {showSpecialistClinicForm && !editingSpecialistClinicId && <form className="mb-5 mt-4 sm:mt-5 rounded-2xl border border-violet-100 bg-violet-50/40 p-3 sm:p-4 md:p-5 min-w-0" onSubmit={async e => { e.preventDefault(); if (currentUser?.role !== UserRole.SUPER_ADMIN) { alert('Only Super Admin can manage specialist clinics.'); return; } const id = specialistClinicIdInput.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_'); const name = specialistClinicNameInput.trim(); if (!id || !name) return; if (!editingSpecialistClinicId && specialistClinics.some(c => c.id === id)) { alert('Specialist Clinic ID already exists.'); return; } setSpecialistSaving(true); try { const payload: Omit<SpecialistClinic, 'id'> = { name, shortName: specialistClinicShortNameInput.trim() || name, address: specialistClinicAddressInput.trim(), phone: specialistClinicPhoneInput.trim(), active: editingSpecialistClinicId ? (specialistClinics.find(c => c.id === editingSpecialistClinicId)?.active ?? true) : true, createdAt: editingSpecialistClinicId ? (specialistClinics.find(c => c.id === editingSpecialistClinicId)?.createdAt || Date.now()) : Date.now() }; await setDoc(doc(db, 'specialistClinics', editingSpecialistClinicId || id), payload, { merge: !!editingSpecialistClinicId }); addActivityLog(editingSpecialistClinicId ? 'Updated Specialist Clinic' : 'Created Specialist Clinic', `${name} (${editingSpecialistClinicId || id})`, currentUser.displayName); setShowSpecialistClinicForm(false); setEditingSpecialistClinicId(null); setSpecialistClinicIdInput(''); setSpecialistClinicNameInput(''); setSpecialistClinicShortNameInput(''); setSpecialistClinicAddressInput(''); setSpecialistClinicPhoneInput(''); } catch (error) { console.error('Failed to save specialist clinic', error); alert('Could not save specialist clinic. Check Firestore permissions and try again.'); } finally { setSpecialistSaving(false); } }}>
-                  <p className="mb-4 text-xs font-black uppercase tracking-widest text-slate-700">{editingSpecialistClinicId ? 'Edit Specialist Clinic' : 'Add New Specialist Clinic'}</p>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    <label className="block text-xs font-bold text-slate-600">Clinic ID<input required disabled={!!editingSpecialistClinicId} value={specialistClinicIdInput} onChange={e => setSpecialistClinicIdInput(e.target.value)} placeholder="SPECIALIST_CLINIC_ID" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-violet-500 disabled:bg-slate-100"/></label>
-                    <label className="block text-xs font-bold text-slate-600">Clinic name<input required value={specialistClinicNameInput} onChange={e => setSpecialistClinicNameInput(e.target.value)} placeholder="Specialist clinic / hospital name" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/></label>
-                    <label className="block text-xs font-bold text-slate-600">Short name<input value={specialistClinicShortNameInput} onChange={e => setSpecialistClinicShortNameInput(e.target.value)} placeholder="Short name" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/></label>
-                    <label className="block text-xs font-bold text-slate-600 xl:col-span-2">Full clinic address<textarea value={specialistClinicAddressInput} onChange={e => setSpecialistClinicAddressInput(e.target.value)} rows={2} placeholder="Full clinic address" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/></label>
-                    <label className="block text-xs font-bold text-slate-600">Clinic telephone number<input value={specialistClinicPhoneInput} onChange={e => setSpecialistClinicPhoneInput(e.target.value)} placeholder="Clinic telephone number" className="mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/></label>
-                    <div className="flex w-full flex-col-reverse gap-2 pt-1 sm:flex-row sm:items-center sm:justify-end xl:col-span-3"><button type="button" onClick={() => { setShowSpecialistClinicForm(false); setEditingSpecialistClinicId(null); setSpecialistClinicIdInput(''); setSpecialistClinicNameInput(''); setSpecialistClinicShortNameInput(''); setSpecialistClinicAddressInput(''); setSpecialistClinicPhoneInput(''); }} className="w-full sm:w-auto rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={specialistSaving} className="w-full sm:w-auto rounded-xl bg-violet-600 px-5 py-2.5 text-xs font-black uppercase tracking-widest text-white hover:bg-violet-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : editingSpecialistClinicId ? 'Save changes' : 'Save clinic'}</button></div>
+            <section className="space-y-6">
+              <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-7">
+                <div className="sa-panel-hero mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="sa-panel-icon sa-cyan"><Building2 size={22}/></div>
+                    <div>
+                      <p className="sa-panel-kicker">Specialist network</p>
+                      <h1 className="text-xl font-black text-slate-900">Specialist Clinics</h1>
+                      <p className="mt-1 text-xs font-bold tracking-wider text-slate-500">Specialist clinic master · {specialistClinics.length} registered clinics</p>
+                    </div>
                   </div>
-                </form>}
-                <div className="mt-4 sm:mt-5 flex min-w-0 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5"><Search size={16} className="shrink-0 text-slate-400"/><input value={specialistClinicSearch} onChange={e => setSpecialistClinicSearch(e.target.value)} placeholder="Search clinic ID, name, address..." className="w-full min-w-0 bg-transparent text-sm outline-none"/></div>
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 2xl:grid-cols-3">
-                  {specialistClinics.filter(c => [c.id, c.name, c.shortName || '', c.address || '', c.phone || ''].some(v => v.toLowerCase().includes(specialistClinicSearch.trim().toLowerCase()))).map(clinic => (
-                    <article key={clinic.id} className="flex min-w-0 flex-col gap-4 rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-md sm:p-5">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-start gap-2">
-                          <h3 className="break-words font-black leading-snug text-slate-900">{clinic.name}</h3>
-                          <span className="rounded-md bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{clinic.shortName || clinic.id}</span>
-                        </div>
-                        <p className="mt-1 break-all text-xs text-slate-400">{clinic.id}</p>
-                        <p className="mt-2 whitespace-pre-line break-words text-xs text-slate-500">{clinic.address || 'Full address not set'}</p>
-                        <p className="mt-1 break-words text-xs text-slate-500">{clinic.phone ? `Tel: ${clinic.phone}` : 'Telephone not set'}</p>
+                  <button type="button" onClick={() => {
+                    if (showSpecialistClinicForm) {
+                      setShowSpecialistClinicForm(false);
+                      setSpecialistClinicIdInput('');
+                      setSpecialistClinicNameInput('');
+                      setSpecialistClinicShortNameInput('');
+                      setSpecialistClinicAddressInput('');
+                      setSpecialistClinicPhoneInput('');
+                    } else {
+                      setEditingSpecialistClinicId(null);
+                      setSpecialistClinicIdInput('');
+                      setSpecialistClinicNameInput('');
+                      setSpecialistClinicShortNameInput('');
+                      setSpecialistClinicAddressInput('');
+                      setSpecialistClinicPhoneInput('');
+                      setShowSpecialistClinicForm(true);
+                    }
+                  }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white hover:bg-violet-700">
+                    <Plus size={16}/>{showSpecialistClinicForm ? 'Cancel' : 'Add clinic'}
+                  </button>
+                </div>
+
+                {showSpecialistClinicForm && (
+                  <form onSubmit={async e => {
+                    e.preventDefault();
+                    if (currentUser?.role !== UserRole.SUPER_ADMIN) { showAppAlert('Only Super Admin can manage specialist clinics.'); return; }
+                    const id = specialistClinicIdInput.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+                    const name = specialistClinicNameInput.trim();
+                    if (!id || !name) return;
+                    if (specialistClinics.some(c => c.id === id)) { showAppAlert('Specialist Clinic ID already exists.'); return; }
+                    setSpecialistSaving(true);
+                    try {
+                      const payload: Omit<SpecialistClinic, 'id'> = {
+                        name,
+                        shortName: specialistClinicShortNameInput.trim() || name,
+                        address: specialistClinicAddressInput.trim(),
+                        phone: specialistClinicPhoneInput.trim(),
+                        active: true,
+                        createdAt: Date.now()
+                      };
+                      await setDoc(doc(db, 'specialistClinics', id), payload);
+                      addActivityLog('Created Specialist Clinic', `${name} (${id})`, currentUser.displayName);
+                      setSpecialistClinicIdInput('');
+                      setSpecialistClinicNameInput('');
+                      setSpecialistClinicShortNameInput('');
+                      setSpecialistClinicAddressInput('');
+                      setSpecialistClinicPhoneInput('');
+                      setShowSpecialistClinicForm(false);
+                    } catch (error) {
+                      console.error('Failed to create specialist clinic', error);
+                      showAppAlert('Could not save specialist clinic. Check Firestore permissions and try again.');
+                    } finally { setSpecialistSaving(false); }
+                  }} className="mb-6 rounded-2xl border border-violet-100 bg-violet-50/40 p-4 md:p-5">
+                    <p className="mb-4 text-xs font-black uppercase tracking-widest text-slate-700">Add new specialist clinic</p>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      <input required value={specialistClinicIdInput} onChange={e => setSpecialistClinicIdInput(e.target.value)} placeholder="CLINIC_ID" aria-label="Specialist clinic ID" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-violet-500"/>
+                      <input required value={specialistClinicNameInput} onChange={e => setSpecialistClinicNameInput(e.target.value)} placeholder="Specialist clinic / hospital name" aria-label="Specialist clinic name" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                      <input value={specialistClinicShortNameInput} onChange={e => setSpecialistClinicShortNameInput(e.target.value)} placeholder="Short name" aria-label="Short name" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                      <div className="grid min-w-0 grid-cols-1 gap-2 xl:col-span-2">
+                        <input value={getAddressLine(specialistClinicAddressInput, 0)} onChange={e => setSpecialistClinicAddressInput(updateAddressLine(specialistClinicAddressInput, 0, e.target.value))} placeholder="Address line 1" aria-label="Address line 1" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                        <input value={getAddressLine(specialistClinicAddressInput, 1)} onChange={e => setSpecialistClinicAddressInput(updateAddressLine(specialistClinicAddressInput, 1, e.target.value))} placeholder="Address line 2" aria-label="Address line 2" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
                       </div>
-                      {editingSpecialistClinicId === clinic.id && (
-                        <form className="rounded-xl border border-violet-200 bg-violet-50/70 p-3 sm:p-4" onSubmit={async e => {
-                          e.preventDefault();
-                          if (currentUser?.role !== UserRole.SUPER_ADMIN) { alert('Only Super Admin can manage specialist clinics.'); return; }
-                          const id = specialistClinicIdInput.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
-                          const name = specialistClinicNameInput.trim();
-                          if (!id || !name) return;
-                          setSpecialistSaving(true);
-                          try {
-                            const payload: Omit<SpecialistClinic, 'id'> = {
-                              name,
-                              shortName: specialistClinicShortNameInput.trim() || name,
-                              address: specialistClinicAddressInput.trim(),
-                              phone: specialistClinicPhoneInput.trim(),
-                              active: clinic.active,
-                              createdAt: clinic.createdAt || Date.now()
-                            };
-                            await setDoc(doc(db, 'specialistClinics', clinic.id), payload, { merge: true });
-                            addActivityLog('Updated Specialist Clinic', `${name} (${clinic.id})`, currentUser.displayName);
-                            setEditingSpecialistClinicId(null);
-                            setSpecialistClinicIdInput('');
-                            setSpecialistClinicNameInput('');
-                            setSpecialistClinicShortNameInput('');
-                            setSpecialistClinicAddressInput('');
-                            setSpecialistClinicPhoneInput('');
-                          } catch (error) {
-                            console.error('Failed to save specialist clinic', error);
-                            alert('Could not save specialist clinic. Check Firestore permissions and try again.');
-                          } finally {
-                            setSpecialistSaving(false);
-                          }
-                        }}>
-                          <p className="mb-3 text-[10px] font-black uppercase tracking-widest text-violet-700">Edit specialist clinic</p>
-                          <div className="grid grid-cols-1 gap-3">
-                            <label className="block text-xs font-bold text-slate-600">Clinic ID
-                              <input value={clinic.id} disabled className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2.5 text-sm font-bold text-slate-500"/>
-                            </label>
-                            <label className="block text-xs font-bold text-slate-600">Clinic name
-                              <input required value={specialistClinicNameInput} onChange={e => setSpecialistClinicNameInput(e.target.value)} placeholder="Specialist clinic / hospital name" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
-                            </label>
-                            <label className="block text-xs font-bold text-slate-600">Short name
-                              <input value={specialistClinicShortNameInput} onChange={e => setSpecialistClinicShortNameInput(e.target.value)} placeholder="Short name" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
-                            </label>
-                            <label className="block text-xs font-bold text-slate-600">Full clinic address
-                              <textarea value={specialistClinicAddressInput} onChange={e => setSpecialistClinicAddressInput(e.target.value)} rows={2} placeholder="Full clinic address" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
-                            </label>
-                            <label className="block text-xs font-bold text-slate-600">Clinic telephone number
-                              <input value={specialistClinicPhoneInput} onChange={e => setSpecialistClinicPhoneInput(e.target.value)} placeholder="Clinic telephone number" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
-                            </label>
-                            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
-                              <button type="button" onClick={() => { setEditingSpecialistClinicId(null); setSpecialistClinicIdInput(''); setSpecialistClinicNameInput(''); setSpecialistClinicShortNameInput(''); setSpecialistClinicAddressInput(''); setSpecialistClinicPhoneInput(''); }} className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
-                              <button type="submit" disabled={specialistSaving} className="rounded-lg bg-violet-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white hover:bg-violet-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : 'Save changes'}</button>
+                      <input value={specialistClinicPhoneInput} onChange={e => setSpecialistClinicPhoneInput(e.target.value)} placeholder="Clinic telephone number" aria-label="Clinic telephone number" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                      <button type="submit" disabled={specialistSaving} className="rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white hover:bg-violet-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : 'Save clinic'}</button>
+                    </div>
+                  </form>
+                )}
+
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+                  {specialistClinics.map(clinic => (
+                    <article key={clinic.id} className="flex min-w-0 flex-col gap-4 rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-violet-200 hover:shadow-lg md:p-5">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="font-black text-slate-900">{clinic.name}</h2>
+                        </div>
+                        <p className="border-b border-slate-300"></p>
+                        {editingSpecialistClinicAddressId === clinic.id ? (
+                          <div className="mt-3 flex max-w-2xl flex-col gap-2">
+                            <input value={getAddressLine(specialistClinicAddressDraft, 0)} onChange={e => setSpecialistClinicAddressDraft(updateAddressLine(specialistClinicAddressDraft, 0, e.target.value))} placeholder="Address line 1" aria-label="Specialist clinic address line 1" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"/>
+                            <input value={getAddressLine(specialistClinicAddressDraft, 1)} onChange={e => setSpecialistClinicAddressDraft(updateAddressLine(specialistClinicAddressDraft, 1, e.target.value))} placeholder="Address line 2" aria-label="Specialist clinic address line 2" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"/>
+                            <input value={specialistClinicPhoneDraft} onChange={e => setSpecialistClinicPhoneDraft(e.target.value)} placeholder="Clinic phone" aria-label="Specialist clinic phone" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm sm:max-w-sm"/>
+                            <div className="flex gap-2">
+                              <button type="button" disabled={specialistClinicAddressSaving === clinic.id} onClick={async () => {
+                                setSpecialistClinicAddressSaving(clinic.id);
+                                try {
+                                  await updateDoc(doc(db, 'specialistClinics', clinic.id), { address: specialistClinicAddressDraft.trim(), phone: specialistClinicPhoneDraft.trim() });
+                                  addActivityLog('Updated Specialist Clinic Address and Telephone', clinic.name, currentUser?.displayName || 'Super Admin');
+                                  setEditingSpecialistClinicAddressId(null);
+                                } catch (error) {
+                                  console.error('Failed to update specialist clinic address', error);
+                                  showAppAlert('Failed to update specialist clinic address. Please try again.');
+                                } finally { setSpecialistClinicAddressSaving(null); }
+                              }} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50">{specialistClinicAddressSaving === clinic.id ? 'Saving...' : 'Save'}</button>
+                              <button type="button" disabled={specialistClinicAddressSaving === clinic.id} onClick={() => setEditingSpecialistClinicAddressId(null)} className="rounded-lg border px-3 py-2 text-xs font-bold">Cancel</button>
                             </div>
                           </div>
-                        </form>
-                      )}
+                        ) : (
+                          <div className="mt-2 flex flex-wrap items-start gap-3">
+                            <div className="min-w-0">
+                              <p className="whitespace-pre-line text-xs text-slate-500">{clinic.address || 'Full address not set'}</p>
+                              <p className="mt-1 text-xs text-slate-500">{clinic.phone ? `Tel: ${clinic.phone}` : 'Telephone not set'}</p>
+                            </div>
+                            <button type="button" onClick={() => {
+                              setEditingSpecialistClinicAddressId(clinic.id);
+                              setSpecialistClinicAddressDraft(clinic.address || '');
+                              setSpecialistClinicPhoneDraft(clinic.phone || '');
+                            }} className="rounded-lg border border-violet-200 px-2 py-1 text-[10px] font-black text-violet-700 hover:bg-violet-50">{clinic.address ? 'Edit address' : 'Add address'}</button>
+                          </div>
+                        )}
+                      </div>
                       <div className="mt-auto border-t border-slate-100 pt-3">
                         <div className="flex flex-wrap items-center gap-2">
-                          <button type="button" onClick={async () => { try { await updateDoc(doc(db, 'specialistClinics', clinic.id), { active: !clinic.active }); addActivityLog(clinic.active ? 'Deactivated Specialist Clinic' : 'Activated Specialist Clinic', `${clinic.name} (${clinic.id})`, currentUser?.displayName); } catch (error) { console.error('Failed to update specialist clinic status', error); alert('Could not update specialist clinic status.'); } }} className={`rounded-lg px-2 py-1.5 text-[9px] font-black uppercase transition ${clinic.active ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`} title="Click to toggle specialist clinic status">{clinic.active ? 'Active' : 'Inactive'}</button>
-                          <button type="button" onClick={() => { setEditingSpecialistClinicId(clinic.id); setSpecialistClinicIdInput(clinic.id); setSpecialistClinicNameInput(clinic.name); setSpecialistClinicShortNameInput(clinic.shortName || ''); setSpecialistClinicAddressInput(clinic.address || ''); setSpecialistClinicPhoneInput(clinic.phone || ''); setShowSpecialistClinicForm(false); }} className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-white px-3 py-2 text-[9px] font-black uppercase text-violet-700 hover:bg-violet-50"><Edit2 size={13}/> Edit</button>
-                          <button type="button" onClick={async () => { if (specialistUsers.some(u => u.clinicId === clinic.id)) { alert('Cannot delete this clinic while specialist users are assigned to it. Set it inactive instead.'); return; } if (!window.confirm(`Delete specialist clinic ${clinic.name}?`)) return; try { await deleteDoc(doc(db, 'specialistClinics', clinic.id)); addActivityLog('Deleted Specialist Clinic', `${clinic.name} (${clinic.id})`, currentUser?.displayName); } catch (error) { console.error('Failed to delete specialist clinic', error); alert('Could not delete specialist clinic.'); } }} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[9px] font-black uppercase text-rose-600 transition-colors hover:bg-rose-100"><Trash2 size={13}/> Delete</button>
+                          <button type="button" onClick={async () => {
+                            try {
+                              await updateDoc(doc(db, 'specialistClinics', clinic.id), { active: !clinic.active });
+                              addActivityLog(clinic.active ? 'Deactivated Specialist Clinic' : 'Activated Specialist Clinic', `${clinic.name} (${clinic.id})`, currentUser?.displayName);
+                            } catch (error) {
+                              console.error('Failed to update specialist clinic status', error);
+                              showAppAlert('Could not update specialist clinic status.');
+                            }
+                          }} className={`rounded-lg px-2 py-1.5 text-[9px] font-black uppercase transition ${clinic.active ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`} title="Click to toggle specialist clinic status">{clinic.active ? 'Active' : 'Inactive'}</button>
+                          <button type="button" onClick={async () => {
+                            if (specialistUsers.some(u => u.clinicId === clinic.id)) { showAppAlert('Cannot delete this clinic while specialist users are assigned to it. Set it inactive instead.'); return; }
+                            if (!await showAppConfirm(`Delete specialist clinic ${clinic.name}?`)) return;
+                            try {
+                              await deleteDoc(doc(db, 'specialistClinics', clinic.id));
+                              addActivityLog('Deleted Specialist Clinic', `${clinic.name} (${clinic.id})`, currentUser?.displayName);
+                            } catch (error) {
+                              console.error('Failed to delete specialist clinic', error);
+                              showAppAlert('Could not delete specialist clinic.');
+                            }
+                          }} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[9px] font-black uppercase text-rose-600 transition-colors hover:bg-rose-100"><Trash2 size={13}/>Delete</button>
                         </div>
                       </div>
                     </article>
                   ))}
-                  {specialistClinics.filter(c => [c.id, c.name, c.shortName || '', c.address || '', c.phone || ''].some(v => v.toLowerCase().includes(specialistClinicSearch.trim().toLowerCase()))).length === 0 && <div className="rounded-2xl border border-dashed border-slate-300 px-5 py-12 text-center sm:col-span-2 2xl:col-span-3"><Building2 size={26} className="mx-auto text-slate-300"/><p className="mt-3 font-bold text-slate-700">No specialist clinics yet</p><p className="mt-1 text-sm text-slate-500">Add a specialist clinic to begin.</p></div>}
+                  {specialistClinics.length === 0 && (
+                    <div className="rounded-2xl border border-dashed border-slate-300 px-5 py-12 text-center lg:col-span-2 2xl:col-span-3">
+                      <Building2 size={26} className="mx-auto text-slate-300"/>
+                      <p className="mt-3 font-bold text-slate-700">No specialist clinics yet</p>
+                      <p className="mt-1 text-sm text-slate-500">Add a specialist clinic to begin.</p>
+                    </div>
+                  )}
                 </div>
               </div>
             </section>
           ) : activeSuperAdminView === 'specialistUsers' ? (
             <section className="min-w-0 rounded-2xl sm:rounded-3xl border border-violet-100 bg-white p-3 sm:p-5 md:p-7 shadow-sm">
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div><p className="text-[10px] font-black uppercase tracking-[.18em] text-violet-600">Administration</p><h1 className="mt-1 text-2xl font-black text-slate-900">Specialist User Management</h1><p className="mt-1 text-sm text-slate-500">Manage specialist accounts and assign each profile to a specialist clinic.</p></div>
-                <div className="flex flex-wrap items-center gap-3"><div className="rounded-2xl bg-violet-50 px-4 py-3"><p className="text-xs font-bold text-violet-700">Registered users</p><p className="text-2xl font-black text-violet-800">{specialistUsers.length}</p></div><button type="button" onClick={() => { if (showSpecialistUserForm) { setShowSpecialistUserForm(false); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } else { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(specialistClinics.find(c => c.active)?.id || ''); setSpecialistUserRoleInput('STAFF'); setShowSpecialistUserForm(true); } }} disabled={!specialistClinics.some(c => c.active)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-40">{showSpecialistUserForm ? <XCircle size={16}/> : <UserPlus size={16}/>} {showSpecialistUserForm ? 'Close form' : 'Add new user'}</button></div>
+              <div className="sa-panel-hero flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex min-w-0 items-center gap-3"><div className="sa-panel-icon sa-amber"><Users size={22}/></div><div><p className="sa-panel-kicker">Administration</p><h1 className="mt-1 text-xl font-black text-slate-900">Specialist User Management</h1><p className="mt-1 text-xs text-slate-600">Manage specialist accounts and assign each profile to a specialist clinic.</p></div></div>
+                <div className="flex flex-wrap items-center gap-3"><div className="rounded-2xl bg-violet-50 px-4 py-3"><p className="text-xs font-bold text-violet-700">Registered users</p><p className="text-2xl font-black text-violet-800">{specialistUsers.length}</p></div><button type="button" onClick={() => { if (showSpecialistUserForm) { setShowSpecialistUserForm(false); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } else { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(specialistClinics.find(c => c.active)?.id || ''); setSpecialistUserRoleInput('STAFF'); setShowSpecialistUserForm(true); } }} disabled={!specialistClinics.some(c => c.active)} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-3 text-xs font-black text-white shadow-md shadow-violet-100 transition hover:bg-violet-700 disabled:opacity-40">{showSpecialistUserForm ? <XCircle size={16}/> : <UserPlus size={16}/>} {showSpecialistUserForm ? 'Close form' : 'Add new user'}</button></div>
               </div>
-              {showSpecialistUserForm && !editingSpecialistUserId && <form className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/50 p-4 md:p-5" onSubmit={async e => { e.preventDefault(); if (currentUser?.role !== UserRole.SUPER_ADMIN) { alert('Only Super Admin can manage specialist users.'); return; } const id = specialistUserIdInput.trim().toUpperCase(); const name = specialistUserNameInput.trim(); if (!id || !name || !specialistUserClinicInput || (!editingSpecialistUserId && !specialistUserPasswordInput.trim())) return; if (!editingSpecialistUserId && specialistUsers.some(u => u.id.toLowerCase() === id.toLowerCase())) { alert('Specialist user ID already exists.'); return; } if (!specialistClinics.some(c => c.id === specialistUserClinicInput && c.active)) { alert('Please assign the user to an active specialist clinic.'); return; } setSpecialistSaving(true); try { const existing = specialistUsers.find(u => u.id === editingSpecialistUserId); const payload: Omit<SpecialistUser, 'id'> = { ...(specialistUserPasswordInput.trim() ? { password: specialistUserPasswordInput } : {}), displayName: name, clinicId: specialistUserClinicInput, role: specialistUserRoleInput, active: existing?.active ?? true, createdAt: existing?.createdAt || Date.now() }; await setDoc(doc(db, 'specialistUsers', editingSpecialistUserId || id), payload, { merge: !!editingSpecialistUserId }); addActivityLog(editingSpecialistUserId ? 'Updated Specialist User' : 'Created Specialist User', `${name} (${editingSpecialistUserId || id})`, currentUser.displayName); setShowSpecialistUserForm(false); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } catch (error) { console.error('Failed to save specialist user', error); alert('Could not save specialist user. Check Firestore permissions and try again.'); } finally { setSpecialistSaving(false); } }}>
+              {showSpecialistUserForm && !editingSpecialistUserId && <form className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/50 p-4 md:p-5" onSubmit={async e => { e.preventDefault(); if (currentUser?.role !== UserRole.SUPER_ADMIN) { showAppAlert('Only Super Admin can manage specialist users.'); return; } const id = specialistUserIdInput.trim().toUpperCase(); const name = specialistUserNameInput.trim(); if (!id || !name || !specialistUserClinicInput || (!editingSpecialistUserId && !specialistUserPasswordInput.trim())) return; if (!editingSpecialistUserId && specialistUsers.some(u => u.id.toLowerCase() === id.toLowerCase())) { showAppAlert('Specialist user ID already exists.'); return; } if (!specialistClinics.some(c => c.id === specialistUserClinicInput && c.active)) { showAppAlert('Please assign the user to an active specialist clinic.'); return; } setSpecialistSaving(true); try { const existing = specialistUsers.find(u => u.id === editingSpecialistUserId); const payload: Omit<SpecialistUser, 'id'> = { ...(specialistUserPasswordInput.trim() ? { password: specialistUserPasswordInput } : {}), displayName: name, clinicId: specialistUserClinicInput, role: specialistUserRoleInput, active: existing?.active ?? true, createdAt: existing?.createdAt || Date.now() }; await setDoc(doc(db, 'specialistUsers', editingSpecialistUserId || id), payload, { merge: !!editingSpecialistUserId }); addActivityLog(editingSpecialistUserId ? 'Updated Specialist User' : 'Created Specialist User', `${name} (${editingSpecialistUserId || id})`, currentUser.displayName); setShowSpecialistUserForm(false); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } catch (error) { console.error('Failed to save specialist user', error); showAppAlert('Could not save specialist user. Check Firestore permissions and try again.'); } finally { setSpecialistSaving(false); } }}>
                 <div className="mb-4 flex items-center justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[.16em] text-violet-600">{editingSpecialistUserId ? 'Edit account' : 'New account'}</p><h2 className="mt-1 text-base font-black text-slate-800">{editingSpecialistUserId ? 'Edit Specialist User' : 'Register New Specialist User'}</h2></div><span className="rounded-full bg-white px-3 py-1 text-[10px] font-bold text-slate-500">Super Admin</span></div>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">User ID</span><input required disabled={!!editingSpecialistUserId} value={specialistUserIdInput} onChange={e => setSpecialistUserIdInput(e.target.value)} placeholder="e.g. OPH001" className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300 disabled:bg-slate-100"/></label><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Display Name</span><input required value={specialistUserNameInput} onChange={e => setSpecialistUserNameInput(e.target.value)} placeholder="e.g. Dr. Johny" className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-300"/></label><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Password {editingSpecialistUserId ? "(leave blank to keep current)" : ""}</span><input type="password" autoComplete="new-password" required={!editingSpecialistUserId} value={specialistUserPasswordInput} onChange={e => setSpecialistUserPasswordInput(e.target.value)} placeholder={editingSpecialistUserId ? "Enter new password to reset" : "Set login password"} className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-300"/></label><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Role</span><select required value={specialistUserRoleInput} onChange={e => setSpecialistUserRoleInput(e.target.value as 'ADMIN' | 'STAFF')} className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300"><option value="STAFF">STAFF</option><option value="ADMIN">ADMIN</option></select></label></div>
                 <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2"><label className="space-y-1"><span className="ml-1 text-[9px] font-bold uppercase text-violet-600">Specialist Clinic</span><select required value={specialistUserClinicInput} onChange={e => setSpecialistUserClinicInput(e.target.value)} className="w-full rounded-xl border border-violet-100 bg-white px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-violet-300"><option value="">Select specialist clinic</option>{specialistClinics.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><span className="ml-1 text-[10px] text-slate-400">Assign this profile to an active specialist clinic.</span></label><div className="flex items-end"><p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">Specialist ID + password will be used to sign in. Keep passwords confidential.</p></div></div>
@@ -7795,7 +8476,7 @@ const tomorrowTCATotal = Object.values(
               </form>}
               <div className="mt-6 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_180px]"><label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-400"><Search size={17}/><input value={specialistUserSearch} onChange={e => setSpecialistUserSearch(e.target.value)} className="min-w-0 flex-1 outline-none text-slate-700 placeholder:text-slate-400" placeholder="Search name or ID..." aria-label="Search specialist users"/></label><select value={specialistUserClinicFilter} onChange={e => { setSpecialistUserClinicFilter(e.target.value); setSelectedSpecialistUsersClinic(e.target.value === 'ALL' ? null : e.target.value); }} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-600" aria-label="Filter by specialist clinic"><option value="ALL">All specialist clinics</option>{specialistClinics.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><select value={specialistUserRoleFilter} onChange={e => setSpecialistUserRoleFilter(e.target.value)} className="rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-600" aria-label="Filter by role"><option value="ALL">All roles</option><option value="ADMIN">Admin</option><option value="STAFF">Staff</option></select></div>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-bold text-slate-500">{specialistUsers.filter(u => { const q = specialistUserSearch.trim().toLowerCase(); const clinic = specialistClinics.find(c => c.id === u.clinicId); return (!q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q)) && (specialistUserClinicFilter === 'ALL' || u.clinicId === specialistUserClinicFilter) && (specialistUserRoleFilter === 'ALL' || u.role === specialistUserRoleFilter); }).length} matching accounts</p><button type="button" onClick={() => { setSpecialistUserSearch(''); setSpecialistUserClinicFilter('ALL'); setSpecialistUserRoleFilter('ALL'); setSelectedSpecialistUsersClinic(null); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50">Reset filters</button></div>
-              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">{specialistClinics.filter(c => specialistUserClinicFilter === 'ALL' || c.id === specialistUserClinicFilter).map(c => <button type="button" key={c.id} onClick={() => { const next = selectedSpecialistUsersClinic === c.id ? null : c.id; setSelectedSpecialistUsersClinic(next); setSpecialistUserClinicFilter(next || 'ALL'); }} className={`rounded-2xl border p-4 text-left transition ${selectedSpecialistUsersClinic === c.id || specialistUserClinicFilter === c.id ? 'border-violet-300 bg-violet-50 ring-1 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/40'}`}><div className="flex items-center justify-between gap-2"><Building2 size={20} className="text-violet-600"/><span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-500">{c.shortName || c.id}</span></div><p className="mt-3 break-words font-black text-slate-800">{c.name}</p><p className="mt-1 text-xs text-slate-500">{specialistUsers.filter(u => u.clinicId === c.id).length} registered {specialistUsers.filter(u => u.clinicId === c.id).length === 1 ? 'user' : 'users'}</p><p className="mt-2 text-xs font-bold text-violet-600">Click to view users →</p></button>)}</div>
+              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">{specialistClinics.filter(c => specialistUserClinicFilter === 'ALL' || c.id === specialistUserClinicFilter).map(c => <button type="button" key={c.id} onClick={() => { const next = selectedSpecialistUsersClinic === c.id ? null : c.id; setSelectedSpecialistUsersClinic(next); setSpecialistUserClinicFilter(next || 'ALL'); }} className={`rounded-2xl border p-4 text-left transition ${selectedSpecialistUsersClinic === c.id || specialistUserClinicFilter === c.id ? 'border-violet-300 bg-violet-50 ring-1 ring-violet-100' : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/40'}`}><div className="flex items-center justify-between gap-2"><Building2 size={20} className="text-violet-600"/></div><p className="mt-3 break-words font-black text-slate-800">{c.name}</p><p className="border-b border-slate-300"></p><p className="mt-1 text-xs text-slate-500">{specialistUsers.filter(u => u.clinicId === c.id).length} registered {specialistUsers.filter(u => u.clinicId === c.id).length === 1 ? 'user' : 'users'}</p><p className="mt-2 text-xs font-bold text-violet-600">Click to view users →</p></button>)}</div>
               {(specialistUserClinicFilter !== 'ALL' || specialistUserSearch.trim().length > 0) ? (
                 <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
                   <div className="flex flex-col gap-1 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -7803,8 +8484,8 @@ const tomorrowTCATotal = Object.values(
                     <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Specialist account directory</p>
                   </div>
                   <div className="divide-y divide-slate-100">
-                    {specialistUsers.filter(u => { const q = specialistUserSearch.trim().toLowerCase(); const clinic = specialistClinics.find(c => c.id === u.clinicId); return (!q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q)) && (specialistUserClinicFilter === 'ALL' || u.clinicId === specialistUserClinicFilter) && (specialistUserRoleFilter === 'ALL' || u.role === specialistUserRoleFilter); }).map(user => { const clinic = specialistClinics.find(c => c.id === user.clinicId); return <div key={user.id} className="px-4 py-3"><div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div className="flex min-w-0 items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600"><UserCog size={17}/></div><div className="min-w-0"><p className="truncate font-bold text-slate-800">{user.displayName}</p><p className="truncate text-xs text-slate-500">{user.id}</p><p className="truncate text-xs text-slate-400">{clinic?.name || user.clinicId}</p></div></div><div className="flex flex-wrap items-center gap-2 sm:justify-end"><span className="rounded-lg bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{user.role}</span><span className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase ${user.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{user.active ? 'Active' : 'Inactive'}</span><div className="flex items-center gap-1 border-l border-slate-200 pl-2 ml-1"><button type="button" onClick={() => { setEditingSpecialistUserId(user.id); setSpecialistUserIdInput(user.id); setSpecialistUserNameInput(user.displayName); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(user.clinicId); setSpecialistUserRoleInput(user.role === 'ADMIN' ? 'ADMIN' : 'STAFF'); setShowSpecialistUserForm(false); }} className="inline-flex items-center gap-1 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100"><Edit2 size={13}/> Edit</button><button type="button" onClick={async () => { if (!window.confirm(`Delete specialist user ${user.displayName}?`)) return; try { await deleteDoc(doc(db, 'specialistUsers', user.id)); addActivityLog('Deleted Specialist User', `${user.displayName} (${user.id})`, currentUser?.displayName); } catch (error) { console.error(error); alert('Could not delete specialist user.'); } }} className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[10px] font-bold text-rose-600 transition hover:bg-rose-100"><Trash2 size={13}/> Delete</button></div><button type="button" onClick={async () => { try { await updateDoc(doc(db, 'specialistUsers', user.id), { active: !user.active }); addActivityLog(user.active ? 'Deactivated Specialist User' : 'Activated Specialist User', `${user.displayName} (${user.id})`, currentUser?.displayName); } catch (error) { console.error(error); alert('Could not update specialist user status.'); } }} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-50">{user.active ? 'Deactivate' : 'Activate'}</button></div></div>
-                    {editingSpecialistUserId === user.id && <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-slate-900/65 backdrop-blur-sm p-4" onMouseDown={e => { if (e.target === e.currentTarget) { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } }}><form className="my-auto w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl" onSubmit={async e => { e.preventDefault(); if (currentUser?.role !== UserRole.SUPER_ADMIN) { alert('Only Super Admin can manage specialist users.'); return; } const name = specialistUserNameInput.trim(); if (!name || !specialistUserClinicInput) { alert('Please complete all fields.'); return; } if (!specialistClinics.some(c => c.id === specialistUserClinicInput && c.active)) { alert('Please assign the user to an active specialist clinic.'); return; } setSpecialistSaving(true); try { await setDoc(doc(db, 'specialistUsers', user.id), { ...(specialistUserPasswordInput.trim() ? { password: specialistUserPasswordInput } : {}), displayName: name, clinicId: specialistUserClinicInput, role: specialistUserRoleInput }, { merge: true }); addActivityLog('Updated Specialist User', `${name} (${user.id})`, currentUser.displayName); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); setShowSpecialistUserForm(false); } catch (error) { console.error('Failed to update specialist user', error); alert('Could not update specialist user. Check Firestore permissions and try again.'); } finally { setSpecialistSaving(false); } }}>
+                    {specialistUsers.filter(u => { const q = specialistUserSearch.trim().toLowerCase(); const clinic = specialistClinics.find(c => c.id === u.clinicId); return (!q || u.displayName.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q) || (clinic?.name || '').toLowerCase().includes(q)) && (specialistUserClinicFilter === 'ALL' || u.clinicId === specialistUserClinicFilter) && (specialistUserRoleFilter === 'ALL' || u.role === specialistUserRoleFilter); }).map(user => { const clinic = specialistClinics.find(c => c.id === user.clinicId); return <div key={user.id} className="px-4 py-3"><div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"><div className="flex min-w-0 items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600"><UserCog size={17}/></div><div className="min-w-0"><p className="truncate font-bold text-slate-800">{user.displayName}</p><p className="truncate text-xs text-slate-500">{user.id}</p><p className="truncate text-xs text-slate-400">{clinic?.name || user.clinicId}</p></div></div><div className="flex flex-wrap items-center gap-2 sm:justify-end"><span className="rounded-lg bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{user.role}</span><span className={`rounded-lg px-2 py-1 text-[9px] font-black uppercase ${user.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{user.active ? 'Active' : 'Inactive'}</span><div className="flex items-center gap-1 border-l border-slate-200 pl-2 ml-1"><button type="button" onClick={() => { setEditingSpecialistUserId(user.id); setSpecialistUserIdInput(user.id); setSpecialistUserNameInput(user.displayName); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(user.clinicId); setSpecialistUserRoleInput(user.role === 'ADMIN' ? 'ADMIN' : 'STAFF'); setShowSpecialistUserForm(false); }} className="inline-flex items-center gap-1 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100"><Edit2 size={13}/> Edit</button><button type="button" onClick={async () => { if (!await showAppConfirm(`Delete specialist user ${user.displayName}?`)) return; try { await deleteDoc(doc(db, 'specialistUsers', user.id)); addActivityLog('Deleted Specialist User', `${user.displayName} (${user.id})`, currentUser?.displayName); } catch (error) { console.error(error); showAppAlert('Could not delete specialist user.'); } }} className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[10px] font-bold text-rose-600 transition hover:bg-rose-100"><Trash2 size={13}/> Delete</button></div><button type="button" onClick={async () => { try { await updateDoc(doc(db, 'specialistUsers', user.id), { active: !user.active }); addActivityLog(user.active ? 'Deactivated Specialist User' : 'Activated Specialist User', `${user.displayName} (${user.id})`, currentUser?.displayName); } catch (error) { console.error(error); showAppAlert('Could not update specialist user status.'); } }} className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-[10px] font-bold text-slate-600 hover:bg-slate-50">{user.active ? 'Deactivate' : 'Activate'}</button></div></div>
+                    {editingSpecialistUserId === user.id && <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-y-auto bg-slate-900/65 backdrop-blur-sm p-4" onMouseDown={e => { if (e.target === e.currentTarget) { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); } }}><form className="my-auto w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl" onSubmit={async e => { e.preventDefault(); if (currentUser?.role !== UserRole.SUPER_ADMIN) { showAppAlert('Only Super Admin can manage specialist users.'); return; } const name = specialistUserNameInput.trim(); if (!name || !specialistUserClinicInput) { showAppAlert('Please complete all fields.'); return; } if (!specialistClinics.some(c => c.id === specialistUserClinicInput && c.active)) { showAppAlert('Please assign the user to an active specialist clinic.'); return; } setSpecialistSaving(true); try { await setDoc(doc(db, 'specialistUsers', user.id), { ...(specialistUserPasswordInput.trim() ? { password: specialistUserPasswordInput } : {}), displayName: name, clinicId: specialistUserClinicInput, role: specialistUserRoleInput }, { merge: true }); addActivityLog('Updated Specialist User', `${name} (${user.id})`, currentUser.displayName); setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); setShowSpecialistUserForm(false); } catch (error) { console.error('Failed to update specialist user', error); showAppAlert('Could not update specialist user. Check Firestore permissions and try again.'); } finally { setSpecialistSaving(false); } }}>
                       <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/80 px-6 py-5"><div className="flex min-w-0 items-center gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white"><UserCog size={19}/></div><div><h2 className="text-lg font-black text-slate-800">Edit User Details</h2><p className="mt-0.5 text-[10px] font-black uppercase tracking-wider text-slate-400">Account: {user.id}</p></div></div><button type="button" aria-label="Close edit user details" onClick={() => { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); }} className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"><XCircle size={23}/></button></div>
                       <div className="space-y-5 px-6 py-6"><div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">User ID</span><input value={specialistUserIdInput} disabled className="w-full rounded-xl border border-blue-100 bg-slate-100 px-4 py-3 text-sm font-bold text-slate-500"/></label><label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Password</span><div className="relative"><input type="password" autoComplete="new-password" value={specialistUserPasswordInput} onChange={e => setSpecialistUserPasswordInput(e.target.value)} placeholder="Leave blank to keep current" className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 pr-4 text-sm outline-none transition focus:ring-2 focus:ring-blue-100"/></div></label><label className="space-y-1.5 sm:col-span-2"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Display Name</span><input required value={specialistUserNameInput} onChange={e => setSpecialistUserNameInput(e.target.value)} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm outline-none transition focus:ring-2 focus:ring-blue-100"/></label><label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Specialist Clinic</span><select required value={specialistUserClinicInput} onChange={e => setSpecialistUserClinicInput(e.target.value)} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"><option value="">Select specialist clinic</option>{specialistClinics.filter(c => c.active).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label><label className="space-y-1.5"><span className="ml-1 text-[9px] font-black uppercase tracking-wide text-blue-600">Role</span><select required value={specialistUserRoleInput} onChange={e => setSpecialistUserRoleInput(e.target.value as 'ADMIN' | 'STAFF')} className="w-full rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-blue-100"><option value="STAFF">STAFF</option><option value="ADMIN">ADMIN</option></select></label></div><div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => { setEditingSpecialistUserId(null); setSpecialistUserIdInput(''); setSpecialistUserNameInput(''); setSpecialistUserPasswordInput(''); setSpecialistUserClinicInput(''); setSpecialistUserRoleInput('STAFF'); }} className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-[10px] font-black uppercase tracking-wider text-slate-500 transition hover:bg-slate-50">Cancel</button><button type="submit" disabled={specialistSaving} className="rounded-xl bg-emerald-600 px-5 py-3 text-[10px] font-black uppercase tracking-wider text-white shadow-lg transition hover:bg-emerald-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : 'Save Changes'}</button></div></div><div className="border-t border-slate-100 bg-slate-50 px-5 py-3 text-center text-[9px] font-black uppercase tracking-wide text-slate-400">Authorized administrators only. Keep passwords secure.</div>
                     </form></div>}
@@ -7816,16 +8497,31 @@ const tomorrowTCATotal = Object.values(
                 <div className="mt-6 rounded-2xl border border-dashed border-violet-200 bg-violet-50/50 px-5 py-12 text-center">
                   <Building2 size={28} className="mx-auto text-violet-400"/>
                   <p className="mt-3 font-bold text-slate-700">Choose a specialist clinic or search for a user</p>
-                  <p className="mt-1 text-sm text-slate-500">Specialist accounts will appear here after you select a clinic card or enter a name or specialist user ID in the search box.</p>
+                  <p className="mt-1 text-xs text-slate-500">Specialist accounts will appear here after you select a clinic card or enter a name or specialist user ID in the search box.</p>
                 </div>
               )}
-              <p className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800"><strong>Important:</strong> These are specialist directory profiles only. Password setup will be handled through secure account provisioning and is not stored in this profile. Specialist login, dashboard access and referral-level security must be completed before patient records are exposed.</p>
-            </section>
+              </section>
           ) : activeSuperAdminView === 'settings' ? (
-            <section className="rounded-3xl border border-slate-200 bg-white p-5 md:p-7 shadow-sm"><p className="text-[10px] font-black uppercase tracking-[.18em] text-slate-500">System administration</p><h1 className="mt-1 text-2xl font-black text-slate-900">System Configuration</h1><p className="mt-2 text-sm text-slate-500">Global settings and maintenance tools for Super Admin.</p><div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2"><button type="button" onClick={() => { setActiveSuperAdminView('migration'); void scanMigrationData(); }} className="rounded-2xl border border-cyan-100 bg-cyan-50 p-5 text-left transition hover:bg-cyan-100"><Database size={23} className="text-cyan-700"/><p className="mt-3 font-black text-slate-800">Data &amp; Migration</p><p className="mt-1 text-sm text-slate-600">Review legacy records and migrate clinic structure safely.</p></button><button type="button" onClick={() => setActiveSuperAdminView('logs')} className="rounded-2xl border border-amber-100 bg-amber-50 p-5 text-left transition hover:bg-amber-100"><Activity size={23} className="text-amber-600"/><p className="mt-3 font-black text-slate-800">Global Activity Logs</p><p className="mt-1 text-sm text-slate-600">Audit activity across all facilities.</p></button><div className="rounded-2xl border border-slate-200 bg-slate-50 p-5"><Settings2 size={23} className="text-slate-600"/><p className="mt-3 font-black text-slate-800">Global configuration</p><p className="mt-1 text-sm text-slate-600">General SINAR settings and maintenance.</p></div></div></section>
+            <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+              <div className="sa-panel-hero sa-hero-slate mb-0 flex items-center gap-3 rounded-none border-0 px-5 py-5 md:px-7">
+                <div className="sa-panel-icon sa-slate"><Settings2 size={22}/></div>
+                <div><p className="sa-panel-kicker">System administration</p><h1 className="text-xl font-black text-slate-900">System Configuration</h1><p className="mt-1 text-xs text-slate-600">Global settings and maintenance tools for Super Admin.</p></div>
+              </div>
+              <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 md:p-7">
+                <button type="button" onClick={() => { setActiveSuperAdminView('migration'); void scanMigrationData(); }} className="sa-config-card sa-config-cyan rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md">
+                  <span className="sa-config-icon sa-config-icon-cyan"><Database size={22}/></span><p className="mt-3 font-black text-slate-900">Data &amp; Migration</p><p className="mt-1 text-sm text-slate-600">Review legacy records and migrate clinic structure safely.</p>
+                </button>
+                <button type="button" onClick={() => setActiveSuperAdminView('logs')} className="sa-config-card sa-config-amber rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md">
+                  <span className="sa-config-icon sa-config-icon-amber"><Activity size={22}/></span><p className="mt-3 font-black text-slate-900">Global Activity Logs</p><p className="mt-1 text-sm text-slate-600">Audit activity across all facilities.</p>
+                </button>
+                <div className="sa-config-card sa-config-slate rounded-2xl border p-5">
+                  <span className="sa-config-icon sa-config-icon-slate"><Settings2 size={22}/></span><p className="mt-3 font-black text-slate-900">Global configuration</p><p className="mt-1 text-sm text-slate-600">General SINAR settings and maintenance.</p>
+                </div>
+              </div>
+            </section>
           ) : activeSuperAdminView === 'migration' ? (
             <section className="rounded-3xl border border-cyan-100 bg-white p-4 shadow-sm md:p-6">
-              <div className="mb-5 flex items-center gap-3 border-b border-slate-100 pb-5"><div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-600 text-white"><Database size={22}/></div><div><p className="text-[10px] font-black uppercase tracking-widest text-cyan-700">System Configuration</p><h1 className="text-2xl font-black text-slate-900">Data &amp; Migration</h1><p className="text-sm text-slate-500">Legacy data → multiclinic structure</p></div></div>
+              <div className="mb-5 flex items-center gap-3 border-b border-slate-100 pb-5"><div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-600 text-white"><Database size={22}/></div><div><p className="text-[10px] font-black uppercase tracking-widest text-cyan-700">System Configuration</p><h1 className="text-2xl font-black text-slate-900">Data &amp; Migration</h1><p className="text-xs text-slate-500">Legacy data → multiclinic structure</p></div></div>
                 <div className="rounded-2xl border border-cyan-100 bg-cyan-50/50 p-4">
                   <div className="flex items-start gap-3">
                     <AlertCircle className="text-cyan-600 shrink-0 mt-0.5" size={19} />
@@ -8055,7 +8751,7 @@ const tomorrowTCATotal = Object.values(
           ) : (
           <>
           {/*--- Console Header ---*/}
-          <section className="bg-white border border-violet-100 rounded-3xl p-5 md:p-7 shadow-sm">
+          <section className="relative overflow-hidden rounded-3xl border border-violet-200 bg-gradient-to-br from-white via-white to-violet-100 p-5 md:p-7 shadow-sm">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
               <div>
                 <div className="flex items-center gap-3">
@@ -8064,13 +8760,33 @@ const tomorrowTCATotal = Object.values(
                   </div>
                   <div>
                     <h1 className="text-xl md:text-2xl font-black text-slate-900">SINAR Super Admin Console</h1>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Multi-Clinic Administration</p>
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-1 border-b border-slate-300">Multi-Clinic Administration</p>
                   </div>
                 </div>
               </div>
-              <div className="text-left md:text-right">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Active Clinics</p>
-                <p className="text-3xl font-black text-violet-600">{clinics.filter(c => c.active).length}</p>
+              <div className="grid grid-cols-2 gap-2 sm:gap-3 w-full md:w-auto">
+                <div className="min-w-0 rounded-2xl border border-violet-200 bg-white/80 px-4 py-3 shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-violet-100 text-violet-600">
+                      <Building2 size={17} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider text-slate-400">Active Clinics</p>
+                      <p className="text-2xl sm:text-3xl leading-none font-black text-violet-600 tabular-nums">{clinics.filter(c => c.active).length}</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="min-w-0 rounded-2xl border border-cyan-200 bg-white/80 px-4 py-3 shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-cyan-100 text-cyan-700">
+                      <Network size={17} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider text-slate-400">Specialist Clinics</p>
+                      <p className="text-2xl sm:text-3xl leading-none font-black text-cyan-700 tabular-nums">{specialistClinics.filter(c => c.active).length}</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
@@ -8086,11 +8802,11 @@ const tomorrowTCATotal = Object.values(
           </section>
 
           {/*--- Monthly Summary By Clinic ---*/}
-          <section className="bg-white border border-slate-200 rounded-3xl p-5 md:p-7 shadow-sm">
+          <section className="border border-slate-200 bg-gradient-to-br from-blue-100 via-white to-cyan-50 rounded-3xl p-5 md:p-7 shadow-sm">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
               <div>
                 <h2 className="text-lg md:text-xl font-black text-slate-900">Monthly Summary by Clinic</h2>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Fundus workload across PKD clinics</p>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1 border-b border-slate-200">Fundus workload across PKD clinics</p>
               </div>
               <div className="flex items-center gap-2 self-start md:self-auto">
                 <button onClick={() => changeAnalyticsMonth(-1)} className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50">
@@ -8107,7 +8823,7 @@ const tomorrowTCATotal = Object.values(
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {superAdminMonthlyClinicStats.map(({ clinic, total, pendingFundus, pendingReview, completed }) => (
-                <div key={clinic.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4">
+                <div key={clinic.id} className="rounded-2xl border border-slate-200 bg-slate-50/50 p-4 border-b border-slate-300 shadow-sm">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <button
@@ -8119,14 +8835,13 @@ const tomorrowTCATotal = Object.values(
                         className="text-left max-w-full group"
                       >
                         <p className="font-black text-slate-900 truncate group-hover:text-blue-600 transition-colors">{clinic.name}</p>
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">{clinic.id}</p>
                       </button>
                     </div>
                     <span className={`shrink-0 px-2 py-1 rounded-lg text-[8px] font-black uppercase ${clinic.isFundusProvider ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
                       {clinic.isFundusProvider ? 'Fundus Provider' : 'Referral Clinic'}
                     </span>
                   </div>
-
+                  <p className="border-b border-slate-400"></p>
                   <div className="grid grid-cols-4 gap-2 mt-5">
                     <div className="text-center rounded-xl bg-white border border-slate-100 p-2">
                       <p className="text-[8px] font-black text-slate-400 uppercase">Total</p>
@@ -8160,8 +8875,9 @@ const tomorrowTCATotal = Object.values(
       <main className="flex-1 max-w-7xl mx-auto px-4 py-8 w-full space-y-8">
         
         {/* Monthly Stats Dashboard */}
-        <section className="bg-white border border-slate-200 rounded-3xl p-4 md:p-8 shadow-sm">
-          <div className="grid grid-cols-2 lg:grid-cols-12 gap-3 items-stretch">
+        <section className="relative overflow-hidden rounded-3xl border border-blue-200 bg-gradient-to-br from-cyan-200 via-white to-blue-50 p-4 shadow-sm md:p-7">
+                <div className="pointer-events-none absolute -bottom-16 -right-10 h-48 w-48 rounded-full bg-cyan-100/40 blur-3xl"/>
+                <div className="relative grid grid-cols-2 items-stretch gap-3 lg:grid-cols-12">
 
   {/* Practice Summary */}
   <div className="col-span-2 lg:col-span-2 flex flex-col justify-center">
@@ -8169,7 +8885,7 @@ const tomorrowTCATotal = Object.values(
       Practice Summary
     </h1>
 
-    <p className="text-2xl md:text-3xl font-black text-slate-300 leading-none mt-1">
+    <p className="text-2xl md:text-3xl font-black text-slate-400 border-b border-slate-300 leading-none mt-1">
       {yearlyStats.year}
     </p>
   </div>
@@ -8935,8 +9651,8 @@ year:'numeric'
           </div>
 
           {/* Table */}
-          <div className="w-full overflow-x-hidden">
-            <table className="w-full table-fixed text-left border-collapse">
+          <div className="w-full min-w-0 overflow-x-auto overscroll-x-contain md:overflow-x-visible" style={{ WebkitOverflowScrolling: 'touch' }}>
+            <table className="w-full min-w-[1050px] md:min-w-0 table-fixed text-left border-collapse">
               <colgroup>
                 <col style={{ width: '12%' }} />
                 <col style={{ width: '14%' }} />
@@ -9774,7 +10490,7 @@ setSelectedReviewSummary(app);
                           onClick={async () => {
                             const nextValue = !clinic.isFundusProvider;
                             if (!nextValue && getFundusProviderClinics(clinics).length <= 1) {
-                              alert('At least one active fundus provider clinic is required.');
+                              showAppAlert('At least one active fundus provider clinic is required.');
                               return;
                             }
                             const savingKey = `provider:${clinic.id}`;
@@ -9836,7 +10552,7 @@ setSelectedReviewSummary(app);
                               delete pendingFundusProviderRef.current[clinic.id];
                               setClinics(previousClinics);
                               const code = (error as any)?.code || 'unknown';
-                              alert(`Failed to update ${clinic.shortName}. Firestore error: ${code}`);
+                              showAppAlert(`Failed to update ${clinic.shortName}. Firestore error: ${code}`);
                             } finally {
                               setFundusNetworkSaving(null);
                             }
@@ -9957,7 +10673,7 @@ setSelectedReviewSummary(app);
                                             console.error('Failed to update fundus routing', error);
                                             delete pendingFundusRoutingRef.current[clinic.id];
                                             const code = (error as any)?.code || 'unknown';
-                                            alert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`);
+                                            showAppAlert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`);
                                           }
                                         });
 
@@ -10042,7 +10758,7 @@ setSelectedReviewSummary(app);
                   setIsAddingClinic(true);
                   const id = newClinicId.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
                   if (!id || !newClinicName.trim()) return;
-                  if (clinics.some(c => c.id === id)) { alert('Clinic ID already exists.'); return; }
+                  if (clinics.some(c => c.id === id)) { showAppAlert('Clinic ID already exists.'); return; }
                   const clinic: Clinic = {
                     id,
                     name: newClinicName.trim(),
@@ -10065,7 +10781,7 @@ setSelectedReviewSummary(app);
                     setNewClinicColorKey('pink');
                   } catch (error) {
                     console.error('Failed to create clinic', error);
-                    alert('Failed to create clinic. Please try again.');
+                    showAppAlert('Failed to create clinic. Please try again.');
                   } finally {
                     setIsAddingClinic(false);
                   }
@@ -10078,7 +10794,10 @@ setSelectedReviewSummary(app);
                     <input required value={newClinicId} onChange={e => setNewClinicId(e.target.value)} placeholder="CLINIC_ID" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold uppercase outline-none focus:ring-2 focus:ring-blue-500" />
                     <input required value={newClinicName} onChange={e => setNewClinicName(e.target.value)} placeholder="Clinic name" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                     <input value={newClinicShortName} onChange={e => setNewClinicShortName(e.target.value)} placeholder="Short name" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
-                    <textarea value={newClinicAddress} onChange={e => setNewClinicAddress(e.target.value)} rows={3} placeholder="Full clinic address (one line per row)" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500 md:col-span-2 resize-y" />
+                    <div className="grid grid-cols-1 gap-2 md:col-span-2">
+                      <input value={getAddressLine(newClinicAddress, 0)} onChange={e => setNewClinicAddress(updateAddressLine(newClinicAddress, 0, e.target.value))} placeholder="Address line 1" aria-label="Clinic address line 1" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                      <input value={getAddressLine(newClinicAddress, 1)} onChange={e => setNewClinicAddress(updateAddressLine(newClinicAddress, 1, e.target.value))} placeholder="Address line 2" aria-label="Clinic address line 2" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
                     <input value={newClinicPhone} onChange={e => setNewClinicPhone(e.target.value)} placeholder="Clinic telephone number" className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                     <select value={newClinicColorKey} onChange={e => setNewClinicColorKey(e.target.value as ClinicColorKey)} className="px-3 py-2.5 rounded-xl border border-blue-200 bg-white text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500">
                       {CLINIC_COLORS.map(color => (
@@ -10104,7 +10823,8 @@ setSelectedReviewSummary(app);
                         <p className="text-xs text-slate-400 mt-1">{clinic.shortName}</p>
                         {editingClinicAddressId === clinic.id ? (
                           <div className="mt-3 flex flex-col gap-2 max-w-2xl">
-                            <textarea value={clinicAddressDraft} onChange={e => setClinicAddressDraft(e.target.value)} rows={3} placeholder="Alamat penuh klinik (satu baris untuk setiap baris alamat)" className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500 resize-y" />
+                            <input value={getAddressLine(clinicAddressDraft, 0)} onChange={e => setClinicAddressDraft(updateAddressLine(clinicAddressDraft, 0, e.target.value))} placeholder="Address line 1" aria-label="Clinic address line 1" className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
+                            <input value={getAddressLine(clinicAddressDraft, 1)} onChange={e => setClinicAddressDraft(updateAddressLine(clinicAddressDraft, 1, e.target.value))} placeholder="Address line 2" aria-label="Clinic address line 2" className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                             <input value={clinicPhoneDraft} onChange={e => setClinicPhoneDraft(e.target.value)} placeholder="No. telefon klinik" className="w-full sm:max-w-sm px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-blue-500" />
                             <div className="flex gap-2">
                               <button type="button" disabled={clinicAddressSaving === clinic.id} onClick={async () => {
@@ -10115,7 +10835,7 @@ setSelectedReviewSummary(app);
                                   setEditingClinicAddressId(null);
                                 } catch (error) {
                                   console.error('Failed to update clinic address', error);
-                                  alert('Failed to update clinic address. Please try again.');
+                                  showAppAlert('Failed to update clinic address. Please try again.');
                                 } finally {
                                   setClinicAddressSaving(null);
                                 }
@@ -10186,15 +10906,15 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-3xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
+              className="relative my-auto w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-3xl border border-violet-100 shadow-2xl flex flex-col overflow-hidden"
             >
-              <div className="p-4 sm:p-6 border-b border-slate-100 flex items-center justify-between bg-indigo-50/70">
+              <div className="m-4 sm:m-6 rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 via-white to-indigo-50 p-4 sm:p-5 flex items-start justify-between gap-4 shadow-sm">
                 <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-lg">
+                  <div className="w-11 h-11 rounded-2xl bg-violet-600 text-white flex items-center justify-center shadow-lg shadow-violet-200 shrink-0">
                     <Calendar size={21} />
                   </div>
                   <div>
-                    <h2 className="text-xl font-black text-slate-900">Manage Referral Clinic</h2>
+                    <h2 className="text-xl sm:text-2xl font-black text-slate-900 leading-tight">Manage Referral Clinic</h2>
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
                       TCA schedule · {currentClinic?.shortName || currentUser?.clinicId || 'Clinic'}
                     </p>
@@ -10204,16 +10924,16 @@ setSelectedReviewSummary(app);
                   type="button"
                   disabled={referralTcaSaving}
                   onClick={() => setShowReferralClinicManager(false)}
-                  className="p-2 rounded-xl hover:bg-indigo-100 text-slate-400 disabled:opacity-50"
+                  className="p-2 rounded-xl hover:bg-white/80 text-slate-400 border border-transparent hover:border-violet-100 disabled:opacity-50"
                 >
                   <XCircle size={24} />
                 </button>
               </div>
 
-              <div className="p-6 overflow-y-auto space-y-4">
-                <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
-                  <p className="text-xs font-black text-indigo-900">Referral clinic schedule</p>
-                  <p className="text-[11px] text-indigo-700 mt-1 leading-relaxed">
+              <div className="px-4 pb-5 sm:px-6 sm:pb-6 space-y-5 overflow-y-auto bg-slate-50/50">
+                <div className="rounded-2xl border border-violet-100 bg-violet-50/70 p-4 sm:p-5">
+                  <p className="text-xs font-black text-violet-900">Referral clinic schedule</p>
+                  <p className="text-[11px] text-violet-700 mt-1 leading-relaxed">
                     Only clinics authorised by Super Admin through Fundus Network are shown here. Select one or more days when your clinic accepts TCA for each referral source.
                   </p>
                 </div>
@@ -10246,7 +10966,7 @@ setSelectedReviewSummary(app);
                   return referralClinics.map(referralClinic => {
                     const selectedDays = referralTcaDraft[referralClinic.id] || [];
                     return (
-                      <section key={referralClinic.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                      <section key={referralClinic.id} className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm hover:border-violet-200 transition-colors">
                         <div className="flex items-center justify-between gap-3 mb-4">
                           <div>
                             <p className="font-black text-slate-900">{referralClinic.name}</p>
@@ -10263,7 +10983,7 @@ setSelectedReviewSummary(app);
                                 key={day.value}
                                 className={`flex items-center gap-2 p-3 rounded-xl border cursor-pointer transition-all ${
                                   checked
-                                    ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                                    ? 'border-violet-300 bg-violet-50 text-violet-800 shadow-sm'
                                     : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'
                                 }`}
                               >
@@ -10280,7 +11000,7 @@ setSelectedReviewSummary(app);
                                       return { ...prev, [referralClinic.id]: next };
                                     });
                                   }}
-                                  className="accent-indigo-600"
+                                  className="accent-violet-600"
                                 />
                                 <span className="text-xs font-black">{day.label}</span>
                               </label>
@@ -10296,7 +11016,7 @@ setSelectedReviewSummary(app);
                 })()}
               </div>
 
-              <div className="p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+              <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
                 <button
                   type="button"
                   disabled={referralTcaSaving}
@@ -10344,7 +11064,7 @@ setSelectedReviewSummary(app);
                       setShowReferralClinicManager(false);
                     } catch (error) {
                       console.error('Failed to save referral TCA schedule', error);
-                      alert('Failed to save referral clinic schedule. Please try again.');
+                      showAppAlert('Failed to save referral clinic schedule. Please try again.');
                     } finally {
                       setReferralTcaSaving(false);
                     }
@@ -10385,20 +11105,25 @@ setSelectedReviewSummary(app);
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative my-auto w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2.5rem)] bg-white rounded-3xl border border-slate-200 shadow-2xl flex flex-col overflow-hidden"
+              className="relative my-auto w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2.5rem)] bg-white rounded-3xl border border-violet-100 shadow-2xl flex flex-col overflow-hidden"
             >
-              <div className="p-5 sm:p-7 border-b border-slate-100 flex items-start justify-between bg-white">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-teal-700 rounded-xl shadow-sm">
-                    <Users size={20} className="text-white" />
+              <div className="m-4 sm:m-6 rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 via-white to-indigo-50 p-4 sm:p-5 flex items-start justify-between gap-4 shadow-sm">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="p-3 bg-violet-600 rounded-2xl shadow-lg shadow-violet-200 shrink-0">
+                    <Users size={21} className="text-white" />
                   </div>
-                  <div>
-                    <p className="text-[10px] font-black text-teal-700 uppercase tracking-[.18em] mb-1">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Multi-clinic administration' : 'Clinic administration'}</p>
-                    <h2 className="text-2xl font-black text-slate-900 leading-tight">{currentUser?.role === UserRole.SUPER_ADMIN ? 'User Management' : 'Staff Management'}</h2>
-                    <p className="text-sm text-slate-500 mt-1">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Manage user accounts across clinics.' : `Manage staff accounts for ${currentClinic?.name || 'this clinic'}.`}</p>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-black text-violet-700 uppercase tracking-[.18em] mb-1">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Multi-clinic administration' : 'Clinic administration'}</p>
+                    <h2 className="text-xl sm:text-2xl font-black text-slate-900 leading-tight">{currentUser?.role === UserRole.SUPER_ADMIN ? 'User Management' : 'Staff Management'}</h2>
+                    <p className="text-xs sm:text-sm text-slate-500 mt-1">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Manage user accounts across clinics.' : `Manage staff accounts for ${currentClinic?.name || 'this clinic'}.`}</p>
                   </div>
                 </div>
-                <button 
+                <div className="flex shrink-0 items-start gap-2 sm:gap-3">
+                  <div className="hidden sm:flex min-w-[104px] flex-col justify-center rounded-2xl border border-violet-100 bg-violet-50 px-4 py-2.5">
+                    <span className="text-[10px] font-bold text-violet-600">Registered users</span>
+                    <span className="text-2xl font-black leading-tight text-violet-700">{users.filter(u => currentUser?.role === UserRole.SUPER_ADMIN ? true : u.clinicId === currentUser?.clinicId).length}</span>
+                  </div>
+                  <button 
                   onClick={() => {
 
   if (isSavingStaff) return;
@@ -10415,15 +11140,16 @@ setSelectedReviewSummary(app);
   setNewStaffClinicId(currentUser?.clinicId ?? 'LINTANG');
 
 }}
-                  className="p-2 hover:bg-slate-100 rounded-xl transition-colors text-slate-400"
+                  className="p-2 hover:bg-white/80 rounded-xl transition-colors text-slate-400 border border-transparent hover:border-violet-100"
                 >
                   <XCircle size={24} />
                 </button>
+                </div>
               </div>
 
-              <div className="p-5 sm:p-7 space-y-5 overflow-y-auto bg-white">
+              <div className="px-4 pb-5 sm:px-6 sm:pb-6 space-y-5 overflow-y-auto bg-slate-50/50">
                 {/* Add/Edit Staff Form */}
-                <section>
+                <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
 
   <button
     type="button"
@@ -10662,14 +11388,14 @@ setSelectedReviewSummary(app);
 </section>
 
 {/* Existing Staff List */}
-<section className="flex flex-col max-h-[420px]">
+<section className="flex flex-col max-h-[420px] rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 shadow-sm">
                   <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">{currentUser?.role === UserRole.SUPER_ADMIN ? 'Current System Users' : 'Current Clinic Users'} ({users.filter(u => currentUser?.role === UserRole.SUPER_ADMIN ? true : u.clinicId === currentUser?.clinicId).length})</h3>
                   <div className="space-y-2 overflow-y-auto overscroll-contain pr-2 h-full">
                     {users
   .filter(u => currentUser?.role === UserRole.SUPER_ADMIN || u.clinicId === currentUser?.clinicId)
   .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
   .map(u => (
-                      <div key={u.id} className="flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl hover:border-slate-200 transition-all group">
+                      <div key={u.id} className="flex items-center justify-between gap-3 p-3 sm:p-4 bg-white border border-slate-200 rounded-2xl hover:border-violet-200 hover:bg-violet-50/30 transition-all group">
                         <div className="flex items-center gap-4">
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${u.role === UserRole.ADMIN ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>
                             {u.role === UserRole.ADMIN ? <ShieldCheck size={20} /> : <UserIcon size={20} />}
@@ -10726,21 +11452,38 @@ setSelectedReviewSummary(app);
                           </div>
                         </div>
                         {u.id !== 'admin' && (
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            {currentUser?.role === UserRole.ADMIN && u.role === UserRole.STAFF && (
+                              <button
+                                type="button"
+                                onClick={() => void toggleStaffReferralPermission(u)}
+                                disabled={updatingReferralPermissionId === u.firestoreId}
+                                aria-pressed={u.canSendSpecialistReferral === true}
+                                title={u.canSendSpecialistReferral === true ? 'Disable specialist referral access' : 'Enable specialist referral access'}
+                                className={`inline-flex min-w-[126px] shrink-0 items-center justify-center gap-2.5 whitespace-nowrap rounded-lg border px-3 py-2 text-[9px] font-black leading-none transition-all disabled:cursor-wait disabled:opacity-50 ${u.canSendSpecialistReferral === true ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100'}`}
+                              >
+                                <span className={`relative block h-4 w-7 shrink-0 rounded-full transition-colors ${u.canSendSpecialistReferral === true ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                                  <span className={`absolute left-0.5 top-0.5 block h-3 w-3 shrink-0 rounded-full bg-white shadow transition-transform ${u.canSendSpecialistReferral === true ? 'translate-x-3' : 'translate-x-0'}`} />
+                                </span>
+                                <span className="shrink-0 whitespace-nowrap">{updatingReferralPermissionId === u.firestoreId ? 'SAVING...' : u.canSendSpecialistReferral === true ? 'REFERRAL ON' : 'REFERRAL OFF'}</span>
+                              </button>
+                            )}
+                            <div className="flex flex-wrap items-center gap-2">
                             <button 
                               onClick={() => setEditingUser(u)}
-                              className="p-2 text-slate-400 hover:text-teal-700 hover:bg-teal-50 rounded-xl transition-all md:opacity-0 md:group-hover:opacity-100"
+                              className="p-2 text-slate-400 hover:text-teal-700 hover:bg-teal-50 rounded-xl transition-all"
                               title="Edit User"
                             >
                               <Edit2 size={18} />
                             </button>
                             <button 
                               onClick={() => setUserToDelete(u)}
-                              className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all md:opacity-0 md:group-hover:opacity-100"
+                              className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-xl transition-all"
                               title="Delete User"
                             >
                               <Trash2 size={18} />
                             </button>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -10918,21 +11661,28 @@ setSelectedReviewSummary(app);
         className="relative z-10 bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden"
       >
 
-        <div className="px-6 py-5 border-b border-slate-100">
-
-          <h2 className="text-xl font-bold text-slate-800">
-            New Appointment
-          </h2>
-
-          <p className="text-sm text-slate-500 mt-1">
-            Enter patient's IC Number
-          </p>
-
+        <div className="px-5 sm:px-6 py-5 border-b border-violet-100 bg-gradient-to-r from-violet-50 via-white to-indigo-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-violet-600 text-white flex items-center justify-center shadow-md shadow-violet-200 shrink-0">
+              <UserPlus size={20} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[9px] font-black uppercase tracking-[0.18em] text-violet-600 mb-0.5">
+                Patient Registration
+              </p>
+              <h2 className="text-lg sm:text-xl font-black text-slate-900">
+                New Appointment
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
+                Enter patient's IC Number
+              </p>
+            </div>
+          </div>
         </div>
 
-        <div className="p-6">
+        <div className="p-5 sm:p-6">
 
-          <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+          <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
             IC Number
           </label>
 
@@ -10955,15 +11705,14 @@ setSelectedReviewSummary(app);
 }}
   inputMode="numeric"
   maxLength={14}
-  placeholder="900101-08-5555"
-  className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500"
+  className="w-full px-4 py-3 border border-slate-200 rounded-xl outline-none bg-white text-slate-800 placeholder:text-slate-400 focus:border-slate-400 focus:ring-4 focus:ring-slate-100 transition-all"
 />
 
           <div className="flex gap-3 mt-6">
 
             <button
               onClick={() => setIsICLookupOpen(false)}
-              className="flex-1 py-3 rounded-xl border border-slate-200 font-semibold hover:bg-slate-50"
+              className="flex-1 py-3 rounded-xl border border-slate-200 bg-white text-slate-700 font-bold hover:bg-slate-50 hover:border-slate-300 transition-all"
             >
               Cancel
             </button>
@@ -10971,9 +11720,9 @@ setSelectedReviewSummary(app);
             <button
   disabled={lookupIC.replace(/\D/g, "").length !== 12}
   onClick={handlePatientLookup}
-  className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
+  className={`flex-1 py-3 rounded-xl font-bold transition-all ${
     lookupIC.replace(/\D/g, "").length === 12
-      ? "bg-blue-600 hover:bg-blue-700 text-white"
+      ? "bg-violet-600 hover:bg-violet-700 text-white shadow-md shadow-violet-200"
       : "bg-slate-200 text-slate-400 cursor-not-allowed"
   }`}
 >
@@ -12740,7 +13489,7 @@ const imageReason =
         <div className="flex items-center justify-between mb-6">
 
           <div>
-            <h2 className="text-xl font-black text-slate-800">
+            <h2 className="text-xl sm:text-2xl font-black text-slate-900">
               Previous Visit
             </h2>
 
@@ -13721,33 +14470,22 @@ const imageReason =
         initial={{ opacity: 0, scale: 0.95, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 10 }}
-        className="relative z-10 w-full max-w-md max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+        className="relative z-10 w-full max-w-md max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-[28px] shadow-[0_24px_80px_rgba(15,23,42,0.28)] overflow-hidden flex flex-col ring-1 ring-white/70"
       >
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-blue-50">
+        <div className="relative flex items-center justify-between gap-3 border-b border-blue-100/80 bg-gradient-to-br from-blue-50 via-sky-50 to-indigo-50 px-5 py-5 sm:px-6">
 
-          <div className="flex items-center gap-3">
-
-  <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center shadow-lg">
-
-    <UserCog size={18} className="text-white" />
-
-  </div>
-
-  <div>
-
-    <h2 className="text-lg font-black text-slate-800 tracking-tight">
-      Clinical Account Settings
-    </h2>
-
-    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">
-      Manage Your Credentials
-    </p>
-
-  </div>
-
-</div>
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-200/80 ring-4 ring-white/70">
+              <UserCog size={20} />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-base font-black tracking-tight text-slate-800 sm:text-lg">Clinical Account Settings</h2>
+              <p className="mt-1 text-[9px] font-extrabold uppercase tracking-[0.16em] text-blue-500">Manage your credentials</p>
+              <p className="mt-1 truncate text-[11px] font-semibold text-slate-500">{currentUser?.displayName || 'Staff account'}</p>
+            </div>
+          </div>
 
           <button
             onClick={() => {
@@ -13764,15 +14502,16 @@ const imageReason =
 
 }}
             disabled={isSavingAccount}
-            className="p-2 rounded-xl hover:bg-slate-200 text-slate-400 transition-all disabled:opacity-50"
+            aria-label="Close account settings"
+            className="shrink-0 rounded-xl border border-blue-100 bg-white/70 p-2 text-slate-400 shadow-sm transition-all hover:border-blue-200 hover:bg-white hover:text-blue-600 disabled:opacity-50"
           >
-            <XCircle size={22} />
+            <XCircle size={20} />
           </button>
 
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-3">
+        <div className="space-y-4 overflow-y-auto p-5 sm:p-6" autoComplete="off">
 
           {/* Display Name */}
           <div className="space-y-2">
@@ -13785,9 +14524,13 @@ const imageReason =
 
             <input
               type="text"
+              name="sinar-display-label"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
               value={newDisplayName}
               onChange={(e) => setNewDisplayName(e.target.value)}
-              className="w-full px-4 py-3 rounded-2xl border border-slate-200 bg-slate-50/70 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition-all placeholder:text-slate-400 hover:border-blue-200 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-100"
               placeholder="Enter display name"
             />
 
@@ -13806,9 +14549,11 @@ const imageReason =
 
     <input
       type={showCurrentPassword ? 'text' : 'password'}
+      name="sinar-current-secret"
+      autoComplete="new-password"
       value={currentPasswordInput}
       onChange={(e) => setCurrentPasswordInput(e.target.value)}
-      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50/70 bg-slate-50/70 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-100 outline-none text-sm font-semibold transition-all"
       placeholder="••••••"
     />
 
@@ -13839,9 +14584,11 @@ const imageReason =
 
     <input
       type={showNewPassword ? 'text' : 'password'}
+      name="sinar-new-secret"
+      autoComplete="new-password"
       value={newPasswordInput}
       onChange={(e) => setNewPasswordInput(e.target.value)}
-      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50/70 bg-slate-50/70 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-100 outline-none text-sm font-semibold transition-all"
       placeholder="••••••"
     />
 
@@ -13872,9 +14619,11 @@ const imageReason =
 
     <input
       type={showConfirmPassword ? 'text' : 'password'}
+      name="sinar-confirm-secret"
+      autoComplete="new-password"
       value={confirmPasswordInput}
       onChange={(e) => setConfirmPasswordInput(e.target.value)}
-      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50/70 bg-slate-50/70 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold"
+      className="w-full px-4 py-3 pr-12 rounded-2xl border border-slate-200 bg-slate-50 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-100 outline-none text-sm font-semibold transition-all"
       placeholder="••••••"
     />
 
@@ -13896,7 +14645,7 @@ const imageReason =
           <button
           onClick={handleAccountUpdate}
           disabled={isSavingAccount}
-            className="w-full py-4 bg-gradient-to-r from-slate-900 to-blue-900 hover:bg-gradient-to-r hover:from-slate-800 hover:to-blue-800 text-white font-black rounded-2xl transition-all uppercase tracking-widest text-xs"
+            className="mt-1 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-slate-900 via-blue-800 to-indigo-800 py-4 text-xs font-black uppercase tracking-[0.16em] text-white shadow-lg shadow-blue-200/70 transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-blue-200/80 disabled:cursor-not-allowed disabled:opacity-60"
           >
 
             {isSavingAccount ? 'Saving...' : 'Save Changes'}
@@ -13926,11 +14675,11 @@ const imageReason =
         exit={{ opacity: 0, scale: 0.96, y: 10 }}
         transition={{ duration: 0.2 }}
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-5xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col"
+        className="w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] bg-white rounded-3xl shadow-2xl border border-violet-100 overflow-hidden flex flex-col"
       >
 
         {/* HEADER */}
-<div className="px-6 py-5 border-b border-slate-200">
+<div className="m-4 sm:m-6 rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 via-white to-indigo-50 px-4 sm:px-5 py-4 shadow-sm">
 
   <div className="flex items-start justify-between gap-4">
 
@@ -14001,7 +14750,7 @@ const imageReason =
 </div>
 
         {/* CONTENT */}
-<div className="p-4 sm:p-6 flex-1 min-h-0 overflow-y-auto overscroll-contain">
+<div className="px-4 pb-5 sm:px-6 sm:pb-6 flex-1 min-h-0 overflow-y-auto overscroll-contain bg-slate-50/50">
 
   {/* ===== SCREENING SUMMARY ===== */}
   <section>
@@ -14009,7 +14758,7 @@ const imageReason =
       Screening Summary
     </p>
 
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
 
       {/*--- Total monthly provider workload. Referrals performed by this clinic are included. ---*/}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 md:col-span-1">
@@ -14037,7 +14786,7 @@ const imageReason =
       Outcome Screening
     </p>
 
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
 
       {/* NORMAL */}
       <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5">
@@ -14078,7 +14827,7 @@ const imageReason =
       <div className="bg-orange-50 border border-orange-100 rounded-2xl p-5">
         <div>
           <p className="text-[10px] font-black uppercase tracking-widest text-orange-600">◈ Ungradable</p>
-          <p className="text-3xl font-black text-orange-600 mt-1">{monthlyRetenStats.ungradable}</p>
+          <p className="text-3xl font-black text-slate-800 mt-1">{monthlyRetenStats.ungradable}</p>
         </div>
       </div>
 
@@ -14240,10 +14989,10 @@ const imageReason =
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative z-10 bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden flex flex-col"
+        className="relative z-10 bg-white rounded-3xl border border-violet-100 shadow-2xl w-full max-w-3xl max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden flex flex-col"
       >
 
-        <div className="p-6 border-b border-slate-200 flex items-center justify-between">
+        <div className="m-4 sm:m-6 rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 via-white to-indigo-50 p-4 sm:p-5 flex items-center justify-between gap-4 shadow-sm">
 
           <div>
 
@@ -14266,7 +15015,7 @@ const imageReason =
 
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto px-4 pb-5 sm:px-6 sm:pb-6 space-y-3 bg-slate-50/50">
 
           {visibleActivityLogs.length === 0 ? (
 
@@ -14280,7 +15029,7 @@ const imageReason =
 
               <div
                 key={index}
-                className="bg-slate-50 border border-slate-200 rounded-2xl p-4"
+                className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm hover:border-violet-200 transition-colors"
               >
 
                 <div className="flex items-center justify-between gap-4">
@@ -14442,7 +15191,7 @@ const imageReason =
 
               <div className="shrink-0 px-4 sm:px-6 py-3 bg-white border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
                 <p className="text-[10px] text-slate-500">{reportActionMode === 'refer' ? 'Semak dan lengkapkan maklumat sebelum menghantar rujukan kepada klinik pakar.' : 'Popup ini memaparkan bahagian 1 hingga 5. Borang PDF akan dijana menggunakan maklumat di atas.'}</p>
-                <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={() => setPrintReportApp(null)} disabled={isGeneratingPatientReport || isSendingReferral} className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50 disabled:opacity-50">Batal</button>{reportActionMode === 'refer' && <button type="button" onClick={() => { const allowedSpecialistIds = currentClinic?.specialistClinicIds || []; if (!specialistClinics.some(clinic => clinic.active && allowedSpecialistIds.includes(clinic.id))) { alert('Tiada klinik pakar yang dibenarkan untuk klinik anda. Sila hubungi Super Admin untuk tetapkan Specialist Referral Routing.'); return; } setShowReferralClinicPicker(true); }} disabled={isSendingReferral} className="px-5 py-2.5 rounded-xl bg-violet-700 hover:bg-violet-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Network size={16}/>Rujuk</button>}{reportActionMode === 'print' && <button type="button" onClick={() => void generatePatientReport(printReportApp, printReportFields)} disabled={isGeneratingPatientReport} className="px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Printer size={16}/>{isGeneratingPatientReport ? 'Sedang menjana PDF...' : 'Jana & Muat Turun PDF'}</button>}</div>
+                <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={() => setPrintReportApp(null)} disabled={isGeneratingPatientReport || isSendingReferral} className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50 disabled:opacity-50">Batal</button>{reportActionMode === 'refer' && <button type="button" onClick={() => { const allowedSpecialistIds = currentClinic?.specialistClinicIds || []; if (!specialistClinics.some(clinic => clinic.active && allowedSpecialistIds.includes(clinic.id))) { showAppAlert('Tiada klinik pakar yang dibenarkan untuk klinik anda. Sila hubungi Super Admin untuk tetapkan Specialist Referral Routing.'); return; } setShowReferralClinicPicker(true); }} disabled={isSendingReferral} className="px-5 py-2.5 rounded-xl bg-violet-700 hover:bg-violet-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Network size={16}/>Rujuk</button>}{reportActionMode === 'print' && <button type="button" onClick={() => void generatePatientReport(printReportApp, printReportFields)} disabled={isGeneratingPatientReport} className="px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Printer size={16}/>{isGeneratingPatientReport ? 'Sedang menjana PDF...' : 'Jana & Muat Turun PDF'}</button>}</div>
               </div>
             </motion.div>
           </div>
@@ -14475,6 +15224,56 @@ const imageReason =
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/*--- Unified centered dialog for validation, feedback and confirmations ---*/}
+      <AnimatePresence>
+        {appDialog && (
+          <motion.div
+            className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onMouseDown={event => { if (event.target === event.currentTarget && appDialog.type === 'alert') closeAppDialog(false); }}
+          >
+            <motion.div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="sinar-dialog-title"
+              className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+              initial={{ opacity: 0, y: 12, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.98 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-teal-50 px-5 py-4">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
+                  {appDialog.type === 'confirm' ? <AlertTriangle size={19}/> : <AlertCircle size={19}/>}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 id="sinar-dialog-title" className="text-sm font-extrabold text-slate-900">{appDialog.title}</h2>
+                  <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Sistem SINAR</p>
+                </div>
+                {appDialog.type === 'alert' && (
+                  <button type="button" onClick={() => closeAppDialog(false)} aria-label="Close" className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+                    <XCircle size={18}/>
+                  </button>
+                )}
+              </div>
+              <div className="px-5 py-5">
+                <p className="whitespace-pre-line text-sm leading-6 text-slate-700">{appDialog.message}</p>
+              </div>
+              <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3">
+                {appDialog.type === 'confirm' && (
+                  <button type="button" onClick={() => closeAppDialog(false)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-100">Cancel</button>
+                )}
+                <button autoFocus type="button" onClick={() => closeAppDialog(appDialog.type === 'confirm')} className="rounded-xl bg-gradient-to-r from-blue-700 to-teal-700 px-5 py-2 text-xs font-extrabold text-white shadow-sm transition hover:brightness-105">
+                  {appDialog.type === 'confirm' ? 'Confirm' : 'OK'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
       </>
