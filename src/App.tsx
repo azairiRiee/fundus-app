@@ -22,6 +22,7 @@ import {
   Users,
   Download,
   Printer,
+  Save,
   Lock,
   UserPlus,
   ShieldCheck,
@@ -40,6 +41,7 @@ import {
   ChevronDown,
   UserX,
   Building2,
+  MapPin,
   Network,
   Settings2,
   Database,
@@ -122,6 +124,22 @@ interface SpecialistClinic {
   active: boolean;
   createdAt: number;
   canSendSpecialistReferral?: boolean;
+  stateId?: string;
+}
+
+interface StateMaster {
+  id: string;
+  name: string;
+  active: boolean;
+  createdAt: number;
+}
+
+interface OrganizationMaster {
+  id: string;
+  name: string;
+  stateId: string;
+  active: boolean;
+  createdAt: number;
 }
 
 interface SpecialistUser {
@@ -151,6 +169,8 @@ interface Clinic {
   specialistClinicIds?: string[];
   //--- TCA days configured by a provider clinic for each referring clinic ---//
   referralTcaDays?: Record<string, number[]>;
+  organizationId?: string;
+  stateId?: string;
 }
 
 const DEFAULT_CLINICS: Clinic[] = [
@@ -528,6 +548,45 @@ const formatDisplayDate = (date: string) => {
   });
 };
 
+// Display all form dates in Malaysian day/month/year format without timezone shifting.
+const formatDateDDMMYYYY = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return '';
+
+  // Firestore Timestamp objects.
+  const timestampValue = value as any;
+  if (timestampValue && typeof timestampValue.toDate === 'function') {
+    return formatDateDDMMYYYY(timestampValue.toDate());
+  }
+
+  // Date objects and numeric Unix timestamps (milliseconds).
+  if (value instanceof Date || typeof value === 'number') {
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime())
+      ? ''
+      : date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return '';
+  const isoDate = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDate) return `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}`;
+  const localDate = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (localDate) return `${localDate[1].padStart(2, '0')}/${localDate[2].padStart(2, '0')}/${localDate[3]}`;
+
+  // Numeric timestamp saved as a string, e.g. "1793558568005".
+  if (/^\d{10,13}$/.test(raw)) {
+    const date = new Date(Number(raw));
+    return Number.isNaN(date.getTime())
+      ? raw
+      : date.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime())
+    ? raw
+    : parsed.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+
 // --- Main Application ---
 
 export default function App() {
@@ -692,6 +751,17 @@ export default function App() {
 
   //---Clinic master is loaded from Firestore; defaults keep the existing app usable during migration---//
   const [clinics, setClinics] = useState<Clinic[]>(DEFAULT_CLINICS);
+  const [stateMasters, setStateMasters] = useState<StateMaster[]>([]);
+  const [organizationMasters, setOrganizationMasters] = useState<OrganizationMaster[]>([]);
+  const [newStateName, setNewStateName] = useState('');
+  const [newOrganizationName, setNewOrganizationName] = useState('');
+  const [newOrganizationStateId, setNewOrganizationStateId] = useState('');
+  const [savingMasterRecord, setSavingMasterRecord] = useState(false);
+  const [showStateForm, setShowStateForm] = useState(false);
+  const [showOrganizationForm, setShowOrganizationForm] = useState(false);
+  const [editingStateId, setEditingStateId] = useState<string | null>(null);
+  const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
+
 
   //---Super Admin can open a management context without changing another user's clinic identity---//
   const [superAdminClinicContext, setSuperAdminClinicContext] = useState<string | null>(null);
@@ -744,7 +814,7 @@ export default function App() {
   const [activityLogActionFilter, setActivityLogActionFilter] = useState('ALL');
   const [activityLogClinicFilter, setActivityLogClinicFilter] = useState('ALL');
   const [superAdminSidebarCollapsed, setSuperAdminSidebarCollapsed] = useState(false);
-  const [activeSuperAdminView, setActiveSuperAdminView] = useState<'dashboard' | 'clinics' | 'users' | 'fundus' | 'analytics' | 'logs' | 'settings' | 'specialistClinics' | 'specialistUsers' | 'migration'>('dashboard');
+  const [activeSuperAdminView, setActiveSuperAdminView] = useState<'dashboard' | 'clinics' | 'users' | 'fundus' | 'analytics' | 'logs' | 'settings' | 'globalConfig' | 'specialistClinics' | 'specialistUsers' | 'migration'>('dashboard');
   //--- Page-level navigation history for Super Admin sub-pages ---//
   const superAdminPageHistoryRef = useRef<Array<typeof activeSuperAdminView>>([]);
   const previousSuperAdminViewRef = useRef(activeSuperAdminView);
@@ -782,6 +852,9 @@ export default function App() {
   const [specialistClinicShortNameInput, setSpecialistClinicShortNameInput] = useState('');
   const [specialistClinicAddressInput, setSpecialistClinicAddressInput] = useState('');
   const [specialistClinicPhoneInput, setSpecialistClinicPhoneInput] = useState('');
+  const [specialistClinicStateIdInput, setSpecialistClinicStateIdInput] = useState('');
+  const [editingSpecialistClinicIdentityId, setEditingSpecialistClinicIdentityId] = useState<string | null>(null);
+  const [specialistClinicStateIdDraft, setSpecialistClinicStateIdDraft] = useState('');
   const [editingSpecialistClinicAddressId, setEditingSpecialistClinicAddressId] = useState<string | null>(null);
   const [specialistClinicAddressDraft, setSpecialistClinicAddressDraft] = useState('');
   const [specialistClinicPhoneDraft, setSpecialistClinicPhoneDraft] = useState('');
@@ -801,6 +874,9 @@ export default function App() {
       setSpecialistClinicShortNameInput('');
       setSpecialistClinicAddressInput('');
       setSpecialistClinicPhoneInput('');
+      setSpecialistClinicStateIdInput('');
+      setEditingSpecialistClinicIdentityId(null);
+      setSpecialistClinicStateIdDraft('');
     }
   }, [activeSuperAdminView, currentUser?.role]);
   const [showSpecialistUserForm, setShowSpecialistUserForm] = useState(false);
@@ -828,6 +904,10 @@ export default function App() {
   const [newClinicShortName, setNewClinicShortName] = useState('');
   const [newClinicAddress, setNewClinicAddress] = useState('');
   const [newClinicPhone, setNewClinicPhone] = useState('');
+  const [newClinicOrganizationId, setNewClinicOrganizationId] = useState('');
+  const [editingClinicIdentityId, setEditingClinicIdentityId] = useState<string | null>(null);
+  const [clinicOrganizationIdDraft, setClinicOrganizationIdDraft] = useState('');
+  const [clinicStateIdDraft, setClinicStateIdDraft] = useState('');
   const [editingClinicAddressId, setEditingClinicAddressId] = useState<string | null>(null);
   const [clinicAddressDraft, setClinicAddressDraft] = useState('');
   const [clinicPhoneDraft, setClinicPhoneDraft] = useState('');
@@ -839,6 +919,9 @@ export default function App() {
       setEditingClinicAddressId(null);
       setClinicAddressDraft('');
       setClinicPhoneDraft('');
+      setEditingClinicIdentityId(null);
+      setClinicOrganizationIdDraft('');
+      setClinicStateIdDraft('');
     }
   }, [activeSuperAdminView]);
 
@@ -1012,6 +1095,8 @@ export default function App() {
   const [selectedReferralClinicId, setSelectedReferralClinicId] = useState('');
   const [isSendingReferral, setIsSendingReferral] = useState(false);
   const [isGeneratingPatientReport, setIsGeneratingPatientReport] = useState(false);
+  const [isSavingPrintReport, setIsSavingPrintReport] = useState(false);
+  const [printReportSaveMessage, setPrintReportSaveMessage] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const [hoveredReviewId, setHoveredReviewId] = useState<string | null>(null);
 
@@ -3334,6 +3419,25 @@ const unsubscribeUsers = onSnapshot(
   }
 );
 
+// Realtime State and Organization Master Sync — used only by Super Admin master forms.
+const unsubscribeStates = onSnapshot(
+  collection(db, 'states'),
+  snapshot => setStateMasters(snapshot.docs.map(item => ({
+    id: item.id,
+    ...(item.data() as Omit<StateMaster, 'id'>),
+  } as StateMaster)).sort((a, b) => a.name.localeCompare(b.name))),
+  error => console.warn('State master sync unavailable.', error)
+);
+
+const unsubscribeOrganizations = onSnapshot(
+  collection(db, 'organizations'),
+  snapshot => setOrganizationMasters(snapshot.docs.map(item => ({
+    id: item.id,
+    ...(item.data() as Omit<OrganizationMaster, 'id'>),
+  } as OrganizationMaster)).sort((a, b) => a.name.localeCompare(b.name))),
+  error => console.warn('Organization master sync unavailable.', error)
+);
+
 // Realtime Specialist Master Sync — isolated from screening clinic and staff collections.
 const unsubscribeSpecialistClinics = onSnapshot(
   collection(db, 'specialistClinics'),
@@ -3380,6 +3484,8 @@ return () => {
   unsubscribeActivityLogs();
   unsubscribeSpecialistClinics();
   unsubscribeSpecialistUsers();
+  unsubscribeStates();
+  unsubscribeOrganizations();
 };
 
 }, []);
@@ -4387,18 +4493,23 @@ link.setAttribute(
 
   //--- Open a print-only completion popup. These values are used for this PDF only. ---//
   const printPatientReport = (app: Appointment) => {
+    setPrintReportSaveMessage('');
     setReportActionMode('print');
     setShowReferralClinicPicker(false);
     setPrintReportFields({
       ...(app.referralFormFields || {}),
       dmDuration: app.referralFormFields?.dmDuration || '', hba1c: app.referralFormFields?.hba1c || '', urineAlbumin: app.referralFormFields?.urineAlbumin || '', serumCreatinine: app.referralFormFields?.serumCreatinine || '', history: app.referralFormFields?.history || '',
-      otherDiseases: app.referralFormFields?.otherDiseases || [...(app.diseaseTypes || []), app.otherDisease].filter(Boolean).join(', '),
-      rightEyeVAUnaided: app.rightEyeVAUnaided || '', leftEyeVAUnaided: app.leftEyeVAUnaided || '',
-      rightEyeVAWithGlasses: app.rightEyeVAWithGlasses || '', leftEyeVAWithGlasses: app.leftEyeVAWithGlasses || '',
-      rightEyeVAPinhole: app.rightEyeVAPinhole || '', leftEyeVAPinhole: app.leftEyeVAPinhole || '',
-      staffName: app.referralFormFields?.staffName || '', staffDesignation: app.referralFormFields?.staffDesignation || '', staffStamp: app.referralFormFields?.staffStamp || '', staffDate: app.referralFormFields?.staffDate || new Date().toLocaleDateString('en-GB'),
-      ophthalmologyReport: app.referralFormFields?.ophthalmologyReport || '', ophthalmologyRecommendation: app.referralFormFields?.ophthalmologyRecommendation || '', ophthalmologyAppointment: app.referralFormFields?.ophthalmologyAppointment || '',
-      ophthalmologySignature: app.referralFormFields?.ophthalmologySignature || '', ophthalmologyStamp: app.referralFormFields?.ophthalmologyStamp || '', ophthalmologyDate: app.referralFormFields?.ophthalmologyDate || '', referralReason: app.referralFormFields?.referralReason || app.referralComment || '',
+      otherDiseases: app.referralFormFields?.otherDiseases ?? [...(app.diseaseTypes || []), app.otherDisease].filter(Boolean).join(', '),
+      // Saved preview values take priority over the original appointment defaults.
+      rightEyeVAUnaided: app.referralFormFields?.rightEyeVAUnaided ?? app.rightEyeVAUnaided ?? '',
+      leftEyeVAUnaided: app.referralFormFields?.leftEyeVAUnaided ?? app.leftEyeVAUnaided ?? '',
+      rightEyeVAWithGlasses: app.referralFormFields?.rightEyeVAWithGlasses ?? app.rightEyeVAWithGlasses ?? '',
+      leftEyeVAWithGlasses: app.referralFormFields?.leftEyeVAWithGlasses ?? app.leftEyeVAWithGlasses ?? '',
+      rightEyeVAPinhole: app.referralFormFields?.rightEyeVAPinhole ?? app.rightEyeVAPinhole ?? '',
+      leftEyeVAPinhole: app.referralFormFields?.leftEyeVAPinhole ?? app.leftEyeVAPinhole ?? '',
+      staffName: app.referralFormFields?.staffName ?? '', staffDesignation: app.referralFormFields?.staffDesignation ?? '', staffStamp: app.referralFormFields?.staffStamp ?? '', staffDate: app.referralFormFields?.staffDate ?? new Date().toLocaleDateString('en-GB'),
+      ophthalmologyReport: app.referralFormFields?.ophthalmologyReport ?? '', ophthalmologyRecommendation: app.referralFormFields?.ophthalmologyRecommendation ?? '', ophthalmologyAppointment: app.referralFormFields?.ophthalmologyAppointment ?? '',
+      ophthalmologySignature: app.referralFormFields?.ophthalmologySignature ?? '', ophthalmologyStamp: app.referralFormFields?.ophthalmologyStamp ?? '', ophthalmologyDate: app.referralFormFields?.ophthalmologyDate ?? '', referralReason: app.referralFormFields?.referralReason ?? app.referralComment ?? '',
       // Returned specialist report is authoritative for Section 6 and must override any old blank print fields.
       ...((app as any).specialistReport || {})
     });
@@ -4407,6 +4518,7 @@ link.setAttribute(
 
   //--- Open the same editable report form in referral mode; this does not change clinical-review saving. ---//
   const startPatientReferral = (app: Appointment) => {
+    setPrintReportSaveMessage('');
     // Specialist referrals are restricted to clinic Admin and Super Admin accounts.
     if (currentUser?.role !== UserRole.ADMIN && currentUser?.role !== UserRole.SUPER_ADMIN) {
       showAppAlert('Hanya Admin boleh menghantar referral kepada klinik pakar.');
@@ -4427,14 +4539,75 @@ link.setAttribute(
       ...(app.referralFormFields || {}),
       dmDuration: app.referralFormFields?.dmDuration || '', hba1c: app.referralFormFields?.hba1c || '', urineAlbumin: app.referralFormFields?.urineAlbumin || '', serumCreatinine: app.referralFormFields?.serumCreatinine || '', history: app.referralFormFields?.history || '',
       otherDiseases: app.referralFormFields?.otherDiseases || [...(app.diseaseTypes || []), app.otherDisease].filter(Boolean).join(', '),
-      rightEyeVAUnaided: app.rightEyeVAUnaided || '', leftEyeVAUnaided: app.leftEyeVAUnaided || '',
-      rightEyeVAWithGlasses: app.rightEyeVAWithGlasses || '', leftEyeVAWithGlasses: app.leftEyeVAWithGlasses || '',
-      rightEyeVAPinhole: app.rightEyeVAPinhole || '', leftEyeVAPinhole: app.leftEyeVAPinhole || '',
+      // Reuse the values saved from Print Patient Report first; fall back to original appointment VA only if no saved value exists.
+      rightEyeVAUnaided: app.referralFormFields?.rightEyeVAUnaided ?? app.rightEyeVAUnaided ?? '',
+      leftEyeVAUnaided: app.referralFormFields?.leftEyeVAUnaided ?? app.leftEyeVAUnaided ?? '',
+      rightEyeVAWithGlasses: app.referralFormFields?.rightEyeVAWithGlasses ?? app.rightEyeVAWithGlasses ?? '',
+      leftEyeVAWithGlasses: app.referralFormFields?.leftEyeVAWithGlasses ?? app.leftEyeVAWithGlasses ?? '',
+      rightEyeVAPinhole: app.referralFormFields?.rightEyeVAPinhole ?? app.rightEyeVAPinhole ?? '',
+      leftEyeVAPinhole: app.referralFormFields?.leftEyeVAPinhole ?? app.leftEyeVAPinhole ?? '',
       staffName: app.referralFormFields?.staffName || '', staffDesignation: app.referralFormFields?.staffDesignation || '', staffStamp: app.referralFormFields?.staffStamp || '', staffDate: app.referralFormFields?.staffDate || new Date().toLocaleDateString('en-GB'),
       ophthalmologyReport: app.referralFormFields?.ophthalmologyReport || '', ophthalmologyRecommendation: app.referralFormFields?.ophthalmologyRecommendation || '', ophthalmologyAppointment: app.referralFormFields?.ophthalmologyAppointment || '',
       ophthalmologySignature: app.referralFormFields?.ophthalmologySignature || '', ophthalmologyStamp: app.referralFormFields?.ophthalmologyStamp || '', ophthalmologyDate: app.referralFormFields?.ophthalmologyDate || '', referralReason: app.referralFormFields?.referralReason || app.referralComment || ''
     });
     setPrintReportApp(app);
+  };
+
+  //--- Save editable print-report fields to the original appointment without closing the preview. ---//
+  const savePrintPatientReport = async () => {
+    const app = printReportApp;
+    if (!app || isSavingPrintReport) return;
+    if (app.referralSent === true) {
+      setPrintReportSaveMessage('Borang dikunci kerana referral telah dihantar kepada klinik pakar.');
+      return;
+    }
+
+    // Appointments are loaded from Firestore with this exact document ID.
+    // Do not fall back to the business/patient ID, which may not be the document ID.
+    const appointmentDocId = app.firestoreId;
+    if (!appointmentDocId) {
+      setPrintReportSaveMessage('Save failed: rekod Firestore tidak dapat dikenal pasti.');
+      showAppAlert('ID dokumen Firestore pesakit tidak ditemui. Tiada perubahan disimpan.');
+      return;
+    }
+
+    setIsSavingPrintReport(true);
+    setPrintReportSaveMessage('Saving...');
+    const fieldsToSave = { ...printReportFields };
+    const savedAt = Date.now();
+
+    try {
+      await updateDoc(doc(db, 'appointments', appointmentDocId), {
+        referralFormFields: fieldsToSave,
+        referralFormUpdatedAt: savedAt,
+        referralFormUpdatedBy: currentUser?.displayName || currentUser?.id || 'Clinic Staff',
+        updatedAt: savedAt,
+      });
+
+      // Keep the current popup and in-memory appointment in sync with Firestore.
+      setAppointments(previous => previous.map(item =>
+        item.firestoreId === appointmentDocId
+          ? { ...item, referralFormFields: fieldsToSave } as Appointment
+          : item
+      ));
+      setPrintReportApp(previous => previous
+        ? { ...previous, referralFormFields: fieldsToSave } as Appointment
+        : previous
+      );
+
+      setPrintReportSaveMessage('Saved successfully. Perubahan telah disimpan ke rekod pesakit.');
+      try {
+        addActivityLog('Saved Patient Print Report Fields', `${app.patientName || '-'} (${app.icNumber || '-'})`);
+      } catch (logError) {
+        console.warn('Report saved, but activity log could not be written:', logError);
+      }
+    } catch (error) {
+      console.error('Failed to save patient print report fields:', error);
+      setPrintReportSaveMessage('Save failed. Sila cuba sekali lagi.');
+      showAppAlert('Maklumat laporan tidak berjaya disimpan. Sila semak sambungan internet dan Firestore Rules.');
+    } finally {
+      setIsSavingPrintReport(false);
+    }
   };
 
   const sendPatientReferral = async () => {
@@ -6522,7 +6695,7 @@ const tomorrowTCATotal = Object.values(
                             </div>
                             <div className="mt-3 flex items-center justify-between gap-2">
                               <span className="text-[10px] font-semibold text-slate-400">Received: {formatReferralDate(referral)}</span>
-                              <span className="rounded-lg bg-teal-700 px-3 py-2 text-[10px] font-black uppercase text-white">Referral received</span>
+                              <span className="rounded-lg bg-teal-700 px-3 py-2 text-[10px] font-black uppercase text-white">Open Referral</span>
                             </div>
                           </article>
                         );
@@ -6746,7 +6919,10 @@ const tomorrowTCATotal = Object.values(
                       <div key={staff.id} className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 transition-all hover:border-violet-200 hover:bg-violet-50/30 sm:px-4">
                         <div className="min-w-0 flex items-center gap-3">
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-700"><Users size={18}/></div>
-                          <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-bold text-slate-800">{staff.displayName}</p><span className={`rounded px-2 py-0.5 text-[9px] font-bold ${staff.role === 'ADMIN' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>{staff.role || 'STAFF'}</span><span className="rounded border border-teal-200 bg-teal-50 px-2 py-0.5 text-[9px] font-bold text-teal-800">{specialistClinic?.name || specialistCurrentUser.clinicId}</span></div><p className="mt-1 text-xs text-slate-400">{staff.id} · {staff.active ? 'Active' : 'Inactive'}</p></div>
+                          <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-bold text-slate-800">{staff.displayName}</p>
+                          </div>
+                          <p className="mt-1 text-xs text-slate-400">{staff.id} · {staff.active ? 'Active' : 'Inactive'}</p></div>
+                          <span className={`rounded px-2 py-0.5 text-[9px] font-bold ${staff.role === 'ADMIN' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>{staff.role || 'STAFF'}</span>
                         </div>
                         <button type="button" onClick={() => { setEditingSpecialistStaffId(staff.id); setSpecialistStaffIdInput(staff.id); setSpecialistStaffNameInput(staff.displayName); setSpecialistStaffPasswordInput(''); setShowSpecialistStaffPassword(false); setShowSpecialistStaffForm(true); }} className="shrink-0 rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700 transition hover:bg-violet-50"><Edit2 size={13} className="mr-1 inline"/> Edit</button>
                       </div>
@@ -7201,6 +7377,56 @@ const tomorrowTCATotal = Object.values(
     </div>
   </div>
 )}
+
+      {/*--- Unified centered dialog for validation, feedback and confirmations ---*/}
+            <AnimatePresence>
+              {appDialog && (
+                <motion.div
+                  className="fixed inset-0 z-[10000] flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onMouseDown={event => { if (event.target === event.currentTarget && appDialog.type === 'alert') closeAppDialog(false); }}
+                >
+                  <motion.div
+                    role="alertdialog"
+                    aria-modal="true"
+                    aria-labelledby="sinar-dialog-title"
+                    className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+                    initial={{ opacity: 0, y: 12, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                    transition={{ duration: 0.18 }}
+                  >
+                    <div className="flex items-center gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-teal-50 px-5 py-4">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
+                        {appDialog.type === 'confirm' ? <AlertTriangle size={19}/> : <AlertCircle size={19}/>}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h2 id="sinar-dialog-title" className="text-sm font-extrabold text-slate-900">{appDialog.title}</h2>
+                        <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">Sistem SINAR</p>
+                      </div>
+                      {appDialog.type === 'alert' && (
+                        <button type="button" onClick={() => closeAppDialog(false)} aria-label="Close" className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700">
+                          <XCircle size={18}/>
+                        </button>
+                      )}
+                    </div>
+                    <div className="px-5 py-5">
+                      <p className="whitespace-pre-line text-sm leading-6 text-slate-700">{appDialog.message}</p>
+                    </div>
+                    <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/80 px-5 py-3">
+                      {appDialog.type === 'confirm' && (
+                        <button type="button" onClick={() => closeAppDialog(false)} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 transition hover:bg-slate-100">Cancel</button>
+                      )}
+                      <button autoFocus type="button" onClick={() => closeAppDialog(appDialog.type === 'confirm')} className="rounded-xl bg-gradient-to-r from-blue-700 to-teal-700 px-5 py-2 text-xs font-extrabold text-white shadow-sm transition hover:brightness-105">
+                        {appDialog.type === 'confirm' ? 'Confirm' : 'OK'}
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
       </>
     );
@@ -7940,7 +8166,7 @@ const tomorrowTCATotal = Object.values(
           {activeSuperAdminView !== 'dashboard' && (
             <section className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
               <div><p className="text-sm font-black text-violet-600">SINAR Super Admin</p><p className="mt-1 text-xs text-slate-500">Manage multi-clinic settings and access.</p></div>
-              <button type="button" onClick={() => { setActiveSuperAdminView('dashboard'); setShowStaffForm(false); setEditingUser(null); setShowDataMigration(false); }} className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-teal-500 bg-teal-200 px-4 py-2.5 text-xs font-black text-slate-700 transition hover:bg-teal-500 hover:text-white sm:self-auto"><ChevronLeft size={16}/> Back to Dashboard</button>
+              <button type="button" onClick={() => { if (superAdminPageHistoryRef.current.length > 0) { window.history.back(); } else { setActiveSuperAdminView('dashboard'); } setShowStaffForm(false); setEditingUser(null); setShowDataMigration(false); }} className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-teal-500 bg-teal-200 px-4 py-2.5 text-xs font-black text-slate-700 transition hover:bg-teal-500 hover:text-white sm:self-auto"><ChevronLeft size={16}/> Back</button>
             </section>
           )}
           {activeSuperAdminView === 'clinics' ? (
@@ -7948,7 +8174,7 @@ const tomorrowTCATotal = Object.values(
               <section className="bg-white border border-slate-200 rounded-3xl p-5 md:p-7 shadow-sm">
                 <div className="sa-panel-hero mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 items-center gap-3"><div className="sa-panel-icon sa-blue"><Building2 size={22}/></div><div><p className="sa-panel-kicker">Clinic administration</p><h1 className="text-xl font-black text-slate-900">Clinic Management</h1><p className="mt-1 text-xs font-bold tracking-wider text-slate-500">Dynamic clinic master · {clinics.length} registered clinics</p></div></div>
-                  <button type="button" onClick={() => { setNewClinicId(''); setNewClinicName(''); setNewClinicShortName(''); setNewClinicAddress(''); setNewClinicPhone(''); setNewClinicIsFundusProvider(false); setNewClinicColorKey('pink'); setShowNewClinicForm(v => !v); }} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white hover:bg-violet-700"><Plus size={16}/> {showNewClinicForm ? 'Cancel' : 'Add clinic'}</button>
+                  <button type="button" onClick={() => { setNewClinicId(''); setNewClinicName(''); setNewClinicShortName(''); setNewClinicAddress(''); setNewClinicPhone(''); setNewClinicOrganizationId(''); setNewClinicIsFundusProvider(false); setNewClinicColorKey('pink'); setShowNewClinicForm(v => !v); }} className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white hover:bg-violet-700"><Plus size={16}/> {showNewClinicForm ? 'Cancel' : 'Add clinic'}</button>
                 </div>
                 {showNewClinicForm && <form onSubmit={async (e) => {
                   e.preventDefault();
@@ -7956,11 +8182,13 @@ const tomorrowTCATotal = Object.values(
                   if (!id || !newClinicName.trim()) return;
                   if (clinics.some(c => c.id === id)) { showAppAlert('Clinic ID already exists.'); return; }
                   setIsAddingClinic(true);
-                  const clinic: Clinic = { id, name: newClinicName.trim(), shortName: newClinicShortName.trim() || newClinicName.trim(), address: newClinicAddress.trim(), phone: newClinicPhone.trim(), active: true, isFundusProvider: newClinicIsFundusProvider, colorKey: newClinicColorKey };
+                  const selectedOrganization = organizationMasters.find(item => item.id === newClinicOrganizationId);
+                  if (!selectedOrganization) { showAppAlert('Please create/select a valid PKD in System Configuration first.'); return; }
+                  const clinic: Clinic = { id, name: newClinicName.trim(), shortName: newClinicShortName.trim() || newClinicName.trim(), address: newClinicAddress.trim(), phone: newClinicPhone.trim(), organizationId: selectedOrganization.id, stateId: selectedOrganization.stateId, active: true, isFundusProvider: newClinicIsFundusProvider, colorKey: newClinicColorKey };
                   try {
                     await setDoc(doc(db, 'clinics', clinic.id), clinic);
                     addActivityLog('Created Clinic', `${clinic.name} (${clinic.id})`, currentUser.displayName);
-                    setNewClinicId(''); setNewClinicName(''); setNewClinicShortName(''); setNewClinicAddress(''); setNewClinicPhone(''); setNewClinicIsFundusProvider(false); setNewClinicColorKey('pink'); setShowNewClinicForm(false);
+                    setNewClinicId(''); setNewClinicName(''); setNewClinicShortName(''); setNewClinicAddress(''); setNewClinicPhone(''); setNewClinicOrganizationId(''); setNewClinicIsFundusProvider(false); setNewClinicColorKey('pink'); setShowNewClinicForm(false);
                   } catch (error) { console.error('Failed to create clinic', error); showAppAlert('Failed to create clinic. Please try again.'); }
                   finally { setIsAddingClinic(false); }
                 }} className="mb-6 rounded-2xl border border-violet-100 bg-violet-50/40 p-4 md:p-5">
@@ -7974,6 +8202,8 @@ const tomorrowTCATotal = Object.values(
                       <input value={getAddressLine(newClinicAddress, 1)} onChange={e => setNewClinicAddress(updateAddressLine(newClinicAddress, 1, e.target.value))} placeholder="Address line 2" aria-label="Clinic address line 2" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
                     </div>
                     <input value={newClinicPhone} onChange={e => setNewClinicPhone(e.target.value)} placeholder="Clinic telephone number" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500" />
+                    <select required value={newClinicOrganizationId} onChange={e => { setNewClinicOrganizationId(e.target.value); const org = organizationMasters.find(item => item.id === e.target.value); }} className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-500"><option value="">Select PKD / Organization</option>{organizationMasters.filter(item => item.active).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
+                    <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-bold text-slate-600">State: {stateMasters.find(item => item.id === (organizationMasters.find(org => org.id === newClinicOrganizationId)?.stateId || ''))?.name || 'Select PKD first'}</div>
                     <select value={newClinicColorKey} onChange={e => setNewClinicColorKey(e.target.value as ClinicColorKey)} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-500">{CLINIC_COLORS.map(color => <option key={color.key} value={color.key}>{color.label}</option>)}</select>
                     <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600"><input type="checkbox" checked={newClinicIsFundusProvider} onChange={e => setNewClinicIsFundusProvider(e.target.checked)} /> Fundus provider</label>
                     <button type="submit" disabled={isAddingClinic} className="rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white hover:bg-violet-700 disabled:opacity-50">{isAddingClinic ? 'Saving...' : 'Save clinic'}</button>
@@ -7985,6 +8215,10 @@ const tomorrowTCATotal = Object.values(
                       <div className="flex flex-wrap items-center gap-2"><h2 className="font-black text-slate-900">{clinic.name}</h2></div>
                       <p className="border-b border-slate-300"></p>
                       {editingClinicAddressId === clinic.id ? <div className="mt-3 flex max-w-2xl flex-col gap-2"><input value={getAddressLine(clinicAddressDraft, 0)} onChange={e => setClinicAddressDraft(updateAddressLine(clinicAddressDraft, 0, e.target.value))} placeholder="Address line 1" aria-label="Clinic address line 1" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"/><input value={getAddressLine(clinicAddressDraft, 1)} onChange={e => setClinicAddressDraft(updateAddressLine(clinicAddressDraft, 1, e.target.value))} placeholder="Address line 2" aria-label="Clinic address line 2" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"/><input value={clinicPhoneDraft} onChange={e => setClinicPhoneDraft(e.target.value)} placeholder="Clinic phone" className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm sm:max-w-sm"/><div className="flex gap-2"><button type="button" disabled={clinicAddressSaving === clinic.id} onClick={async () => { setClinicAddressSaving(clinic.id); try { await updateDoc(doc(db, 'clinics', clinic.id), { address: clinicAddressDraft.trim(), phone: clinicPhoneDraft.trim() }); addActivityLog('Updated Clinic Address and Telephone', clinic.name, currentUser.displayName); setEditingClinicAddressId(null); } catch (error) { console.error('Failed to update clinic address', error); showAppAlert('Failed to update clinic address. Please try again.'); } finally { setClinicAddressSaving(null); } }} className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-black text-white disabled:opacity-50">{clinicAddressSaving === clinic.id ? 'Saving...' : 'Save'}</button><button type="button" disabled={clinicAddressSaving === clinic.id} onClick={() => setEditingClinicAddressId(null)} className="rounded-lg border px-3 py-2 text-xs font-bold">Cancel</button></div></div> : <div className="mt-2 flex flex-wrap items-start gap-3"><div className="min-w-0"><p className="whitespace-pre-line text-xs text-slate-500">{clinic.address || 'Full address not set'}</p><p className="mt-1 text-xs text-slate-500">{clinic.phone ? `Tel: ${clinic.phone}` : 'Telephone not set'}</p></div><button type="button" onClick={() => { setEditingClinicAddressId(clinic.id); setClinicAddressDraft(clinic.address || ''); setClinicPhoneDraft(clinic.phone || ''); }} className="rounded-lg border border-violet-200 px-2 py-1 text-[10px] font-black text-violet-700 hover:bg-violet-50">{clinic.address ? 'Edit address' : 'Add address'}</button></div>}
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600">PKD: {organizationMasters.find(item => item.id === clinic.organizationId)?.name || 'Not assigned'}</span>
+                        <span className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-600">State: {stateMasters.find(item => item.id === clinic.stateId)?.name || 'Not assigned'}</span>
+                      </div>
                     </div>
                     <div className="mt-auto border-t border-slate-100 pt-3">
                       <div className="flex flex-wrap items-center gap-2">
@@ -8170,7 +8404,7 @@ const tomorrowTCATotal = Object.values(
                 <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.18em] text-emerald-600">01 · Provider setup</p><h2 className="mt-1 text-lg font-black text-slate-900">Fundus Provider Clinics</h2><p className="mt-1 text-xs text-slate-500">Aktifkan atau nyahaktifkan perkhidmatan fundus bagi setiap klinik aktif.</p></div><span className="w-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[10px] font-black uppercase tracking-wide text-emerald-700">{getFundusProviderClinics(clinics).length} active providers</span></div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
                   {clinics.filter(c => c.active).map(clinic => <article key={clinic.id} className="group rounded-2xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md">
-                    <div className="flex items-start gap-3"><div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><Building2 size={21}/></div><div className="min-w-0 flex-1"><h3 className="font-black leading-snug text-slate-900">{clinic.name}</h3></div></div>
+                    <div className="flex items-start gap-3"><div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><Building2 size={21}/></div><div className="min-w-0 flex-1"><h3 className="font-black leading-snug text-slate-900">{clinic.name}</h3><p className="mt-1 text-[11px] font-medium text-slate-500">{organizationMasters.find(item => item.id === clinic.organizationId)?.name || 'PKD belum ditetapkan'}</p></div></div>
                     <div className="mt-4 flex items-center justify-between gap-2 border-t border-slate-300 pt-3"><span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${clinic.isFundusProvider ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}><span className={`h-1.5 w-1.5 rounded-full ${clinic.isFundusProvider ? 'bg-emerald-500' : 'bg-slate-400'}`}/>{clinic.isFundusProvider ? 'Provider enabled' : 'Referral clinic'}</span>
                     <button type="button" disabled={fundusNetworkSaving === `provider:${clinic.id}`} onClick={async () => { const nextValue = !clinic.isFundusProvider; if (!nextValue && getFundusProviderClinics(clinics).length <= 1) { showAppAlert('At least one active fundus provider clinic is required.'); return; } const savingKey = `provider:${clinic.id}`; setFundusNetworkSaving(savingKey); const previousClinics = clinics; pendingFundusProviderRef.current[clinic.id] = nextValue; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, isFundusProvider: nextValue } : !nextValue ? { ...c, fundusProviderClinicIds: (c.fundusProviderClinicIds || []).filter(id => id !== clinic.id) } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { isFundusProvider: nextValue }, { merge: true }); if (!nextValue) { const referralClinics = previousClinics.filter(c => c.active && !c.isFundusProvider && c.id !== clinic.id); await Promise.all(referralClinics.filter(c => (c.fundusProviderClinicIds || []).includes(clinic.id)).map(c => setDoc(doc(db, 'clinics', c.id), { fundusProviderClinicIds: (c.fundusProviderClinicIds || []).filter(id => id !== clinic.id) }, { merge: true }))); } addActivityLog(nextValue ? 'Enabled Fundus Provider' : 'Disabled Fundus Provider', `${clinic.name} (${clinic.id})`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus provider status', error); delete pendingFundusProviderRef.current[clinic.id]; setClinics(previousClinics); const code = (error as any)?.code || 'unknown'; showAppAlert(`Failed to update ${clinic.shortName}. Firestore error: ${code}`); } finally { setFundusNetworkSaving(null); } }} className={`rounded-xl px-3 py-2 text-[10px] font-black transition disabled:cursor-wait disabled:opacity-50 ${clinic.isFundusProvider ? 'bg-slate-900 text-white hover:bg-slate-700' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>{fundusNetworkSaving === `provider:${clinic.id}` ? 'Saving…' : clinic.isFundusProvider ? 'Turn off' : 'Enable provider'}</button></div>
                   </article>)}
@@ -8181,7 +8415,7 @@ const tomorrowTCATotal = Object.values(
               <section className="rounded-3xl border border-blue-100 bg-gradient-to-br from-blue-50/70 to-white p-5 shadow-sm md:p-6">
                 <div className="mb-5"><p className="text-[10px] font-black uppercase tracking-[.18em] text-blue-600">02 · Referral setup</p><h2 className="mt-1 text-lg font-black text-slate-900">Referral Routing</h2><p className="mt-1 max-w text-xs leading-6 text-slate-500">Pilih satu atau lebih klinik penyedia fundus bagi setiap klinik rujukan. Hanya provider yang aktif tersedia untuk dipilih.</p></div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                  {clinics.filter(c => c.active && !c.isFundusProvider).map(clinic => { const providers = getFundusProviderClinics(clinics); const selectedProviders = clinic.fundusProviderClinicIds || []; return <article key={clinic.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/80 p-4"><div className="flex items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Network size={19}/></div><div><h3 className="font-black text-slate-900">{clinic.name}</h3><p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">referral clinic</p></div></div><span className="shrink-0 rounded-full bg-blue-100 px-2.5 py-1 text-[9px] font-black uppercase text-blue-700">{selectedProviders.length} selected</span></div><div className="space-y-2 p-4">{providers.length === 0 ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">No active fundus provider is available. Enable a provider above first.</div> : providers.map(provider => { const checked = selectedProviders.includes(provider.id); return <label key={provider.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition ${checked ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-slate-50'} ${fundusNetworkSaving === `routing:${clinic.id}:${provider.id}` ? 'opacity-60' : ''}`}><input type="checkbox" checked={checked} disabled={!provider.active || fundusNetworkSaving === `routing:${clinic.id}:${provider.id}`} onChange={async e => { const savingKey = `routing:${clinic.id}:${provider.id}`; const checkedNow = e.currentTarget.checked; setFundusNetworkSaving(savingKey); const previousQueue = fundusRoutingWriteQueueRef.current[clinic.id] || Promise.resolve(); const queuedWrite = previousQueue.then(async () => { const latestClinic = clinicsRef.current.find(c => c.id === clinic.id); const currentProviders = latestClinic?.fundusProviderClinicIds || []; const nextProviders = checkedNow ? Array.from(new Set([...currentProviders, provider.id])) : currentProviders.filter(id => id !== provider.id); pendingFundusRoutingRef.current[clinic.id] = nextProviders; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, fundusProviderClinicIds: nextProviders } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { fundusProviderClinicIds: nextProviders }, { merge: true }); addActivityLog('Updated Fundus Routing', `${clinic.shortName} → ${nextProviders.length ? nextProviders.map(id => getClinicById(clinicsRef.current, id)?.shortName || id).join(', ') : 'No provider selected'}`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus routing', error); delete pendingFundusRoutingRef.current[clinic.id]; const code = (error as any)?.code || 'unknown'; showAppAlert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`); } }); const queuedSafe = queuedWrite.catch(() => undefined); fundusRoutingWriteQueueRef.current[clinic.id] = queuedSafe; try { await queuedWrite; } finally { if (fundusRoutingWriteQueueRef.current[clinic.id] === queuedSafe) { delete fundusRoutingWriteQueueRef.current[clinic.id]; setFundusNetworkSaving(null); } } }} className="h-4 w-4 accent-blue-600"/><div className="min-w-0 flex-1"><p className={`text-sm font-bold ${checked ? 'text-blue-800' : 'text-slate-700'}`}>{provider.name}</p><p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">{provider.shortName} · {provider.id}</p></div>{checked && <CheckCircle2 size={18} className="shrink-0 text-blue-600"/>}</label>; })}</div></article>; })}
+                  {clinics.filter(c => c.active && !c.isFundusProvider).map(clinic => { const providers = getFundusProviderClinics(clinics); const selectedProviders = clinic.fundusProviderClinicIds || []; return <article key={clinic.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-start justify-between gap-3 border-b border-slate-100 bg-slate-50/80 p-4"><div className="flex items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700"><Network size={19}/></div><div><h3 className="font-black text-slate-900">{clinic.name}</h3><p className="mt-1 text-[11px] font-medium text-slate-500">{organizationMasters.find(item => item.id === clinic.organizationId)?.name || 'PKD belum ditetapkan'}</p><p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">referral clinic</p></div></div><span className="shrink-0 rounded-full bg-blue-100 px-2.5 py-1 text-[9px] font-black uppercase text-blue-700">{selectedProviders.length} selected</span></div><div className="space-y-2 p-4">{providers.length === 0 ? <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold text-amber-800">No active fundus provider is available. Enable a provider above first.</div> : providers.map(provider => { const checked = selectedProviders.includes(provider.id); return <label key={provider.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition ${checked ? 'border-blue-200 bg-blue-50' : 'border-slate-200 bg-white hover:border-blue-200 hover:bg-slate-50'} ${fundusNetworkSaving === `routing:${clinic.id}:${provider.id}` ? 'opacity-60' : ''}`}><input type="checkbox" checked={checked} disabled={!provider.active || fundusNetworkSaving === `routing:${clinic.id}:${provider.id}`} onChange={async e => { const savingKey = `routing:${clinic.id}:${provider.id}`; const checkedNow = e.currentTarget.checked; setFundusNetworkSaving(savingKey); const previousQueue = fundusRoutingWriteQueueRef.current[clinic.id] || Promise.resolve(); const queuedWrite = previousQueue.then(async () => { const latestClinic = clinicsRef.current.find(c => c.id === clinic.id); const currentProviders = latestClinic?.fundusProviderClinicIds || []; const nextProviders = checkedNow ? Array.from(new Set([...currentProviders, provider.id])) : currentProviders.filter(id => id !== provider.id); pendingFundusRoutingRef.current[clinic.id] = nextProviders; setClinics(prev => prev.map(c => c.id === clinic.id ? { ...c, fundusProviderClinicIds: nextProviders } : c)); try { await setDoc(doc(db, 'clinics', clinic.id), { fundusProviderClinicIds: nextProviders }, { merge: true }); addActivityLog('Updated Fundus Routing', `${clinic.shortName} → ${nextProviders.length ? nextProviders.map(id => getClinicById(clinicsRef.current, id)?.shortName || id).join(', ') : 'No provider selected'}`, currentUser.displayName); } catch (error) { console.error('Failed to update fundus routing', error); delete pendingFundusRoutingRef.current[clinic.id]; const code = (error as any)?.code || 'unknown'; showAppAlert(`Failed to update ${clinic.shortName} routing. Firestore error: ${code}`); } }); const queuedSafe = queuedWrite.catch(() => undefined); fundusRoutingWriteQueueRef.current[clinic.id] = queuedSafe; try { await queuedWrite; } finally { if (fundusRoutingWriteQueueRef.current[clinic.id] === queuedSafe) { delete fundusRoutingWriteQueueRef.current[clinic.id]; setFundusNetworkSaving(null); } } }} className="h-4 w-4 accent-blue-600"/><div className="min-w-0 flex-1"><p className={`text-sm font-bold ${checked ? 'text-blue-800' : 'text-slate-700'}`}>{provider.name}</p><p className="mt-0.5 text-[10px] font-medium text-slate-500">{organizationMasters.find(item => item.id === provider.organizationId)?.name || 'PKD belum ditetapkan'}</p></div>{checked && <CheckCircle2 size={18} className="shrink-0 text-blue-600"/>}</label>; })}</div></article>; })}
                   {clinics.filter(c => c.active && !c.isFundusProvider).length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-blue-200 bg-white p-8 text-center"><CheckCircle2 size={28} className="mx-auto text-emerald-500"/><p className="mt-2 font-bold text-slate-700">All active clinics are fundus providers</p><p className="mt-1 text-sm text-slate-500">No referral routing is required until a clinic is set as a referral clinic.</p></div>}
                 </div>
               </section>
@@ -8228,7 +8462,7 @@ const tomorrowTCATotal = Object.values(
                                     setFundusNetworkSaving(null);
                                   }
                                 }} className="h-4 w-4 accent-fuchsia-600"/>
-                                <span className="min-w-0 flex-1"><span className="block truncate text-xs font-bold text-slate-700">{clinic.name}</span><span className="block truncate text-[9px] font-semibold uppercase tracking-wide text-slate-400">{clinic.shortName} · {clinic.id}</span></span>
+                                <span className="min-w-0 flex-1"><span className="block truncate text-xs font-bold text-slate-700">{clinic.name}</span><span className="block truncate text-[10px] font-medium text-slate-500">{organizationMasters.find(item => item.id === clinic.organizationId)?.name || 'PKD belum ditetapkan'}</span></span>
                                 {checked && <CheckCircle2 size={16} className="shrink-0 text-fuchsia-600"/>}
                               </label>
                             );
@@ -8324,6 +8558,7 @@ const tomorrowTCATotal = Object.values(
                       setSpecialistClinicShortNameInput('');
                       setSpecialistClinicAddressInput('');
                       setSpecialistClinicPhoneInput('');
+                      setSpecialistClinicStateIdInput('');
                     } else {
                       setEditingSpecialistClinicId(null);
                       setSpecialistClinicIdInput('');
@@ -8331,6 +8566,7 @@ const tomorrowTCATotal = Object.values(
                       setSpecialistClinicShortNameInput('');
                       setSpecialistClinicAddressInput('');
                       setSpecialistClinicPhoneInput('');
+                      setSpecialistClinicStateIdInput('');
                       setShowSpecialistClinicForm(true);
                     }
                   }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white hover:bg-violet-700">
@@ -8345,6 +8581,7 @@ const tomorrowTCATotal = Object.values(
                     const id = specialistClinicIdInput.trim().toUpperCase().replace(/[^A-Z0-9_]/g, '_');
                     const name = specialistClinicNameInput.trim();
                     if (!id || !name) return;
+                    if (!stateMasters.some(item => item.id === specialistClinicStateIdInput && item.active)) { showAppAlert('Please create/select a valid state in System Configuration first.'); return; }
                     if (specialistClinics.some(c => c.id === id)) { showAppAlert('Specialist Clinic ID already exists.'); return; }
                     setSpecialistSaving(true);
                     try {
@@ -8353,6 +8590,7 @@ const tomorrowTCATotal = Object.values(
                         shortName: specialistClinicShortNameInput.trim() || name,
                         address: specialistClinicAddressInput.trim(),
                         phone: specialistClinicPhoneInput.trim(),
+                        stateId: stateMasters.some(item => item.id === specialistClinicStateIdInput) ? specialistClinicStateIdInput : '',
                         active: true,
                         createdAt: Date.now()
                       };
@@ -8363,6 +8601,7 @@ const tomorrowTCATotal = Object.values(
                       setSpecialistClinicShortNameInput('');
                       setSpecialistClinicAddressInput('');
                       setSpecialistClinicPhoneInput('');
+                      setSpecialistClinicStateIdInput('');
                       setShowSpecialistClinicForm(false);
                     } catch (error) {
                       console.error('Failed to create specialist clinic', error);
@@ -8379,6 +8618,7 @@ const tomorrowTCATotal = Object.values(
                         <input value={getAddressLine(specialistClinicAddressInput, 1)} onChange={e => setSpecialistClinicAddressInput(updateAddressLine(specialistClinicAddressInput, 1, e.target.value))} placeholder="Address line 2" aria-label="Address line 2" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
                       </div>
                       <input value={specialistClinicPhoneInput} onChange={e => setSpecialistClinicPhoneInput(e.target.value)} placeholder="Clinic telephone number" aria-label="Clinic telephone number" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-violet-500"/>
+                      <select required value={specialistClinicStateIdInput} onChange={e => setSpecialistClinicStateIdInput(e.target.value)} aria-label="Specialist clinic state" className="min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-violet-500"><option value="">Select state</option>{stateMasters.filter(item => item.active).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
                       <button type="submit" disabled={specialistSaving} className="rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black uppercase tracking-widest text-white hover:bg-violet-700 disabled:opacity-50">{specialistSaving ? 'Saving...' : 'Save clinic'}</button>
                     </div>
                   </form>
@@ -8425,6 +8665,9 @@ const tomorrowTCATotal = Object.values(
                             }} className="rounded-lg border border-violet-200 px-2 py-1 text-[10px] font-black text-violet-700 hover:bg-violet-50">{clinic.address ? 'Edit address' : 'Add address'}</button>
                           </div>
                         )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-lg bg-cyan-50 px-2 py-1 text-[10px] font-bold text-cyan-700">State: {stateMasters.find(item => item.id === clinic.stateId)?.name || 'Not assigned'}</span>
                       </div>
                       <div className="mt-auto border-t border-slate-100 pt-3">
                         <div className="flex flex-wrap items-center gap-2">
@@ -8514,9 +8757,213 @@ const tomorrowTCATotal = Object.values(
                 <button type="button" onClick={() => setActiveSuperAdminView('logs')} className="sa-config-card sa-config-amber rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md">
                   <span className="sa-config-icon sa-config-icon-amber"><Activity size={22}/></span><p className="mt-3 font-black text-slate-900">Global Activity Logs</p><p className="mt-1 text-sm text-slate-600">Audit activity across all facilities.</p>
                 </button>
-                <div className="sa-config-card sa-config-slate rounded-2xl border p-5">
-                  <span className="sa-config-icon sa-config-icon-slate"><Settings2 size={22}/></span><p className="mt-3 font-black text-slate-900">Global configuration</p><p className="mt-1 text-sm text-slate-600">General SINAR settings and maintenance.</p>
+                <button type="button" onClick={() => setActiveSuperAdminView('globalConfig')} className="sa-config-card sa-config-slate rounded-2xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-md">
+                  <span className="sa-config-icon sa-config-icon-slate"><Settings2 size={22}/></span><p className="mt-3 font-black text-slate-900">Global configuration</p><p className="mt-1 text-sm text-slate-600">Manage states and PKD organizations.</p>
+                </button>
+              </div>
+            </section>
+          ) : activeSuperAdminView === 'globalConfig' ? (
+            <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+              <div className="sa-panel-hero sa-hero-violet mb-0 flex items-center gap-3 rounded-none border-0 px-5 py-5 md:px-7">
+                <div className="sa-panel-icon sa-violet"><Settings2 size={22}/></div>
+                <div>
+                  <p className="sa-panel-kicker">System configuration</p>
+                  <h1 className="text-xl font-black text-slate-900">Global Configuration</h1>
+                  <p className="mt-1 text-xs text-slate-600">Manage state and PKD master records for SINAR.</p>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 items-stretch gap-4 p-5 md:grid-cols-2 md:p-7">
+                {/* State Master */}
+                <section className="overflow-hidden rounded-2xl border border-violet-100 bg-white shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-violet-100 bg-gradient-to-r from-violet-50 to-white p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-violet-600 text-white shadow-sm"><MapPin size={21}/></div>
+                      <div>
+                        <h2 className="font-black text-slate-900">State Master</h2>
+                        <p className="text-xs text-slate-500">Create and manage state records.</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-violet-100 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-violet-700">{stateMasters.length} states</span>
+                      <button type="button" onClick={() => { setEditingStateId(null); setNewStateName(''); setShowStateForm(value => !value); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-3.5 py-2.5 text-xs font-black text-white shadow-sm transition hover:bg-violet-700"><Plus size={15}/>{showStateForm ? 'Close' : 'Add state'}</button>
+                    </div>
+                  </div>
+
+                  {showStateForm && (
+                    <form onSubmit={async e => {
+                      e.preventDefault();
+                      if (currentUser?.role !== UserRole.SUPER_ADMIN) return;
+                      const name = newStateName.trim();
+                      if (!name) return;
+                      const id = editingStateId || name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                      if (!id) { showAppAlert('Please enter a valid state name.'); return; }
+                      if (!editingStateId && stateMasters.some(item => item.id === id)) { showAppAlert('This state is already registered.'); return; }
+                      setSavingMasterRecord(true);
+                      try {
+                        if (editingStateId) {
+                          await updateDoc(doc(db, 'states', editingStateId), { name, updatedAt: Date.now() });
+                          addActivityLog('Updated State', name, currentUser.displayName);
+                        } else {
+                          await setDoc(doc(db, 'states', id), { name, active: true, createdAt: Date.now() });
+                          addActivityLog('Created State', name, currentUser.displayName);
+                        }
+                        setNewStateName('');
+                        setEditingStateId(null);
+                        setShowStateForm(false);
+                      } catch (error) {
+                        console.error('Failed to save state', error);
+                        showAppAlert('Could not save state. Check Firestore permissions and try again.');
+                      } finally { setSavingMasterRecord(false); }
+                    }} className="border-b border-slate-100 bg-violet-50/40 p-4">
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input required autoFocus value={newStateName} onChange={e => setNewStateName(e.target.value)} placeholder="Enter state name (e.g. Perak)" aria-label="State name" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-violet-300 focus:ring-2 focus:ring-violet-100"/>
+                        <button type="submit" disabled={savingMasterRecord || !newStateName.trim()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-xs font-black text-white shadow-sm transition hover:bg-violet-700 disabled:opacity-50">{savingMasterRecord ? 'Saving...' : editingStateId ? 'Save changes' : 'Add state'}</button>
+                        <button type="button" onClick={() => { setShowStateForm(false); setEditingStateId(null); setNewStateName(''); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
+                      </div>
+                    </form>
+                  )}
+
+                  <div className="p-4">
+                    <div className="overflow-hidden rounded-xl border border-slate-200">
+                      <div className="grid grid-cols-[minmax(0,1fr)_112px_104px] items-center bg-violet-50 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-violet-700">
+                        <span>State name</span><span className="text-center">Status</span><span className="text-center">Action</span>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {stateMasters.length ? stateMasters.map(item => (
+                          <div key={item.id} className="grid min-h-[58px] grid-cols-[minmax(0,1fr)_112px_104px] items-center gap-2 px-4 py-2.5">
+                            <p className="min-w-0 truncate text-sm font-bold text-slate-800">{item.name}</p>
+                            <div className="flex justify-center">
+                              <button type="button" title="Click to change status" onClick={async () => {
+                                if (currentUser?.role !== UserRole.SUPER_ADMIN) return;
+                                try {
+                                  await updateDoc(doc(db, 'states', item.id), { active: !item.active, updatedAt: Date.now() });
+                                  addActivityLog(item.active ? 'Deactivated State' : 'Activated State', item.name, currentUser.displayName);
+                                } catch (error) { console.error(error); showAppAlert('Could not update state status.'); }
+                              }} className={`min-w-[76px] rounded-full px-2.5 py-1.5 text-center text-[9px] font-black uppercase transition hover:ring-2 hover:ring-offset-1 ${item.active ? 'bg-emerald-50 text-emerald-700 hover:ring-emerald-200' : 'bg-slate-100 text-slate-600 hover:ring-slate-300'}`}>{item.active ? 'Active' : 'Inactive'}</button>
+                            </div>
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button type="button" title="Edit state" onClick={() => { setEditingStateId(item.id); setNewStateName(item.name); setShowStateForm(true); }} className="flex h-8 w-8 items-center justify-center rounded-lg border border-violet-100 bg-violet-50 text-violet-700 transition hover:bg-violet-100"><Edit2 size={14}/></button>
+                              <button type="button" title="Delete state" onClick={async () => {
+                                if (currentUser?.role !== UserRole.SUPER_ADMIN) return;
+                                const confirmed = await showAppConfirm(`Delete state "${item.name}"? This is only allowed when no PKD or specialist clinic is assigned to this state.`);
+                                if (!confirmed) return;
+                                try {
+                                  const [orgs, specialists, clinicsUsingState] = await Promise.all([
+                                    getDocs(query(collection(db, 'organizations'), where('stateId', '==', item.id))),
+                                    getDocs(query(collection(db, 'specialistClinics'), where('stateId', '==', item.id))),
+                                    getDocs(query(collection(db, 'clinics'), where('stateId', '==', item.id))),
+                                  ]);
+                                  if (!orgs.empty || !specialists.empty || !clinicsUsingState.empty) { showAppAlert('This state is still assigned to an organization, specialist clinic or clinic. Deactivate it instead.'); return; }
+                                  await deleteDoc(doc(db, 'states', item.id));
+                                  addActivityLog('Deleted State', item.name, currentUser.displayName);
+                                } catch (error) { console.error(error); showAppAlert('Could not delete state.'); }
+                              }} className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-100 bg-rose-50 text-rose-600 transition hover:bg-rose-100"><Trash2 size={14}/></button>
+                            </div>
+                          </div>
+                        )) : <p className="px-3 py-8 text-center text-xs text-slate-400">No states registered yet.</p>}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                {/* Organization / PKD Master */}
+                <section className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-100 bg-gradient-to-r from-blue-50 to-white p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm"><Building2 size={21}/></div>
+                      <div>
+                        <h2 className="font-black text-slate-900">Organization / PKD Master</h2>
+                        <p className="text-xs text-slate-500">Register a PKD and assign its state.</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-blue-100 px-3 py-1 text-[10px] font-black uppercase tracking-wide text-blue-700">{organizationMasters.length} organizations</span>
+                      <button type="button" onClick={() => { setEditingOrganizationId(null); setNewOrganizationName(''); setNewOrganizationStateId(''); setShowOrganizationForm(value => !value); }} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2.5 text-xs font-black text-white shadow-sm transition hover:bg-blue-700"><Plus size={15}/>{showOrganizationForm ? 'Close' : 'Add PKD'}</button>
+                    </div>
+                  </div>
+
+                  {showOrganizationForm && (
+                    <form onSubmit={async e => {
+                      e.preventDefault();
+                      if (currentUser?.role !== UserRole.SUPER_ADMIN) return;
+                      const name = newOrganizationName.trim();
+                      if (!name || !newOrganizationStateId) return;
+                      const normalizedName = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
+                      const withoutPrefix = normalizedName.replace(/^PEJABAT\s+KESIHATAN\s+DAERAH\s+/, '').replace(/^PKD\s+/, '');
+                      const suffix = withoutPrefix.replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                      const id = editingOrganizationId || `PKD_${suffix || normalizedName.replace(/[^A-Z0-9]+/g, '_')}`;
+                      if (!editingOrganizationId && organizationMasters.some(item => item.id === id)) { showAppAlert('This PKD is already registered.'); return; }
+                      if (!stateMasters.some(item => item.id === newOrganizationStateId && item.active)) { showAppAlert('Please create/select an active state first.'); return; }
+                      setSavingMasterRecord(true);
+                      try {
+                        if (editingOrganizationId) {
+                          await updateDoc(doc(db, 'organizations', editingOrganizationId), { name, stateId: newOrganizationStateId, updatedAt: Date.now() });
+                          addActivityLog('Updated Organization / PKD', name, currentUser.displayName);
+                        } else {
+                          await setDoc(doc(db, 'organizations', id), { name, stateId: newOrganizationStateId, active: true, createdAt: Date.now() });
+                          addActivityLog('Created Organization / PKD', name, currentUser.displayName);
+                        }
+                        setNewOrganizationName('');
+                        setNewOrganizationStateId('');
+                        setEditingOrganizationId(null);
+                        setShowOrganizationForm(false);
+                      } catch (error) {
+                        console.error('Failed to save organization', error);
+                        showAppAlert('Could not save organization / PKD. Check Firestore permissions and try again.');
+                      } finally { setSavingMasterRecord(false); }
+                    }} className="space-y-2 border-b border-slate-100 bg-blue-50/40 p-4">
+                      <input required autoFocus value={newOrganizationName} onChange={e => setNewOrganizationName(e.target.value)} placeholder="Enter PKD name" aria-label="PKD name" className="w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100"/>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <select required value={newOrganizationStateId} onChange={e => setNewOrganizationStateId(e.target.value)} aria-label="PKD state" className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100">
+                          <option value="">Select state</option>
+                          {stateMasters.filter(item => item.active).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                        </select>
+                        <button type="submit" disabled={savingMasterRecord || !stateMasters.some(item => item.active) || !newOrganizationName.trim()} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-black text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-50">{savingMasterRecord ? 'Saving...' : editingOrganizationId ? 'Save changes' : 'Add PKD'}</button>
+                        <button type="button" onClick={() => { setShowOrganizationForm(false); setEditingOrganizationId(null); setNewOrganizationName(''); setNewOrganizationStateId(''); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Cancel</button>
+                      </div>
+                    </form>
+                  )}
+
+                  <div className="p-4">
+                    <div className="overflow-hidden rounded-xl border border-slate-200">
+                      <div className="grid grid-cols-[minmax(0,1fr)_112px_112px_104px] items-center bg-blue-50 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-blue-700">
+                        <span>PKD name</span><span className="text-center">State</span><span className="text-center">Status</span><span className="text-center">Action</span>
+                      </div>
+                      <div className="divide-y divide-slate-100">
+                        {organizationMasters.length ? organizationMasters.map(item => (
+                          <div key={item.id} className="grid min-h-[58px] grid-cols-[minmax(0,1fr)_112px_112px_104px] items-center gap-2 px-4 py-2.5">
+                            <p className="min-w-0 truncate text-sm font-bold text-slate-800">{item.name}</p>
+                            <p className="text-center text-xs font-semibold text-slate-600">{stateMasters.find(state => state.id === item.stateId)?.name || 'Unassigned'}</p>
+                            <div className="flex justify-center">
+                              <button type="button" title="Click to change status" onClick={async () => {
+                                if (currentUser?.role !== UserRole.SUPER_ADMIN) return;
+                                try {
+                                  await updateDoc(doc(db, 'organizations', item.id), { active: !item.active, updatedAt: Date.now() });
+                                  addActivityLog(item.active ? 'Deactivated Organization / PKD' : 'Activated Organization / PKD', item.name, currentUser.displayName);
+                                } catch (error) { console.error(error); showAppAlert('Could not update PKD status.'); }
+                              }} className={`min-w-[76px] rounded-full px-2.5 py-1.5 text-center text-[9px] font-black uppercase transition hover:ring-2 hover:ring-offset-1 ${item.active ? 'bg-emerald-50 text-emerald-700 hover:ring-emerald-200' : 'bg-slate-100 text-slate-600 hover:ring-slate-300'}`}>{item.active ? 'Active' : 'Inactive'}</button>
+                            </div>
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button type="button" title="Edit PKD" onClick={() => { setEditingOrganizationId(item.id); setNewOrganizationName(item.name); setNewOrganizationStateId(item.stateId); setShowOrganizationForm(true); }} className="flex h-8 w-8 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700 transition hover:bg-blue-100"><Edit2 size={14}/></button>
+                              <button type="button" title="Delete PKD" onClick={async () => {
+                                if (currentUser?.role !== UserRole.SUPER_ADMIN) return;
+                                const confirmed = await showAppConfirm(`Delete organization "${item.name}"? This is only allowed when no clinic is assigned to this PKD.`);
+                                if (!confirmed) return;
+                                try {
+                                  const linkedClinics = await getDocs(query(collection(db, 'clinics'), where('organizationId', '==', item.id)));
+                                  if (!linkedClinics.empty) { showAppAlert('This PKD is still assigned to one or more clinics. Deactivate it instead.'); return; }
+                                  await deleteDoc(doc(db, 'organizations', item.id));
+                                  addActivityLog('Deleted Organization / PKD', item.name, currentUser.displayName);
+                                } catch (error) { console.error(error); showAppAlert('Could not delete organization / PKD.'); }
+                              }} className="flex h-8 w-8 items-center justify-center rounded-lg border border-rose-100 bg-rose-50 text-rose-600 transition hover:bg-rose-100"><Trash2 size={14}/></button>
+                            </div>
+                          </div>
+                        )) : <p className="px-3 py-8 text-center text-xs text-slate-400">No organizations registered yet.</p>}
+                      </div>
+                    </div>
+                  </div>
+                </section>
               </div>
             </section>
           ) : activeSuperAdminView === 'migration' ? (
@@ -11411,31 +11858,6 @@ setSelectedReviewSummary(app);
     ({u.id})
   </span>
 
-  <span
-    className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
-      u.role === UserRole.ADMIN
-        ? 'bg-blue-600 text-white'
-        : 'bg-slate-200 text-slate-600'
-    }`}
-  >
-    {u.role}
-  </span>
-
-  {/* Clinic Badge */}
-  {(() => {
-    const userClinic = getClinicById(clinics, u.clinicId);
-    const clinicColor = getClinicColor(userClinic);
-    return (
-      <span
-        className={`text-[8px] font-black uppercase px-2 py-0.5 rounded border ${clinicColor.badge}`}
-        title={userClinic?.name || u.clinicId || 'Clinic'}
-      >
-        {userClinic?.shortName || u.clinicId || 'Clinic'}
-      </span>
-    );
-  })()}
-
-
 </div>
                             <div className="flex items-center gap-3 mt-1">
                               <span className="text-[10px] text-slate-400 font-medium flex items-center gap-1">
@@ -11450,6 +11872,15 @@ setSelectedReviewSummary(app);
                               </span>
                             </div>
                           </div>
+  <span
+    className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
+      u.role === UserRole.ADMIN
+        ? 'bg-blue-600 text-white'
+        : 'bg-slate-200 text-slate-600'
+    }`}
+  >
+    {u.role}
+  </span>
                         </div>
                         {u.id !== 'admin' && (
                           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -15083,20 +15514,21 @@ const imageReason =
               <div className="shrink-0 px-4 sm:px-6 py-3 bg-gradient-to-r from-blue-950 to-blue-800 text-white flex items-center justify-between gap-4 shadow-lg">
                 <div className="min-w-0">
                   <h2 className="text-base sm:text-lg font-black">{reportActionMode === 'refer' ? 'Borang Rujukan Pakar' : 'Preview Borang Sebelum Cetak'}</h2>
-                  <p className="text-[11px] sm:text-xs text-blue-100 mt-0.5">{reportActionMode === 'refer' ? 'Lengkapkan maklumat rujukan sebelum dihantar ke klinik pakar.' : 'Isi terus pada ruangan borang. Perubahan hanya digunakan untuk PDF dan tidak disimpan ke rekod pesakit.'}</p>
+                  <p className="text-[11px] sm:text-xs text-blue-100 mt-0.5">{reportActionMode === 'refer' ? 'Lengkapkan maklumat rujukan sebelum dihantar ke klinik pakar.' : (printReportApp?.referralSent === true ? 'Referral telah dihantar kepada klinik pakar. Borang ini dalam mod paparan sahaja dan tidak boleh diedit.' : 'Isi ruangan borang dan tekan Save untuk menyimpan perubahan ke rekod pesakit. PDF boleh dijana bila-bila masa.')}</p>
                 </div>
-                <button type="button" onClick={() => !isGeneratingPatientReport && setPrintReportApp(null)} disabled={isGeneratingPatientReport} className="shrink-0 rounded-lg px-3 py-2 text-white hover:bg-white/10 disabled:opacity-50" aria-label="Tutup popup">✕</button>
+                <button type="button" onClick={() => !isGeneratingPatientReport && setPrintReportApp(null)} disabled={isGeneratingPatientReport || isSavingPrintReport} className="shrink-0 rounded-lg px-3 py-2 text-white hover:bg-white/10 disabled:opacity-50" aria-label="Tutup popup">✕</button>
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6 sm:py-6">
                 {(() => {
                   const app = printReportApp;
-                  const inputClass = "min-w-0 w-full border-0 border-b border-dotted border-slate-500 bg-transparent px-1 py-0.5 text-[11px] sm:text-xs text-slate-900 outline-none focus:border-blue-700 focus:ring-0 rounded-none placeholder:text-slate-400";
+                  const isReferralLocked = app.referralSent === true;
+                  const inputClass = `min-w-0 w-full border-0 border-b border-dotted border-slate-500 ${isReferralLocked ? 'bg-slate-50 text-slate-600 cursor-not-allowed' : 'bg-transparent text-slate-900'} px-1 py-0.5 text-[11px] sm:text-xs outline-none ${isReferralLocked ? '' : 'focus:border-blue-700 focus:ring-0'} rounded-none placeholder:text-slate-400`;
                   const labelClass = "shrink-0 text-[10px] sm:text-[11px] font-semibold text-slate-700";
                   const field = (key: string, label: string, placeholder = '', multiline = false) => (
                     <label key={key} className="flex min-w-0 items-baseline gap-1.5">
                       <span className={labelClass}>{label}:</span>
-                      {multiline ? <textarea rows={2} className={inputClass + " resize-y border border-dotted border-slate-400 px-1.5 py-1"} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} /> : <input className={inputClass} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} />}
+                      {multiline ? <textarea rows={2} disabled={isReferralLocked} className={inputClass + " resize-y border border-dotted border-slate-400 px-1.5 py-1"} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} /> : <input disabled={isReferralLocked} className={inputClass} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} />}
                     </label>
                   );
                   const section = (n: number, title: string) => <div className="mb-2 flex items-center gap-2 rounded-sm bg-blue-50 px-2 py-1.5 border-l-[3px] border-blue-900"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-950 text-[10px] font-bold text-white">{n}</span><span className="text-[11px] font-black uppercase tracking-wide text-blue-950">{title}</span></div>;
@@ -15109,7 +15541,7 @@ const imageReason =
                     const text = status === 'Not Obtainable' ? `Not Obtainable${reason ? ` — ${reason}` : ''}` : (d?.status || review || 'Belum direkodkan');
                     return { text, types: types.join(', '), severity: d?.npdrSeverity || '', notes: [d?.othersText, d?.comment].filter(Boolean).join(' — ') };
                   };
-                  const miniInput = (key: string, placeholder = 'Isi di sini') => <input aria-label={key} className={inputClass + " text-center"} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} />;
+                  const miniInput = (key: string, placeholder = 'Isi di sini') => <input aria-label={key} disabled={isReferralLocked} className={inputClass + " text-center"} value={printReportFields[key] || ''} placeholder={placeholder} onChange={e => setPrintReportFields(prev => ({ ...prev, [key]: e.target.value }))} />;
                   return <div className="mx-auto flex w-full max-w-[900px] flex-col items-center gap-6 text-slate-900">
                     {/* PAGE 1 — follows the first page of the downloadable PDF */}
                     <div className="w-full max-w-[794px] bg-white shadow-2xl ring-1 ring-black/10 px-5 py-5 sm:px-8 sm:py-7 aspect-auto min-h-[1000px] text-[11px]">
@@ -15122,7 +15554,7 @@ const imageReason =
                       <div className="space-y-2 px-1 mb-3">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Nama Pesakit:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-xs font-bold flex-1">{app.patientName || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>No. K/P:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-xs font-bold flex-1">{app.icNumber || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Klinik Kesihatan (Asal):</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{getClinicById(clinics, getReferringClinicId(app))?.name || '—'}</span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>No. Telefon:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{app.phoneNumber || '—'}</span></div></div>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Diabetes Mellitus sejak:</span>{field('dmDuration', '(tahun)', 'Contoh: 8 tahun')}</div>{field('hba1c', 'HbA1c', 'Keputusan')}</div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex min-w-0 items-baseline gap-1.5"><span className={labelClass}>Penyakit Lain:</span><input aria-label="Penyakit Lain" className={inputClass + " flex-1 min-w-0"} value={printReportFields.otherDiseases || ''} placeholder="Contoh: DM, HTN, LIPID, CKD" onChange={e => setPrintReportFields(prev => ({ ...prev, otherDiseases: e.target.value }))} /></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tarikh Pemeriksaan:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{app.date ? new Date(app.date).toLocaleDateString('en-GB') : '—'}</span></div></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2"><div className="flex min-w-0 items-baseline gap-1.5"><span className={labelClass}>Penyakit Lain:</span><input aria-label="Penyakit Lain" disabled={isReferralLocked} className={inputClass + " flex-1 min-w-0"} value={printReportFields.otherDiseases || ''} placeholder="Contoh: DM, HTN, LIPID, CKD" onChange={e => setPrintReportFields(prev => ({ ...prev, otherDiseases: e.target.value }))} /></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tarikh Pemeriksaan:</span><span className="border-b border-dotted border-slate-500 px-1 py-0.5 text-[11px] flex-1">{formatDateDDMMYYYY(app.date) || '—'}</span></div></div>
                         {field('history', 'Sejarah ringkas', 'Masukkan sejarah ringkas', true)}
                       </div>
 
@@ -15141,12 +15573,12 @@ const imageReason =
                       <div className="grid grid-cols-2 gap-3 mb-3">
                         {[{title:'MATA KANAN (RE)',data:eyeInfo('right')},{title:'MATA KIRI (LE)',data:eyeInfo('left')}].map(eye=><div key={eye.title} className="border border-slate-300 rounded-sm overflow-hidden"><h4 className="bg-blue-50 px-2 py-1.5 text-[10px] font-black text-blue-950">{eye.title}</h4><div className="p-2 space-y-1 text-[10px]"><p><b>Status:</b> {eye.data.text}</p><p><b>Jenis abnormaliti:</b> {eye.data.types || '—'}</p><p><b>NPDR severity:</b> {eye.data.severity || '—'}</p><p><b>Catatan:</b> {eye.data.notes || '—'}</p></div></div>)}
                       </div>
-                      <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-3 px-1"> <div className="flex items-baseline gap-1.5"><span className={labelClass}>Kes Dirujuk:</span><span className="text-[11px] font-bold">{app.referred === true ? 'Ya' : app.referred === false ? 'Tidak' : '—'}</span></div><div className="flex min-w-0 items-baseline gap-1.5"><span className={labelClass}>Jika Ya, nyatakan sebab:</span><input aria-label="Jika Ya, nyatakan sebab" className={inputClass} value={printReportFields.referralReason || ''} placeholder="Tulis sebab rujukan di sini" onChange={e => setPrintReportFields(prev => ({ ...prev, referralReason: e.target.value }))} /></div></div>
+                      <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-3 px-1"> <div className="flex items-baseline gap-1.5"><span className={labelClass}>Kes Dirujuk:</span><span className="text-[11px] font-bold">{app.referred === true ? 'Ya' : app.referred === false ? 'Tidak' : '—'}</span></div><div className="flex min-w-0 items-baseline gap-1.5"><span className={labelClass}>Jika Ya, nyatakan sebab:</span><input aria-label="Jika Ya, nyatakan sebab" disabled={isReferralLocked} className={inputClass} value={printReportFields.referralReason || ''} placeholder="Tulis sebab rujukan di sini" onChange={e => setPrintReportFields(prev => ({ ...prev, referralReason: e.target.value }))} /></div></div>
 
                       {section(5, 'Pengesahan Petugas')}
                       <div className="px-1 mb-3 space-y-2">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2">{field('staffName', 'Nama Petugas', 'Nama pegawai yang merujuk')}{field('staffDesignation', 'Jawatan', 'Jawatan')}</div>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tandatangan:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5"></span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Cop Rasmi:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5"></span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tarikh:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5">{printReportFields.staffDate || ''}</span></div></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-2"><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tandatangan:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5"></span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Cop Rasmi:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5"></span></div><div className="flex items-baseline gap-1.5"><span className={labelClass}>Tarikh:</span><span className="flex-1 border-b border-dotted border-slate-500 min-h-5">{formatDateDDMMYYYY(printReportFields.staffDate)}</span></div></div>
                       </div>
                       <p className="mt-4 text-right text-[8px] text-slate-400">Halaman 1 · Preview borang SINAR</p>
                     </div>
@@ -15173,12 +15605,12 @@ const imageReason =
                         <div className="space-y-5 px-1 pt-2">
                           <div><p className={labelClass + ' mb-1'}>Laporan:</p>{ruledLines(reportValue('ophthalmologyReport'), 3)}</div>
                           <div><p className={labelClass + ' mb-1'}>Syor:</p>{ruledLines(reportValue('ophthalmologyRecommendation'), 3)}</div>
-                          <div className="max-w-[360px]"><p className={labelClass + ' mb-1'}>Temujanji di Klinik Oftalmologi:</p><div className="min-h-7 border-b border-dotted border-slate-500 flex items-end px-1 pb-1 text-[11px]">{reportValue('ophthalmologyAppointment')}</div></div>
+                          <div className="max-w-[360px]"><p className={labelClass + ' mb-1'}>Temujanji di Klinik Oftalmologi:</p><div className="min-h-7 border-b border-dotted border-slate-500 flex items-end px-1 pb-1 text-[11px]">{formatDateDDMMYYYY(reportValue('ophthalmologyAppointment')) || '—'}</div></div>
                           <div className="grid grid-cols-2 gap-5 pt-2">
                             <div><p className={labelClass + ' mb-1'}>Nama Doktor:</p><div className="min-h-7 border-b border-dotted border-slate-500 px-1 pb-1">{reportValue('ophthalmologyDoctorName')}</div></div>
                             <div><p className={labelClass + ' mb-1'}>Jawatan:</p><div className="min-h-7 border-b border-dotted border-slate-500 px-1 pb-1">{reportValue('ophthalmologyDesignation')}</div></div>
                           </div>
-                          <div className="max-w-[260px]"><p className={labelClass + ' mb-1'}>Tarikh laporan:</p><div className="min-h-7 border-b border-dotted border-slate-500 px-1 pb-1">{hasReturnedReport && (app as any).specialistReportReturnedAt ? ((app as any).specialistReportReturnedAt?.toDate ? (app as any).specialistReportReturnedAt.toDate() : new Date((app as any).specialistReportReturnedAt)).toLocaleDateString('en-GB') : reportValue('ophthalmologyDate')}</div></div>
+                          <div className="max-w-[260px]"><p className={labelClass + ' mb-1'}>Tarikh laporan:</p><div className="min-h-7 border-b border-dotted border-slate-500 px-1 pb-1">{hasReturnedReport && (app as any).specialistReportReturnedAt ? formatDateDDMMYYYY((app as any).specialistReportReturnedAt?.toDate ? (app as any).specialistReportReturnedAt.toDate() : (app as any).specialistReportReturnedAt) : formatDateDDMMYYYY(reportValue('ophthalmologyDate'))}</div></div>
                         </div>
                         <div className="mt-10 text-right text-[8px] text-slate-400">{hasReturnedReport ? 'Laporan pakar diterima semula oleh klinik' : 'Untuk kegunaan pakar oftalmologi'}</div>
                         <div className="mt-16 border-t border-slate-200 pt-2 flex items-end justify-between gap-3 text-[8px] text-slate-400">{hasDigitalSpecialistReport && <span className="italic">Dokumen ini dijana secara digital dan tidak memerlukan tandatangan atau cop rasmi.</span>}<span className="shrink-0">Halaman 2 · SINAR</span></div>
@@ -15190,8 +15622,17 @@ const imageReason =
               </div>
 
               <div className="shrink-0 px-4 sm:px-6 py-3 bg-white border-t border-slate-200 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 shadow-[0_-4px_12px_rgba(0,0,0,0.08)]">
-                <p className="text-[10px] text-slate-500">{reportActionMode === 'refer' ? 'Semak dan lengkapkan maklumat sebelum menghantar rujukan kepada klinik pakar.' : 'Popup ini memaparkan bahagian 1 hingga 5. Borang PDF akan dijana menggunakan maklumat di atas.'}</p>
-                <div className="flex flex-wrap justify-end gap-2"><button type="button" onClick={() => setPrintReportApp(null)} disabled={isGeneratingPatientReport || isSendingReferral} className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50 disabled:opacity-50">Batal</button>{reportActionMode === 'refer' && <button type="button" onClick={() => { const allowedSpecialistIds = currentClinic?.specialistClinicIds || []; if (!specialistClinics.some(clinic => clinic.active && allowedSpecialistIds.includes(clinic.id))) { showAppAlert('Tiada klinik pakar yang dibenarkan untuk klinik anda. Sila hubungi Super Admin untuk tetapkan Specialist Referral Routing.'); return; } setShowReferralClinicPicker(true); }} disabled={isSendingReferral} className="px-5 py-2.5 rounded-xl bg-violet-700 hover:bg-violet-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Network size={16}/>Rujuk</button>}{reportActionMode === 'print' && <button type="button" onClick={() => void generatePatientReport(printReportApp, printReportFields)} disabled={isGeneratingPatientReport} className="px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Printer size={16}/>{isGeneratingPatientReport ? 'Sedang menjana PDF...' : 'Jana & Muat Turun PDF'}</button>}</div>
+                <div className="min-w-0">
+                  <p className="text-[10px] text-slate-500">{reportActionMode === 'refer' ? 'Semak dan lengkapkan maklumat sebelum menghantar rujukan kepada klinik pakar.' : 'Simpan perubahan ke rekod pesakit sebelum atau selepas menjana PDF.'}</p>
+                  {reportActionMode === 'print' && printReportSaveMessage && <p role="status" aria-live="polite" className={`mt-1 text-[11px] font-bold ${printReportSaveMessage.startsWith('Saved') ? 'text-emerald-600' : printReportSaveMessage.startsWith('Saving') ? 'text-blue-600' : 'text-rose-600'}`}>{printReportSaveMessage}</p>}
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={() => setPrintReportApp(null)} disabled={isGeneratingPatientReport || isSendingReferral || isSavingPrintReport} className="px-4 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50 disabled:opacity-50">Close</button>
+                  {reportActionMode === 'print' && printReportApp.referralSent !== true && <button type="button" onClick={() => void savePrintPatientReport()} disabled={isSavingPrintReport || isGeneratingPatientReport} className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Save size={16}/>{isSavingPrintReport ? 'Saving...' : 'Save'}</button>}
+                  {reportActionMode === 'print' && printReportApp.referralSent === true && <span className="px-3 py-2.5 rounded-xl bg-slate-200 text-slate-600 font-bold text-sm border border-slate-300">🔒 Borang Dikunci</span>}
+                  {reportActionMode === 'refer' && <button type="button" onClick={() => { const allowedSpecialistIds = currentClinic?.specialistClinicIds || []; if (!specialistClinics.some(clinic => clinic.active && allowedSpecialistIds.includes(clinic.id))) { showAppAlert('Tiada klinik pakar yang dibenarkan untuk klinik anda. Sila hubungi Super Admin untuk tetapkan Specialist Referral Routing.'); return; } setShowReferralClinicPicker(true); }} disabled={isSendingReferral} className="px-5 py-2.5 rounded-xl bg-violet-700 hover:bg-violet-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Network size={16}/>Rujuk</button>}
+                  {reportActionMode === 'print' && <button type="button" onClick={() => void generatePatientReport(printReportApp, printReportFields)} disabled={isGeneratingPatientReport || isSavingPrintReport} className="px-5 py-2.5 rounded-xl bg-blue-700 hover:bg-blue-800 text-white font-black text-sm shadow-md disabled:opacity-60 flex items-center justify-center gap-2"><Printer size={16}/>{isGeneratingPatientReport ? 'Sedang menjana PDF...' : 'Jana & Muat Turun PDF'}</button>}
+                </div>
               </div>
             </motion.div>
           </div>
